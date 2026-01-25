@@ -39,7 +39,7 @@ SALE_SCHEMA = {
     'notes': {'desc': "notes comments details observations", 'type': 'text'}
 }
 
-# --- LOADER & HELPERS ---
+# --- HELPERS ---
 def robust_load_csv(file_path):
     print(f"   > Loading: {os.path.basename(file_path)}")
     try:
@@ -98,14 +98,13 @@ def classify_file_type(headers, filename=""):
     elif sale_score > lease_score: return "SALE"
     else: return "BOTH"
 
-# --- CORE MAPPING LOGIC ---
+# --- CORE LOGIC ---
 def generate_standardized_df(df, schema_dict, file_type, threshold=0.20):
     input_headers = df.columns.tolist()
     clean_headers = [clean_header(h) for h in input_headers]
     target_cols = list(schema_dict.keys())
     col_profiles = [get_column_profile(df[col]) for col in input_headers]
     
-    # --- OVERRIDES ---
     overrides = {
         'price per sf': 'price_per_sf', 'sale price psf': 'price_per_sf', 'pps': 'price_per_sf',
         'rent': 'rate_psf', 'base rent': 'rate_psf',
@@ -125,7 +124,6 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.20):
     target_vecs = model.encode([schema_dict[k]['desc'] for k in target_cols])
     
     mappings = {}
-    addr_candidates = []
     
     for t_idx, target_col in enumerate(target_cols):
         target_conf = schema_dict[target_col]
@@ -142,38 +140,24 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.20):
                 if target_conf['type'] != col_profiles[h_idx] and 'numeric' in target_conf['type']: bonus = -0.5
                 if (sem_score + bonus) > best_score:
                     best_score, best_match = (sem_score + bonus), input_headers[h_idx]
-            
-            addr_score = 1 - cosine(h_vec, target_vecs[target_cols.index('address')])
-            if target_col == 'address' and addr_score > threshold:
-                addr_candidates.append((input_headers[h_idx], addr_score))
         
         if best_score > threshold: mappings[target_col] = best_match
 
     out = pd.DataFrame()
     for t in target_cols: out[t] = df[mappings[t]] if t in mappings else None
     
-    if addr_candidates:
-        addr_candidates.sort(key=lambda x: x[1], reverse=True)
-        cols = list(dict.fromkeys([x[0] for x in addr_candidates]))
-        out['raw_address_data'] = df[cols].apply(lambda x: ' '.join(x.dropna().astype(str)), axis=1)
-    else: out['raw_address_data'] = out.get('address', "")
+    out['raw_address_data'] = out.get('address', "")
     return out
 
-# --- GOOGLE MAPS HELPER (Does not run automatically) ---
 def fetch_google_data(raw_text, api_key):
-    """
-    Called only when user explicitly approves usage in app.py
-    """
     if not isinstance(raw_text, str) or not raw_text.strip(): return None, None, None
-    if not api_key or "YOUR_KEY" in api_key: return raw_text, None, None # Safety check
+    if not api_key or "YOUR_KEY" in api_key: return raw_text, None, None 
 
     try:
         url = "https://maps.googleapis.com/maps/api/geocode/json"
         res = requests.get(url, params={"address": raw_text, "key": api_key}).json()
-        
         if res['status'] == 'OK':
             top = res['results'][0]
-            # Returns: Formatted Address, Lat, Lon
             return top['formatted_address'], top['geometry']['location']['lat'], top['geometry']['location']['lng']
         return raw_text, None, None
     except: return raw_text, None, None
@@ -185,17 +169,45 @@ def process_file_to_clean_output(df, filename):
     
     clean_df = generate_standardized_df(df, schema, ftype)
     
+    # --- CALCULATION LOGIC ---
+    def to_f(v): 
+        try: return float(str(v).replace(',','').replace('$','').replace('sf',''))
+        except: return None
+
+    # 1. Sales Price/SF Logic
     if ftype == "SALE" and 'sale_price' in clean_df.columns and 'building_size' in clean_df.columns:
-        def to_f(v): 
-            try: return float(str(v).replace(',','').replace('$','').replace('sf',''))
-            except: return None
         calc_psf = clean_df['sale_price'].apply(to_f) / clean_df['building_size'].apply(to_f)
         clean_df['price_per_sf'] = clean_df['price_per_sf'].apply(to_f).fillna(calc_psf.round(2))
 
-    # Initialize empty columns for the App to fill later
+    # 2. HOUSTON LEASE LOGIC (Strictly for Leases)
+    clean_df['rate_monthly'] = None
+    clean_df['rate_annually'] = None
+    
+    if ftype == "LEASE" and 'rate_psf' in clean_df.columns:
+        monthly_list = []
+        annual_list = []
+        
+        for val in clean_df['rate_psf']:
+            f_val = to_f(val)
+            if f_val is None:
+                monthly_list.append(None)
+                annual_list.append(None)
+            else:
+                # Logic: <= $4 is Monthly (covering <2 and 2-4 range). > $4 is Annual.
+                if f_val <= 4.0:
+                    # It's Monthly
+                    monthly_list.append(round(f_val, 2))
+                    annual_list.append(round(f_val * 12, 2))
+                else:
+                    # It's Annual
+                    annual_list.append(round(f_val, 2))
+                    monthly_list.append(round(f_val / 12, 2))
+        
+        clean_df['rate_monthly'] = monthly_list
+        clean_df['rate_annually'] = annual_list
+
     clean_df['latitude'] = None
     clean_df['longitude'] = None
-    
     clean_df['source_type'] = ftype
     clean_df['source_file'] = filename
     return clean_df

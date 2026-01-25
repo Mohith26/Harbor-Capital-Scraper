@@ -12,7 +12,7 @@ from comp_engine import robust_load_csv, process_file_to_clean_output, fetch_goo
 GOOGLE_API_KEY = "AIzaSyBmUCJx-ufGcel4r-SDv_mTZ_Dc9BbgYX4"
 # ---------------------------------------
 
-# --- HELPER FUNCTIONS ---
+# --- HELPERS ---
 def haversine_miles(lat1, lon1, lat2, lon2):
     if any(x is None for x in [lat1, lon1, lat2, lon2]): return 99999
     R = 3958.8 
@@ -34,14 +34,56 @@ def clean_text_val(value):
     if pd.isna(value) or value == "" or value is None: return None
     return str(value).strip()
 
+def generate_kml(df):
+    """Generates KML file content for Google Earth."""
+    kml = ['<?xml version="1.0" encoding="UTF-8"?>']
+    kml.append('<kml xmlns="http://www.opengis.net/kml/2.2">')
+    kml.append('<Document>')
+    
+    for idx, row in df.iterrows():
+        if pd.notnull(row.get('latitude')) and pd.notnull(row.get('longitude')):
+            kml.append('<Placemark>')
+            kml.append(f"<name>{row.get('address', 'Unknown Property')}</name>")
+            # KML description
+            desc = f"Size: {row.get('building_size') or row.get('leased_sf') or 'N/A'}\n"
+            desc += f"Price/Rate: {row.get('sale_price') or row.get('rate_monthly') or 'N/A'}"
+            kml.append(f"<description>{desc}</description>")
+            kml.append('<Point>')
+            # KML uses (lon, lat)
+            kml.append(f"<coordinates>{row['longitude']},{row['latitude']},0</coordinates>")
+            kml.append('</Point>')
+            kml.append('</Placemark>')
+            
+    kml.append('</Document>')
+    kml.append('</kml>')
+    return "\n".join(kml)
+
+# --- APP CONFIG ---
+st.set_page_config(page_title="Harbor Capital Comp Database", layout="wide")
+st.title("🏢 Real Estate Comp Intelligence")
+
+# Reset Filter Logic
+if 'reset_filters' not in st.session_state:
+    st.session_state.reset_filters = False
+
+def reset_callback():
+    for key in st.session_state.keys():
+        if "filter_" in key:
+            st.session_state[key] = None
+        if "radius" in key:
+            st.session_state[key] = 5
+
+# --- FILTER WIDGETS ---
 def render_numeric_filter(df, column, label):
     if column not in df.columns: return pd.Series([True] * len(df))
     col_data = df[column].dropna()
-    min_val = float(col_data.min()) if not col_data.empty else 0.0
-    max_val = float(col_data.max()) if not col_data.empty else 1000000.0
+    min_v = float(col_data.min()) if not col_data.empty else 0.0
+    max_v = float(col_data.max()) if not col_data.empty else 1000000.0
+    
     c1, c2 = st.sidebar.columns(2)
-    val_min = c1.number_input(f"Min {label}", value=None, placeholder=f"{min_val:,.0f}")
-    val_max = c2.number_input(f"Max {label}", value=None, placeholder=f"{max_val:,.0f}")
+    val_min = c1.number_input(f"Min {label}", value=None, placeholder=f"{min_v:,.0f}", key=f"filter_min_{column}")
+    val_max = c2.number_input(f"Max {label}", value=None, placeholder=f"{max_v:,.0f}", key=f"filter_max_{column}")
+    
     mask = pd.Series([True] * len(df))
     if val_min is not None: mask &= (df[column] >= val_min)
     if val_max is not None: mask &= (df[column] <= val_max)
@@ -49,19 +91,13 @@ def render_numeric_filter(df, column, label):
 
 def render_text_filter(df, column, label):
     if column not in df.columns: return pd.Series([True] * len(df))
-    search = st.sidebar.text_input(f"{label} contains:", placeholder="Search...")
+    search = st.sidebar.text_input(f"{label} contains:", placeholder="Search...", key=f"filter_txt_{column}")
     if search: return df[column].astype(str).str.contains(search, case=False, na=False)
     return pd.Series([True] * len(df))
 
-# --- APP CONFIG ---
-st.set_page_config(page_title="Harbor Capital Comp Database", layout="wide")
-st.title("🏢 Real Estate Comp Intelligence")
-
-# Initialize Session State for Data Persistence
-if 'clean_df' not in st.session_state:
-    st.session_state.clean_df = None
-if 'current_filename' not in st.session_state:
-    st.session_state.current_filename = ""
+# --- SESSION STATE INIT ---
+if 'clean_df' not in st.session_state: st.session_state.clean_df = None
+if 'current_filename' not in st.session_state: st.session_state.current_filename = ""
 
 page = st.sidebar.radio("Navigate", ["Upload & Process", "Database View"])
 
@@ -71,64 +107,60 @@ if page == "Upload & Process":
     uploaded_file = st.file_uploader("Upload Excel/CSV", type=['csv', 'xlsx'])
     
     if uploaded_file:
-        # Save temp file
         with open(f"temp_{uploaded_file.name}", "wb") as f: f.write(uploaded_file.getbuffer())
         path = f"temp_{uploaded_file.name}"
         
-        # PROCESS FILE (FREE) - Only runs if new file
         if st.session_state.current_filename != uploaded_file.name:
-            with st.spinner('AI is analyzing columns... (No API credits used)'):
+            with st.spinner('AI is analyzing columns...'):
                 df_input = robust_load_csv(path)
                 if df_input is not None:
-                    # Clean data, but DO NOT geocode yet
                     st.session_state.clean_df = process_file_to_clean_output(df_input, uploaded_file.name)
                     st.session_state.current_filename = uploaded_file.name
                     st.success("File parsed successfully!")
 
-        # --- GEOCODING APPROVAL SECTION ---
         if st.session_state.clean_df is not None:
             df = st.session_state.clean_df
-            
-            # Check if we already have lat/lon data
+            stype = df['source_type'].iloc[0] # Get type
             missing_geos = df['latitude'].isna().sum()
             
             st.markdown("---")
             st.subheader("2. Geocoding & Standardization")
             
             if missing_geos > 0:
-                st.warning(f"⚠️ **Approval Required:** This file contains **{len(df)}** properties.")
-                st.info(f"Clicking 'Approve' will use **{len(df)} Google Maps API credits** to find coordinates.")
-                
-                col_btn, col_txt = st.columns([1, 4])
-                if col_btn.button("✅ Approve & Geocode"):
+                st.warning(f"⚠️ **Approval Required:** File contains **{len(df)}** properties.")
+                if st.button("✅ Approve & Geocode"):
                     progress_bar = st.progress(0)
                     results = []
-                    
                     for i, row in df.iterrows():
-                        # Call the API here
                         addr, lat, lng = fetch_google_data(row['raw_address_data'], GOOGLE_API_KEY)
                         results.append((addr, lat, lng))
                         progress_bar.progress((i + 1) / len(df))
                     
-                    # Update DataFrame in Session State
                     df['address'] = [x[0] for x in results]
                     df['latitude'] = [x[1] for x in results]
                     df['longitude'] = [x[2] for x in results]
-                    st.session_state.clean_df = df # Save back to state
-                    st.rerun() # Refresh to show data
+                    st.session_state.clean_df = df
+                    st.rerun()
             else:
                 st.success("✅ All addresses have been geocoded!")
 
-            # --- PREVIEW & SAVE ---
             st.markdown("---")
             st.subheader("3. Preview & Save")
             
-            edited_df = st.data_editor(st.session_state.clean_df, num_rows="dynamic")
+            # SMART PREVIEW: Only show rates if LEASE
+            cols_to_show = list(df.columns)
+            if stype == "LEASE" and 'rate_monthly' in cols_to_show:
+                 # Reorder to put rates near the front
+                cols_to_show = ['address', 'rate_monthly', 'rate_annually'] + [c for c in cols_to_show if c not in ['address', 'rate_monthly', 'rate_annually']]
+            elif stype == "SALE":
+                 # Hide empty rate columns for clarity
+                 cols_to_show = [c for c in cols_to_show if c not in ['rate_monthly', 'rate_annually']]
+
+            edited_df = st.data_editor(st.session_state.clean_df[cols_to_show], num_rows="dynamic")
             
             if st.button("💾 Save to Database", type="primary"):
                 session = Session()
                 records = []
-                stype = edited_df['source_type'].iloc[0]
                 
                 bar = st.progress(0)
                 for i, row in edited_df.iterrows():
@@ -158,7 +190,11 @@ if page == "Upload & Process":
                             **common,
                             tenant_name=clean_text_val(row.get('tenant_name')),
                             leased_sf=clean_currency_num(row.get('leased_sf')),
-                            rate_psf=clean_currency_num(row.get('rate_psf')),
+                            
+                            # RATES
+                            rate_monthly=clean_currency_num(row.get('rate_monthly')),
+                            rate_annually=clean_currency_num(row.get('rate_annually')),
+                            
                             term_months=clean_currency_num(row.get('term_months')),
                             commencement_date=clean_text_val(row.get('commencement_date')),
                             ti_allowance=clean_currency_num(row.get('ti_allowance')),
@@ -176,11 +212,8 @@ if page == "Upload & Process":
                 session.close()
                 st.balloons()
                 st.success(f"Saved {len(records)} records.")
-                
-                # Cleanup
                 if os.path.exists(path): os.remove(path)
-                st.session_state.clean_df = None # Reset
-                st.session_state.current_filename = ""
+                st.session_state.clean_df = None
 
 # --- PAGE 2: DATABASE VIEW ---
 if page == "Database View":
@@ -195,9 +228,14 @@ if page == "Database View":
     if df.empty:
         st.info("Database is empty.")
     else:
+        # --- SIDEBAR: RESET BUTTON ---
+        st.sidebar.button("🔄 Reset All Filters", on_click=reset_callback)
+        st.sidebar.markdown("---")
+        
+        # --- SIDEBAR: SEARCH ---
         st.sidebar.header("📍 Location Search")
-        center_addr = st.sidebar.text_input("Address (Nearby)", placeholder="e.g. 123 Main St")
-        radius = st.sidebar.slider("Radius (Miles)", 1, 50, 5)
+        center_addr = st.sidebar.text_input("Address (Nearby)", placeholder="e.g. 123 Main St", key="filter_loc_center")
+        radius = st.sidebar.slider("Radius (Miles)", 1, 50, 5, key="filter_loc_radius")
         
         st.sidebar.markdown("---")
         st.sidebar.header("🔍 Filters")
@@ -208,43 +246,29 @@ if page == "Database View":
             with st.sidebar.expander("💰 Financials", expanded=True):
                 mask &= render_numeric_filter(df, 'sale_price', 'Price')
                 mask &= render_numeric_filter(df, 'price_per_sf', '$/SF')
-                mask &= render_numeric_filter(df, 'cap_rate', 'Cap Rate')
-            
             with st.sidebar.expander("🏢 Property Details", expanded=False):
                 mask &= render_numeric_filter(df, 'building_size', 'Size (SF)')
                 mask &= render_numeric_filter(df, 'year_built', 'Year Built')
                 mask &= render_text_filter(df, 'address', 'Address')
-                
             with st.sidebar.expander("🤝 Deal Info", expanded=False):
                 mask &= render_text_filter(df, 'buyer', 'Buyer')
-                mask &= render_text_filter(df, 'seller', 'Seller')
-                mask &= render_text_filter(df, 'closing_date', 'Date')
                 mask &= render_text_filter(df, 'notes', 'Notes')
 
         elif view_type == "Lease Comps":
             with st.sidebar.expander("💰 Economics", expanded=True):
-                mask &= render_numeric_filter(df, 'rate_psf', 'Rate ($/SF)')
+                # NEW: Filter by Monthly OR Annual
+                mask &= render_numeric_filter(df, 'rate_monthly', '$/SF/Mo')
+                mask &= render_numeric_filter(df, 'rate_annually', '$/SF/Yr')
                 mask &= render_numeric_filter(df, 'ti_allowance', 'TI ($)')
-                mask &= render_numeric_filter(df, 'term_months', 'Term (Mos)')
-                mask &= render_text_filter(df, 'escalations', 'Escalations')
-                
             with st.sidebar.expander("🏢 Property & Tenant", expanded=False):
                 mask &= render_numeric_filter(df, 'leased_sf', 'Leased SF')
                 mask &= render_numeric_filter(df, 'clear_height', 'Clear Height')
                 mask &= render_text_filter(df, 'tenant_name', 'Tenant')
-                mask &= render_text_filter(df, 'building_type', 'Bldg Type')
                 mask &= render_text_filter(df, 'address', 'Address')
-                
-            with st.sidebar.expander("📅 Dates & Notes", expanded=False):
-                mask &= render_text_filter(df, 'commencement_date', 'Start Date')
-                mask &= render_text_filter(df, 'free_rent', 'Free Rent')
-                mask &= render_text_filter(df, 'notes', 'Notes')
 
-        # Run Search ON DEMAND in Database View (Lat/Lon already exists in DB)
+        # Distance Calc
         if center_addr:
             with st.spinner("Calculating distances..."):
-                # We need to geocode the CENTER point, but this is a tiny 1-credit lookup
-                # This is okay to automate, or you can add a button if you are very strict.
                 _, lat_c, lon_c = fetch_google_data(center_addr, GOOGLE_API_KEY)
                 if lat_c:
                     df['distance_miles'] = df.apply(lambda x: haversine_miles(lat_c, lon_c, x['latitude'], x['longitude']), axis=1)
@@ -252,17 +276,44 @@ if page == "Database View":
                 else:
                     st.error("Could not find that address.")
         
-        df_filtered = df[mask]
+        # --- DISPLAY RESULTS ---
+        df_filtered = df[mask].copy()
+        
+        # Add Select Column (Default to False)
+        df_filtered.insert(0, "Select", False)
+        
         st.subheader(f"Showing {len(df_filtered)} / {len(df)} Records")
         
-        if not df_filtered.empty:
-            if 'distance_miles' in df_filtered.columns:
-                df_filtered = df_filtered.sort_values('distance_miles')
-            st.dataframe(df_filtered, use_container_width=True)
-            if 'latitude' in df_filtered.columns and df_filtered['latitude'].notnull().any():
-                st.map(df_filtered[['latitude', 'longitude']].dropna())
-        else:
-            st.warning("No records match your filters.")
+        # Show specific column order for Leases
+        if view_type == "Lease Comps":
+             # Rearrange to show rates upfront
+             cols = list(df_filtered.columns)
+             priority = ['Select', 'address', 'rate_monthly', 'rate_annually', 'leased_sf', 'tenant_name']
+             cols = priority + [c for c in cols if c not in priority]
+             df_filtered = df_filtered[cols]
+
+        # Use Data Editor for Selection
+        edited_view = st.data_editor(
+            df_filtered, 
+            hide_index=True, 
+            column_config={"Select": st.column_config.CheckboxColumn(required=True)}
+        )
+        
+        # --- EXPORT KML ---
+        selected_rows = edited_view[edited_view["Select"] == True]
+        
+        if not selected_rows.empty:
+            st.success(f"Selected {len(selected_rows)} properties.")
+            kml_data = generate_kml(selected_rows)
+            st.download_button(
+                label="🌍 Download Selection as Google Earth (KML)",
+                data=kml_data,
+                file_name="selected_properties.kml",
+                mime="application/vnd.google-earth.kml+xml"
+            )
+
+        if not df_filtered.empty and 'latitude' in df_filtered.columns and df_filtered['latitude'].notnull().any():
+            st.map(df_filtered[['latitude', 'longitude']].dropna())
             
         st.sidebar.markdown("---")
         if st.sidebar.button("⚠️ Clear All Data"):

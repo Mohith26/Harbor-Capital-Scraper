@@ -18,7 +18,7 @@ class SaleComp(Base):
     cap_rate = Column(Float)
     buyer = Column(String)
     seller = Column(String)
-    notes = Column(Text)   # <--- NEW
+    notes = Column(Text)
     raw_address_data = Column(Text)
     source_file = Column(String)
     upload_date = Column(String, default=datetime.datetime.now().strftime("%Y-%m-%d"))
@@ -31,16 +31,20 @@ class LeaseComp(Base):
     longitude = Column(Float)
     tenant_name = Column(String)
     leased_sf = Column(Float)
-    rate_psf = Column(Float)
+    
+    # NEW: Split Rates
+    rate_monthly = Column(Float)   # <--- NEW
+    rate_annually = Column(Float)  # <--- NEW
+    
     lease_type = Column(String)
     term_months = Column(Float)
     commencement_date = Column(String)
     ti_allowance = Column(Float)
     free_rent = Column(String)
-    escalations = Column(String)    # <--- NEW
-    building_type = Column(String)  # <--- NEW
-    clear_height = Column(Float)    # <--- NEW
-    notes = Column(Text)            # <--- NEW
+    escalations = Column(String)
+    building_type = Column(String)
+    clear_height = Column(Float)
+    notes = Column(Text)
     raw_address_data = Column(Text)
     source_file = Column(String)
     upload_date = Column(String, default=datetime.datetime.now().strftime("%Y-%m-%d"))
