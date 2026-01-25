@@ -7,9 +7,7 @@ from sentence_transformers import SentenceTransformer
 from scipy.spatial.distance import cosine
 from dateutil.parser import parse
 
-# --- 1. CONFIGURATION ---
-GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY_HERE"
-
+# --- 1. SETUP ---
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 LEASE_SCHEMA = {
@@ -161,15 +159,21 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.20):
     else: out['raw_address_data'] = out.get('address', "")
     return out
 
-# --- GOOGLE MAPS ---
-def fetch_google_data(raw_text):
+# --- GOOGLE MAPS HELPER (Does not run automatically) ---
+def fetch_google_data(raw_text, api_key):
+    """
+    Called only when user explicitly approves usage in app.py
+    """
     if not isinstance(raw_text, str) or not raw_text.strip(): return None, None, None
-    if "YOUR_GOOGLE" in GOOGLE_API_KEY: return raw_text, None, None
+    if not api_key or "YOUR_KEY" in api_key: return raw_text, None, None # Safety check
+
     try:
         url = "https://maps.googleapis.com/maps/api/geocode/json"
-        res = requests.get(url, params={"address": raw_text, "key": GOOGLE_API_KEY}).json()
+        res = requests.get(url, params={"address": raw_text, "key": api_key}).json()
+        
         if res['status'] == 'OK':
             top = res['results'][0]
+            # Returns: Formatted Address, Lat, Lon
             return top['formatted_address'], top['geometry']['location']['lat'], top['geometry']['location']['lng']
         return raw_text, None, None
     except: return raw_text, None, None
@@ -188,13 +192,10 @@ def process_file_to_clean_output(df, filename):
         calc_psf = clean_df['sale_price'].apply(to_f) / clean_df['building_size'].apply(to_f)
         clean_df['price_per_sf'] = clean_df['price_per_sf'].apply(to_f).fillna(calc_psf.round(2))
 
-    print("   > Fetching Coordinates from Google...")
-    if 'raw_address_data' in clean_df.columns:
-        results = clean_df['raw_address_data'].apply(fetch_google_data)
-        clean_df['address'] = [x[0] for x in results]
-        clean_df['latitude'] = [x[1] for x in results]
-        clean_df['longitude'] = [x[2] for x in results]
-
+    # Initialize empty columns for the App to fill later
+    clean_df['latitude'] = None
+    clean_df['longitude'] = None
+    
     clean_df['source_type'] = ftype
     clean_df['source_file'] = filename
     return clean_df
