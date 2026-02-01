@@ -1,0 +1,8 @@
+streamlit
+pandas
+sqlalchemy
+sentence-transformers
+scipy
+python-dateutil
+requests
+numpy
