@@ -151,11 +151,23 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.20):
 
 def fetch_google_data(raw_text, api_key):
     if not isinstance(raw_text, str) or not raw_text.strip(): return None, None, None
-    if not api_key or "YOUR_KEY" in api_key: return raw_text, None, None 
+    if not api_key or "YOUR_KEY" in api_key: return raw_text, None, None
+
+    addr = raw_text.strip()
+    # Append TX if address doesn't already mention Texas
+    addr_lower = addr.lower()
+    if not any(s in addr_lower for s in [' tx', ' texas', ', tx', ',tx']):
+        addr = f"{addr}, TX"
 
     try:
         url = "https://maps.googleapis.com/maps/api/geocode/json"
-        res = requests.get(url, params={"address": raw_text, "key": api_key}).json()
+        params = {
+            "address": addr,
+            "key": api_key,
+            "components": "country:US|administrative_area:TX",
+            "bounds": "25.84,-106.65|36.50,-93.51",
+        }
+        res = requests.get(url, params=params).json()
         if res['status'] == 'OK':
             top = res['results'][0]
             return top['formatted_address'], top['geometry']['location']['lat'], top['geometry']['location']['lng']
