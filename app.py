@@ -218,19 +218,28 @@ if page == "Upload & Process":
             missing_geos = df['latitude'].isna().sum()
 
             if missing_geos > 0:
-                st.warning(f"**Approval Required:** {len(df)} properties, {missing_geos} need geocoding.")
-                if st.button("Approve & Geocode"):
-                    progress_bar = st.progress(0)
-                    results = []
-                    for i, row in df.iterrows():
-                        addr, lat, lng = fetch_google_data(row['raw_address_data'], GOOGLE_API_KEY)
-                        results.append((addr, lat, lng))
-                        progress_bar.progress((i + 1) / len(df))
-                    df['address'] = [x[0] for x in results]
-                    df['latitude'] = [x[1] for x in results]
-                    df['longitude'] = [x[2] for x in results]
-                    st.session_state.clean_df = df
-                    st.rerun()
+                api_key = get_secret("GOOGLE_API_KEY", "")
+                if not api_key:
+                    st.error("Google API Key not configured. Add GOOGLE_API_KEY to your secrets.")
+                else:
+                    st.warning(f"**Approval Required:** {len(df)} properties, {missing_geos} need geocoding.")
+                    if st.button("Approve & Geocode"):
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        results = []
+                        for i, row in df.iterrows():
+                            raw_addr = str(row.get('raw_address_data', '') or row.get('address', '') or '')
+                            status_text.text(f"Geocoding {i+1}/{len(df)}: {raw_addr[:60]}...")
+                            addr, lat, lng = fetch_google_data(raw_addr, api_key)
+                            results.append((addr, lat, lng))
+                            progress_bar.progress((i + 1) / len(df))
+                        df['address'] = [x[0] for x in results]
+                        df['latitude'] = [x[1] for x in results]
+                        df['longitude'] = [x[2] for x in results]
+                        st.session_state.clean_df = df
+                        geocoded = sum(1 for r in results if r[1] is not None)
+                        status_text.text(f"Done! Geocoded {geocoded}/{len(results)} addresses.")
+                        st.rerun()
             else:
                 st.success("All addresses have been geocoded!")
 
@@ -403,7 +412,7 @@ elif page == "Database View":
         # Distance calculation
         if center_addr:
             with st.spinner("Calculating distances..."):
-                _, lat_c, lon_c = fetch_google_data(center_addr, GOOGLE_API_KEY)
+                _, lat_c, lon_c = fetch_google_data(center_addr, get_secret("GOOGLE_API_KEY", ""))
                 if lat_c:
                     df['distance_miles'] = df.apply(
                         lambda x: haversine_miles(lat_c, lon_c, x['latitude'], x['longitude']), axis=1

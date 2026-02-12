@@ -62,6 +62,7 @@ DB_URL = _get_db_url()
 engine_kwargs = {}
 if DB_URL.startswith("postgresql"):
     engine_kwargs["pool_pre_ping"] = True
+    engine_kwargs["connect_args"] = {"sslmode": "require"}
 
 engine = create_engine(DB_URL, **engine_kwargs)
 Base.metadata.create_all(engine)
