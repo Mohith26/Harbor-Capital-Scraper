@@ -208,7 +208,7 @@ if page == "Upload & Process":
 
                 st.dataframe(
                     conf_df.style.apply(highlight_confidence, axis=1),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -471,7 +471,7 @@ elif page == "Database View":
             df_page,
             hide_index=True,
             column_config=col_config,
-            use_container_width=True,
+            width="stretch",
         )
 
         # --- EXPORTS ---
@@ -548,7 +548,7 @@ elif page == "Database View":
                     fill_opacity=0.1,
                 ).add_to(m)
 
-            st_folium(m, width=None, height=500, use_container_width=True)
+            st_folium(m, height=500, width="stretch")
 
         # --- ADMIN: DELETE ---
         if user_role == "admin":
@@ -615,7 +615,7 @@ elif page == "Analytics":
                     fig = px.histogram(price_data, nbins=20, title="Sale Price Distribution",
                                        labels={'value': 'Sale Price ($)', 'count': 'Count'})
                     fig.update_layout(showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig)
 
             with col2:
                 psf_data = sales_df['price_per_sf'].dropna()
@@ -623,14 +623,14 @@ elif page == "Analytics":
                     fig = px.histogram(psf_data, nbins=20, title="$/SF Distribution",
                                        labels={'value': '$/SF', 'count': 'Count'})
                     fig.update_layout(showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig)
 
             size_data = sales_df['building_size'].dropna()
             if not size_data.empty:
                 fig = px.histogram(size_data, nbins=20, title="Building Size Distribution",
                                    labels={'value': 'Building Size (SF)', 'count': 'Count'})
                 fig.update_layout(showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig)
         else:
             st.info("No sales data to analyze.")
 
@@ -643,7 +643,7 @@ elif page == "Analytics":
                     fig = px.histogram(rate_data, nbins=20, title="Monthly Rate Distribution ($/SF/Mo)",
                                        labels={'value': '$/SF/Mo', 'count': 'Count'})
                     fig.update_layout(showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig)
 
             with col2:
                 sf_data = leases_df['leased_sf'].dropna()
@@ -651,14 +651,14 @@ elif page == "Analytics":
                     fig = px.histogram(sf_data, nbins=20, title="Leased SF Distribution",
                                        labels={'value': 'Leased SF', 'count': 'Count'})
                     fig.update_layout(showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig)
 
             ti_data = leases_df['ti_allowance'].dropna()
             if not ti_data.empty:
                 fig = px.histogram(ti_data, nbins=15, title="TI Allowance Distribution",
                                    labels={'value': 'TI Allowance ($)', 'count': 'Count'})
                 fig.update_layout(showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig)
         else:
             st.info("No lease data to analyze.")
 
@@ -675,7 +675,7 @@ elif page == "Analytics":
         if len(selected) >= 2:
             ids = [int(s.split(":")[0]) for s in selected]
             compare_df = sales_df[sales_df['id'].isin(ids)].set_index('address').T
-            st.dataframe(compare_df, use_container_width=True)
+            st.dataframe(compare_df, width="stretch")
     elif compare_type == "Leases" and not leases_df.empty:
         options = leases_df.apply(
             lambda r: f"{r['id']}: {r.get('address', 'N/A')} - {r.get('tenant_name', 'N/A')}", axis=1
@@ -684,6 +684,6 @@ elif page == "Analytics":
         if len(selected) >= 2:
             ids = [int(s.split(":")[0]) for s in selected]
             compare_df = leases_df[leases_df['id'].isin(ids)].set_index('address').T
-            st.dataframe(compare_df, use_container_width=True)
+            st.dataframe(compare_df, width="stretch")
     else:
         st.info("Add data to use the comparison tool.")
