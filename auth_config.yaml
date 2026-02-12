@@ -1,0 +1,16 @@
+credentials:
+  usernames:
+    admin:
+      email: admin@harborcapital.com
+      name: Admin
+      password: "$2b$12$Km5r6VC9Opr2gsRx3Hr3ROJnjJBL5u8v0B2.uo/j60dqlg7c5hPcW"
+      role: admin
+    analyst:
+      email: analyst@harborcapital.com
+      name: Analyst
+      password: "$2b$12$Km5r6VC9Opr2gsRx3Hr3ROJnjJBL5u8v0B2.uo/j60dqlg7c5hPcW"
+      role: analyst
+cookie:
+  expiry_days: 30
+  key: harbor_capital_comp_db_secret_key
+  name: harbor_auth
