@@ -1,18 +1,12 @@
-# Use the official lightweight Python image.
-FROM python:3.9-slim
+FROM python:3.11-slim
 
-# Allow statements and log messages to immediately appear in the Knative logs
-ENV PYTHONUNBUFFERED True
+ENV PYTHONUNBUFFERED=1
 
-# Copy local code to the container image.
-ENV APP_HOME /app
-WORKDIR $APP_HOME
+WORKDIR /app
 COPY . ./
 
-# Install production dependencies.
 RUN pip install --no-cache-dir -r requirements.txt
+RUN chmod +x start.sh
 
-# Run the web service on container startup.
-# Cloud Run expects the app to listen on port 8080 by default
-EXPOSE 8080
-CMD streamlit run app.py --server.port 8080 --server.address 0.0.0.0
+EXPOSE 8501
+CMD ["./start.sh"]

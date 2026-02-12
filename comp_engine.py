@@ -2,12 +2,38 @@ import pandas as pd
 import re
 import os
 import requests
-from sentence_transformers import SentenceTransformer
+import numpy as np
+from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cosine
 from dateutil.parser import parse
+from openai import OpenAI
+from difflib import get_close_matches
 
 # --- 1. SETUP ---
-model = SentenceTransformer('all-MiniLM-L6-v2')
+_openai_client = None
+
+def _get_secret(key, default=""):
+    try:
+        import streamlit as st
+        return st.secrets[key]
+    except Exception:
+        return os.environ.get(key, default)
+
+def _get_openai_client():
+    global _openai_client
+    if _openai_client is None:
+        api_key = _get_secret("OPENAI_API_KEY")
+        _openai_client = OpenAI(api_key=api_key)
+    return _openai_client
+
+# Cache for schema embeddings (they never change)
+_schema_embedding_cache = {}
+
+def get_embeddings(texts):
+    """Get embeddings from OpenAI text-embedding-3-small. Returns numpy array."""
+    client = _get_openai_client()
+    response = client.embeddings.create(input=texts, model="text-embedding-3-small")
+    return np.array([item.embedding for item in response.data])
 
 HOUSTON_RATE_THRESHOLD = 4.0  # Configurable: rates <= this are assumed monthly
 
@@ -194,11 +220,14 @@ def classify_file_type(headers, filename=""):
     """Classify file as LEASE, SALE, BOTH, or UNKNOWN based on headers and filename."""
     fname = str(filename).lower()
     lease_score = 10 if any(x in fname for x in ['lease', 'leasing', 'tenant']) else 0
-    sale_score = 10 if any(x in fname for x in ['sale', 'sold', 'transaction']) else 0
+    sale_score = 10 if any(x in fname for x in ['sale', 'sold', 'transaction', 'purchase']) else 0
 
     clean_headers = [str(h).lower().strip() for h in headers]
-    lease_triggers = {'tenant', 'lessee', 'term', 'commencement', 'base rent', 'rent', 'leased'}
-    sale_triggers = {'buyer', 'seller', 'closing', 'cap rate', 'purchase', 'sale price', 'deal'}
+    lease_triggers = {'tenant', 'lessee', 'term', 'commencement', 'base rent', 'rent', 'leased',
+                      'free rent', 'escalation', 'opex', 'base rate', 'lease type', 'signed date',
+                      'rate type', 'ti allowance', 'ti', 'abatement'}
+    sale_triggers = {'buyer', 'seller', 'closing', 'cap rate', 'purchase', 'sale price', 'deal',
+                     'transaction', 'sale date', 'price per sf', 'acreage', 'purchase price'}
 
     lease_score += sum(1 for h in clean_headers if any(t in h for t in lease_triggers))
     sale_score += sum(1 for h in clean_headers if any(t in h for t in sale_triggers))
@@ -216,39 +245,50 @@ def classify_file_type(headers, filename=""):
 
 BASE_OVERRIDES = {
     'price per sf': 'price_per_sf', 'sale price psf': 'price_per_sf', 'pps': 'price_per_sf',
-    'price psf': 'price_per_sf',
+    'price psf': 'price_per_sf', 'per sf': 'price_per_sf', 'psf': 'price_per_sf',
     'rent': 'rate_psf', 'base rent': 'rate_psf', 'rental rate': 'rate_psf',
-    'base rent yearly': 'rate_psf', 'base rent monthly': 'rate_psf',
+    'base rent yearly': 'rate_psf', 'base rent monthly': 'rate_psf', 'base rate': 'rate_psf',
+    'asking rate': 'rate_psf', 'nnn rate': 'rate_psf', 'gross rate': 'rate_psf',
     'date closed': 'closing_date', 'closing date': 'closing_date', 'sale date': 'closing_date',
+    'transaction date': 'closing_date', 'date of sale': 'closing_date',
     'esc': 'escalations', 'escalation': 'escalations', 'escalation percent': 'escalations',
-    'steps': 'escalations',
-    'construction': 'building_type', 'loading': 'building_type',
-    'months': 'term_months', 'lease term': 'term_months',
-    'comments': 'notes', 'notes': 'notes',
-    'buyer': 'buyer', 'seller': 'seller',
+    'steps': 'escalations', 'annual increase': 'escalations', 'bumps': 'escalations',
+    'construction': 'building_type', 'building class': 'building_type',
+    'property type': 'building_type', 'construction type': 'building_type',
+    'months': 'term_months', 'lease term': 'term_months', 'term': 'term_months',
+    'comments': 'notes', 'notes': 'notes', 'remarks': 'notes',
+    'buyer': 'buyer', 'seller': 'seller', 'purchaser': 'buyer', 'grantor': 'seller',
     'cap rate': 'cap_rate', 'in place cap rate': 'cap_rate', 'goingin cap rate': 'cap_rate',
-    'sale price': 'sale_price', 'purchase price': 'sale_price',
+    'sale price': 'sale_price', 'purchase price': 'sale_price', 'total price': 'sale_price',
+    'consideration': 'sale_price',
     'rentable area': 'building_size', 'size sf': 'building_size', 'sizesf': 'building_size',
+    'total sf': 'building_size', 'building sf': 'building_size', 'rba': 'building_size',
     'tenant': 'tenant_name', 'tenant name': 'tenant_name', 'lessee': 'tenant_name',
+    'occupant': 'tenant_name', 'company': 'tenant_name',
     'commencement': 'commencement_date', 'commencement date': 'commencement_date',
-    'start date': 'commencement_date',
+    'start date': 'commencement_date', 'signed date': 'commencement_date',
+    'lease commencement': 'commencement_date',
     'ti': 'ti_allowance', 'ti allowance': 'ti_allowance', 'work letter': 'ti_allowance',
+    'tenant improvement': 'ti_allowance',
     'free rent': 'free_rent', 'free rent months': 'free_rent', 'abatement': 'free_rent',
-    'clear height': 'clear_height', 'ceiling height': 'clear_height',
-    'year built': 'year_built',
+    'concession': 'free_rent',
+    'clear height': 'clear_height', 'ceiling height': 'clear_height', 'clearance': 'clear_height',
+    'year built': 'year_built', 'built': 'year_built', 'vintage': 'year_built',
     'address': 'address', 'property address': 'address', 'property name': 'address',
-    'property': 'address',
+    'property': 'address', 'location': 'address', 'street address': 'address',
+    'lease type': 'lease_type', 'rate type': 'lease_type',
 }
 
 LEASE_OVERRIDES = {
     'sf': 'leased_sf', 'size': 'leased_sf', 'sqft': 'leased_sf',
-    'area leased': 'leased_sf', 'leased sf': 'leased_sf',
+    'area leased': 'leased_sf', 'leased sf': 'leased_sf', 'space': 'leased_sf',
+    'leased area': 'leased_sf', 'deal sf': 'leased_sf',
     'price': 'rate_psf',
 }
 
 SALE_OVERRIDES = {
     'sf': 'building_size', 'size': 'building_size', 'sqft': 'building_size',
-    'building size': 'building_size',
+    'building size': 'building_size', 'total size': 'building_size',
     'price': 'sale_price',
 }
 
@@ -257,7 +297,7 @@ SALE_OVERRIDES = {
 
 def _find_override(cleaned_header, overrides, target_col):
     """Check if a cleaned header matches any override for a given target column.
-    Uses exact match first, then substring containment for longer headers."""
+    Uses exact match first, then substring containment, then fuzzy matching."""
     # Exact match
     if cleaned_header in overrides and overrides[cleaned_header] == target_col:
         return True
@@ -265,11 +305,26 @@ def _find_override(cleaned_header, overrides, target_col):
     for key, val in overrides.items():
         if val == target_col and len(key) >= 3 and key in cleaned_header:
             return True
+    # Fuzzy match for misspellings
+    override_keys_for_target = [k for k, v in overrides.items() if v == target_col and len(k) >= 4]
+    if override_keys_for_target:
+        matches = get_close_matches(cleaned_header, override_keys_for_target, n=1, cutoff=0.8)
+        if matches:
+            return True
     return False
 
 
-def generate_standardized_df(df, schema_dict, file_type, threshold=0.45):
-    """Map input columns to schema using overrides + semantic similarity.
+def _get_schema_embeddings(schema_dict):
+    """Get embeddings for schema descriptions, with caching."""
+    cache_key = tuple(sorted(schema_dict.keys()))
+    if cache_key not in _schema_embedding_cache:
+        descs = [schema_dict[k]['desc'] for k in schema_dict]
+        _schema_embedding_cache[cache_key] = get_embeddings(descs)
+    return _schema_embedding_cache[cache_key]
+
+
+def generate_standardized_df(df, schema_dict, file_type, threshold=0.55):
+    """Map input columns to schema using Hungarian algorithm for globally optimal matching.
     Returns (standardized_df, mapping_confidence_dict)."""
     input_headers = df.columns.tolist()
     clean_headers = [clean_header(h) for h in input_headers]
@@ -283,59 +338,79 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.45):
     else:
         overrides.update(SALE_OVERRIDES)
 
-    # Encode vectors
-    head_vecs = model.encode(clean_headers)
-    target_vecs = model.encode([schema_dict[k]['desc'] for k in target_cols])
+    # Get embeddings
+    head_vecs = get_embeddings(clean_headers)
+    target_vecs = _get_schema_embeddings(schema_dict)
+
+    n_targets = len(target_cols)
+    n_inputs = len(input_headers)
+
+    # Build score matrix for Hungarian algorithm
+    # score_matrix[t_idx][h_idx] = score (higher is better)
+    score_matrix = np.zeros((n_targets, n_inputs))
+    override_locks = {}  # target_idx -> input_idx forced assignments
+
+    for t_idx, target_col in enumerate(target_cols):
+        target_type = schema_dict[target_col]['type']
+        for h_idx in range(n_inputs):
+            in_clean = clean_headers[h_idx]
+
+            # Check overrides
+            if _find_override(in_clean, overrides, target_col):
+                score_matrix[t_idx, h_idx] = 100.0
+                override_locks[t_idx] = h_idx
+                continue
+
+            # Semantic similarity
+            sem_score = 1 - cosine(head_vecs[h_idx], target_vecs[t_idx])
+
+            # Type bonuses (strengthened)
+            input_type = col_profiles[h_idx]
+            bonus = 0.0
+            if target_type == input_type:
+                bonus = 0.25
+            elif target_type in ('numeric_money', 'numeric_clean') and input_type == 'text':
+                bonus = -0.20
+            elif target_type == 'date' and input_type != 'date':
+                bonus = -0.30
+            elif target_type == 'text' and input_type in ('numeric_money', 'numeric_clean'):
+                bonus = -0.15
+
+            score_matrix[t_idx, h_idx] = sem_score + bonus
+
+    # Solve with Hungarian algorithm (minimizes cost, so negate scores)
+    # Pad matrix if needed (more targets than inputs or vice versa)
+    max_dim = max(n_targets, n_inputs)
+    padded = np.zeros((max_dim, max_dim))
+    padded[:n_targets, :n_inputs] = -score_matrix  # Negate for minimization
+    row_ind, col_ind = linear_sum_assignment(padded)
 
     mappings = {}
     confidence = {}
-    claimed_columns = set()  # Prevent double-matching
     address_candidates = []
 
-    for t_idx, target_col in enumerate(target_cols):
-        target_conf = schema_dict[target_col]
-        target_type = target_conf['type']
-        best_score, best_match, best_h_idx = -1, None, -1
+    # Collect address candidates from all input columns
+    if 'address' in target_cols:
+        addr_t_idx = target_cols.index('address')
+        for h_idx in range(n_inputs):
+            addr_score = 1 - cosine(head_vecs[h_idx], target_vecs[addr_t_idx])
+            if addr_score > 0.35:
+                address_candidates.append((input_headers[h_idx], addr_score))
 
-        for h_idx, h_vec in enumerate(head_vecs):
-            if h_idx in claimed_columns:
-                continue
-
-            in_clean = clean_headers[h_idx]
-
-            # Check overrides first
-            if _find_override(in_clean, overrides, target_col):
-                best_score, best_match, best_h_idx = 100.0, input_headers[h_idx], h_idx
-                break
-
-            # Semantic similarity + type bonus
-            sem_score = 1 - cosine(h_vec, target_vecs[t_idx])
-            input_type = col_profiles[h_idx]
-
-            bonus = 0.0
-            if target_type == input_type:
-                bonus = 0.15
-            elif target_type in ('numeric_money', 'numeric_clean') and input_type == 'text':
-                bonus = -0.10
-            elif target_type == 'date' and input_type != 'date':
-                bonus = -0.20
-
-            final_score = sem_score + bonus
-            if final_score > best_score:
-                best_score, best_match, best_h_idx = final_score, input_headers[h_idx], h_idx
-
-            # Track address candidates for raw_address_data merging
-            if target_col == 'address':
-                addr_score = 1 - cosine(h_vec, target_vecs[t_idx])
-                if addr_score > 0.35:
-                    address_candidates.append((input_headers[h_idx], addr_score))
-
-        if best_score > threshold and best_h_idx >= 0:
-            mappings[target_col] = best_match
-            confidence[target_col] = round(best_score if best_score <= 1.0 else 1.0, 3)
-            claimed_columns.add(best_h_idx)
+    for t_idx, h_idx in zip(row_ind, col_ind):
+        if t_idx >= n_targets or h_idx >= n_inputs:
+            continue
+        score = score_matrix[t_idx, h_idx]
+        if score >= threshold or score >= 100.0:
+            mappings[target_cols[t_idx]] = input_headers[h_idx]
+            confidence[target_cols[t_idx]] = round(min(score, 1.0), 3)
         else:
-            confidence[target_col] = 0.0
+            confidence[target_cols[t_idx]] = 0.0
+
+    # Fill in missing confidence entries
+    for t in target_cols:
+        if t not in confidence:
+            confidence[t] = 0.0
 
     # Build output DataFrame
     out = pd.DataFrame()
@@ -429,13 +504,34 @@ def _to_float(v):
 
 # --- 8. GEOCODING ---
 
+TEXAS_BOUNDS = {
+    'lat_min': 25.84, 'lat_max': 36.50,
+    'lng_min': -106.65, 'lng_max': -93.51,
+}
+
+def _is_in_texas(lat, lng):
+    return (TEXAS_BOUNDS['lat_min'] <= lat <= TEXAS_BOUNDS['lat_max'] and
+            TEXAS_BOUNDS['lng_min'] <= lng <= TEXAS_BOUNDS['lng_max'])
+
+def _extract_address_components(result):
+    """Extract city and zip_code from Google geocoding address_components."""
+    components = result.get('address_components', [])
+    city = None
+    zip_code = None
+    for c in components:
+        if 'locality' in c['types']:
+            city = c['long_name']
+        if 'postal_code' in c['types']:
+            zip_code = c['long_name']
+    return city, zip_code
+
 def fetch_google_data(raw_text, api_key):
     """Geocode an address using the Google Maps Geocoding API.
-    Biases results toward Texas for accuracy on CRE comps."""
+    Restricts results to Texas. Returns (address, lat, lng, city, zip_code, warning)."""
     if not isinstance(raw_text, str) or not raw_text.strip():
-        return None, None, None
+        return None, None, None, None, None, None
     if not api_key or "YOUR_KEY" in api_key:
-        return raw_text, None, None
+        return raw_text, None, None, None, None, None
 
     addr = raw_text.strip()
 
@@ -451,31 +547,37 @@ def fetch_google_data(raw_text, api_key):
             "address": addr,
             "key": api_key,
             "components": "country:US|administrative_area:TX",
-            # Bounding box bias: covers all of Texas
             "bounds": "25.84,-106.65|36.50,-93.51",
         }
         res = requests.get(url, params=params).json()
+
+        top = None
         if res['status'] == 'OK':
             top = res['results'][0]
-            return (
-                top['formatted_address'],
-                top['geometry']['location']['lat'],
-                top['geometry']['location']['lng'],
-            )
-        # Retry without component restriction if zero results
-        if res['status'] == 'ZERO_RESULTS':
+        elif res['status'] == 'ZERO_RESULTS':
             params.pop("components", None)
             res = requests.get(url, params=params).json()
             if res['status'] == 'OK':
                 top = res['results'][0]
-                return (
-                    top['formatted_address'],
-                    top['geometry']['location']['lat'],
-                    top['geometry']['location']['lng'],
-                )
-        return raw_text, None, None
+
+        if top is None:
+            return raw_text, None, None, None, None, None
+
+        lat = top['geometry']['location']['lat']
+        lng = top['geometry']['location']['lng']
+        formatted = top['formatted_address']
+        city, zip_code = _extract_address_components(top)
+
+        # Validate Texas bounds
+        warning = None
+        if not _is_in_texas(lat, lng):
+            warning = f"Address geocoded outside Texas: {formatted}"
+            return formatted, None, None, city, zip_code, warning
+
+        return formatted, lat, lng, city, zip_code, warning
+
     except Exception:
-        return raw_text, None, None
+        return raw_text, None, None, None, None, None
 
 
 # --- 9. MAIN PIPELINE ---
@@ -519,6 +621,8 @@ def process_file_to_clean_output(df, filename):
 
     clean_df['latitude'] = None
     clean_df['longitude'] = None
+    clean_df['city'] = None
+    clean_df['zip_code'] = None
     clean_df['source_type'] = ftype
     clean_df['source_file'] = filename
     return clean_df, confidence

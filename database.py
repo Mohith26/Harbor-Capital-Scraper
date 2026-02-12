@@ -32,6 +32,9 @@ class SaleComp(Base):
     notes = Column(Text)
     raw_address_data = Column(Text)
     source_file = Column(String)
+    source_file_url = Column(String)
+    city = Column(String)
+    zip_code = Column(String)
     created_at = Column(DateTime, server_default=func.now())
 
 class LeaseComp(Base):
@@ -55,6 +58,9 @@ class LeaseComp(Base):
     notes = Column(Text)
     raw_address_data = Column(Text)
     source_file = Column(String)
+    source_file_url = Column(String)
+    city = Column(String)
+    zip_code = Column(String)
     created_at = Column(DateTime, server_default=func.now())
 
 DB_URL = _get_db_url()
@@ -62,7 +68,8 @@ DB_URL = _get_db_url()
 engine_kwargs = {}
 if DB_URL.startswith("postgresql"):
     engine_kwargs["pool_pre_ping"] = True
-    # Append sslmode to the URL itself (more reliable than connect_args)
+    engine_kwargs["pool_size"] = 5
+    engine_kwargs["max_overflow"] = 10
     if "sslmode" not in DB_URL:
         separator = "&" if "?" in DB_URL else "?"
         DB_URL = f"{DB_URL}{separator}sslmode=require"
