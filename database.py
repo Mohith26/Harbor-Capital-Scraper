@@ -62,8 +62,27 @@ DB_URL = _get_db_url()
 engine_kwargs = {}
 if DB_URL.startswith("postgresql"):
     engine_kwargs["pool_pre_ping"] = True
-    engine_kwargs["connect_args"] = {"sslmode": "require"}
+    # Append sslmode to the URL itself (more reliable than connect_args)
+    if "sslmode" not in DB_URL:
+        separator = "&" if "?" in DB_URL else "?"
+        DB_URL = f"{DB_URL}{separator}sslmode=require"
 
 engine = create_engine(DB_URL, **engine_kwargs)
-Base.metadata.create_all(engine)
+
+# Create tables — defer errors so the app can still show a useful message
+_tables_created = False
+def ensure_tables():
+    global _tables_created
+    if not _tables_created:
+        try:
+            Base.metadata.create_all(engine)
+            _tables_created = True
+        except Exception as e:
+            print(f"Warning: Could not create tables: {e}")
+
+try:
+    ensure_tables()
+except Exception:
+    pass
+
 Session = sessionmaker(bind=engine)
