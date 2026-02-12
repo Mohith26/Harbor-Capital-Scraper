@@ -1,6 +1,17 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text
+import os
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, func
 from sqlalchemy.orm import declarative_base, sessionmaker
-import datetime
+
+load_dotenv()
+
+# Try st.secrets first (Streamlit Cloud), then env vars, then SQLite fallback
+def _get_db_url():
+    try:
+        import streamlit as st
+        return st.secrets["SUPABASE_DB_URL"]
+    except Exception:
+        return os.environ.get("SUPABASE_DB_URL", "sqlite:///comps.db")
 
 Base = declarative_base()
 
@@ -21,7 +32,7 @@ class SaleComp(Base):
     notes = Column(Text)
     raw_address_data = Column(Text)
     source_file = Column(String)
-    upload_date = Column(String, default=datetime.datetime.now().strftime("%Y-%m-%d"))
+    created_at = Column(DateTime, server_default=func.now())
 
 class LeaseComp(Base):
     __tablename__ = 'lease_comps'
@@ -31,11 +42,8 @@ class LeaseComp(Base):
     longitude = Column(Float)
     tenant_name = Column(String)
     leased_sf = Column(Float)
-    
-    # NEW: Split Rates
-    rate_monthly = Column(Float)   # <--- NEW
-    rate_annually = Column(Float)  # <--- NEW
-    
+    rate_monthly = Column(Float)
+    rate_annually = Column(Float)
     lease_type = Column(String)
     term_months = Column(Float)
     commencement_date = Column(String)
@@ -47,8 +55,34 @@ class LeaseComp(Base):
     notes = Column(Text)
     raw_address_data = Column(Text)
     source_file = Column(String)
-    upload_date = Column(String, default=datetime.datetime.now().strftime("%Y-%m-%d"))
+    created_at = Column(DateTime, server_default=func.now())
 
-engine = create_engine('sqlite:///comps.db')
-Base.metadata.create_all(engine)
+DB_URL = _get_db_url()
+
+engine_kwargs = {}
+if DB_URL.startswith("postgresql"):
+    engine_kwargs["pool_pre_ping"] = True
+    # Append sslmode to the URL itself (more reliable than connect_args)
+    if "sslmode" not in DB_URL:
+        separator = "&" if "?" in DB_URL else "?"
+        DB_URL = f"{DB_URL}{separator}sslmode=require"
+
+engine = create_engine(DB_URL, **engine_kwargs)
+
+# Create tables — defer errors so the app can still show a useful message
+_tables_created = False
+def ensure_tables():
+    global _tables_created
+    if not _tables_created:
+        try:
+            Base.metadata.create_all(engine)
+            _tables_created = True
+        except Exception as e:
+            print(f"Warning: Could not create tables: {e}")
+
+try:
+    ensure_tables()
+except Exception:
+    pass
+
 Session = sessionmaker(bind=engine)
