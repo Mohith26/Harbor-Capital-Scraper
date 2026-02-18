@@ -506,6 +506,13 @@ elif page == "Database View":
     if df.empty:
         st.info("Database is empty. Upload files on the Upload page.")
     else:
+        # Ensure numeric columns are proper dtype
+        numeric_cols_sale = ['sale_price', 'price_per_sf', 'building_size', 'year_built', 'cap_rate']
+        numeric_cols_lease = ['rate_monthly', 'rate_annually', 'leased_sf', 'ti_allowance', 'clear_height', 'term_months']
+        for col in (numeric_cols_sale if view_type == "Sales Comps" else numeric_cols_lease):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
         # --- SIDEBAR CONTROLS ---
         st.sidebar.button("Reset All Filters", on_click=reset_callback)
         st.sidebar.markdown("---")
@@ -745,10 +752,17 @@ elif page == "Analytics":
     st.sidebar.header("Analytics Filters")
 
     if analytics_type == "Sales Comps" and not sales_df.empty:
+        # Ensure numeric columns are proper dtype
+        for col in ['sale_price', 'price_per_sf', 'building_size', 'year_built', 'cap_rate']:
+            if col in sales_df.columns:
+                sales_df[col] = pd.to_numeric(sales_df[col], errors='coerce')
         analytics_mask = apply_sidebar_filters(sales_df, "Sales Comps")
         filtered_sales = sales_df[analytics_mask]
         filtered_leases = pd.DataFrame()
     elif analytics_type == "Lease Comps" and not leases_df.empty:
+        for col in ['rate_monthly', 'rate_annually', 'leased_sf', 'ti_allowance', 'clear_height', 'term_months']:
+            if col in leases_df.columns:
+                leases_df[col] = pd.to_numeric(leases_df[col], errors='coerce')
         analytics_mask = apply_sidebar_filters(leases_df, "Lease Comps")
         filtered_leases = leases_df[analytics_mask]
         filtered_sales = pd.DataFrame()

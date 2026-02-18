@@ -71,7 +71,8 @@ HEADER_KEYWORDS = {
     'address', 'city', 'tenant', 'buyer', 'seller', 'date', 'price', 'sqft',
     'size', 'rate', 'term', 'commencement', 'lessee', 'sf', 'psf', 'rent',
     'building', 'property', 'lease', 'cap', 'closing', 'year', 'type',
-    'height', 'notes',
+    'height', 'notes', 'acres', 'acreage', 'submarket', 'class', 'vintage',
+    'structure', 'nnn', 'gross', 'transaction', 'sale', 'landlord', 'occupant',
 }
 
 # --- 3. FILE LOADER (CSV + XLSX) ---
@@ -119,6 +120,20 @@ def robust_load_file(file_path):
     # Check for split/multi-row headers (merge up to 2 sub-header rows)
     df = _merge_split_headers(df)
     df = df.dropna(how='all')
+
+    # Deduplicate column names (append _2, _3, etc.)
+    seen = {}
+    new_cols = []
+    for col in df.columns:
+        col_str = str(col)
+        if col_str in seen:
+            seen[col_str] += 1
+            new_cols.append(f"{col_str}_{seen[col_str]}")
+        else:
+            seen[col_str] = 1
+            new_cols.append(col_str)
+    df.columns = new_cols
+
     return df
 
 
@@ -173,38 +188,50 @@ def _merge_split_headers(df):
 # --- 4. HELPERS ---
 
 def clean_header(header):
-    text = str(header).lower().replace('_', ' ').replace('.', ' ').replace('\n', ' ')
-    return re.sub(r'[^\w\s]', '', text).strip()
+    text = str(header).lower()
+    # Normalize whitespace: newlines, tabs, multiple spaces → single space
+    text = re.sub(r'[\n\r\t]+', ' ', text)
+    text = text.replace('_', ' ').replace('.', ' ')
+    text = re.sub(r'[^\w\s/]', '', text).strip()
+    text = re.sub(r'\s+', ' ', text)
+    return text
 
 
 def get_column_profile(series):
     """Profile a column's data type from a sample of values."""
+    # Handle duplicate column names returning a DataFrame
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
     sample = series.dropna().astype(str).head(20).tolist()
+    # Filter out placeholder values
+    sample = [s for s in sample if s.strip() not in ('', '-', '_', '--', 'N/A', 'n/a', 'nan', 'None')]
     if not sample:
         return 'empty'
 
     joined = " ".join(sample).lower()
     has_money = '$' in joined
 
-    # Try numeric detection
-    clean = [re.sub(r'[$,%]', '', x).strip() for x in sample]
+    # Try numeric detection — use _to_float for more robust parsing
     numeric_count = 0
-    for x in clean:
+    for x in sample:
+        cleaned = re.sub(r'[$,%]', '', x).strip()
         try:
-            float(x.replace(',', ''))
+            float(cleaned.replace(',', ''))
             numeric_count += 1
         except ValueError:
-            pass
+            # Also count percentage values and rate strings as numeric
+            if re.match(r'^[\d.]+\s*%', cleaned) or re.match(r'^[\d,.]+\s*/\s*\w+', x.strip()):
+                numeric_count += 1
 
-    is_numeric = (numeric_count / len(sample)) > 0.7 if sample else False
+    is_numeric = (numeric_count / len(sample)) > 0.5 if sample else False
 
     # Date detection
     if not is_numeric:
         date_count = 0
-        for val in sample[:5]:
+        for val in sample[:8]:
             try:
                 parse(val, fuzzy=False)
-                if any(c in val for c in ['/', '-']):
+                if any(c in val for c in ['/', '-', ',']):
                     date_count += 1
             except (ValueError, OverflowError):
                 pass
@@ -246,28 +273,42 @@ def classify_file_type(headers, filename=""):
 BASE_OVERRIDES = {
     'price per sf': 'price_per_sf', 'sale price psf': 'price_per_sf', 'pps': 'price_per_sf',
     'price psf': 'price_per_sf', 'per sf': 'price_per_sf', 'psf': 'price_per_sf',
+    'price/sf': 'price_per_sf', 'price per sf': 'price_per_sf', 'price sf': 'price_per_sf',
+    'price lsf': 'price_per_sf',
     'rent': 'rate_psf', 'base rent': 'rate_psf', 'rental rate': 'rate_psf',
     'base rent yearly': 'rate_psf', 'base rent monthly': 'rate_psf', 'base rate': 'rate_psf',
     'asking rate': 'rate_psf', 'nnn rate': 'rate_psf', 'gross rate': 'rate_psf',
+    'rate': 'rate_psf', 'rate month': 'rate_psf', 'rate monthly': 'rate_psf',
+    'rate per month': 'rate_psf', 'rate/sf': 'rate_psf', 'rate psf': 'rate_psf',
+    'rate sf': 'rate_psf', 'rate per sf': 'rate_psf',
+    'rate/acre': 'rate_psf', 'rate acre': 'rate_psf', 'rate / acre / month': 'rate_psf',
+    'rate per acre': 'rate_psf',
     'date closed': 'closing_date', 'closing date': 'closing_date', 'sale date': 'closing_date',
-    'transaction date': 'closing_date', 'date of sale': 'closing_date',
+    'transaction date': 'closing_date', 'date of sale': 'closing_date', 'closed': 'closing_date',
+    'close date': 'closing_date',
     'esc': 'escalations', 'escalation': 'escalations', 'escalation percent': 'escalations',
     'steps': 'escalations', 'annual increase': 'escalations', 'bumps': 'escalations',
+    'annual bumps': 'escalations',
     'construction': 'building_type', 'building class': 'building_type',
     'property type': 'building_type', 'construction type': 'building_type',
+    'class': 'building_type', 'building type': 'building_type',
     'months': 'term_months', 'lease term': 'term_months', 'term': 'term_months',
     'comments': 'notes', 'notes': 'notes', 'remarks': 'notes',
     'buyer': 'buyer', 'seller': 'seller', 'purchaser': 'buyer', 'grantor': 'seller',
     'cap rate': 'cap_rate', 'in place cap rate': 'cap_rate', 'goingin cap rate': 'cap_rate',
+    'cap': 'cap_rate', 'stabilized cap rate': 'cap_rate',
+    'pricing guidance cap rate / yoc': 'cap_rate',
     'sale price': 'sale_price', 'purchase price': 'sale_price', 'total price': 'sale_price',
-    'consideration': 'sale_price',
+    'consideration': 'sale_price', 'sale price $': 'sale_price',
     'rentable area': 'building_size', 'size sf': 'building_size', 'sizesf': 'building_size',
     'total sf': 'building_size', 'building sf': 'building_size', 'rba': 'building_size',
+    'total sq ft': 'building_size', 'sq ft': 'building_size', 'area': 'building_size',
+    'building name': 'address',
     'tenant': 'tenant_name', 'tenant name': 'tenant_name', 'lessee': 'tenant_name',
     'occupant': 'tenant_name', 'company': 'tenant_name',
     'commencement': 'commencement_date', 'commencement date': 'commencement_date',
     'start date': 'commencement_date', 'signed date': 'commencement_date',
-    'lease commencement': 'commencement_date',
+    'lease commencement': 'commencement_date', 'date': 'commencement_date',
     'ti': 'ti_allowance', 'ti allowance': 'ti_allowance', 'work letter': 'ti_allowance',
     'tenant improvement': 'ti_allowance',
     'free rent': 'free_rent', 'free rent months': 'free_rent', 'abatement': 'free_rent',
@@ -276,20 +317,23 @@ BASE_OVERRIDES = {
     'year built': 'year_built', 'built': 'year_built', 'vintage': 'year_built',
     'address': 'address', 'property address': 'address', 'property name': 'address',
     'property': 'address', 'location': 'address', 'street address': 'address',
-    'lease type': 'lease_type', 'rate type': 'lease_type',
+    'lease type': 'lease_type', 'rate type': 'lease_type', 'structure': 'lease_type',
+    'lease structure': 'lease_type',
+    'acreage': 'building_size', 'acres': 'building_size', 'land area': 'building_size',
 }
 
 LEASE_OVERRIDES = {
     'sf': 'leased_sf', 'size': 'leased_sf', 'sqft': 'leased_sf',
     'area leased': 'leased_sf', 'leased sf': 'leased_sf', 'space': 'leased_sf',
     'leased area': 'leased_sf', 'deal sf': 'leased_sf',
-    'price': 'rate_psf',
+    'price': 'rate_psf', 'date': 'commencement_date',
 }
 
 SALE_OVERRIDES = {
     'sf': 'building_size', 'size': 'building_size', 'sqft': 'building_size',
     'building size': 'building_size', 'total size': 'building_size',
-    'price': 'sale_price',
+    'price': 'sale_price', 'date': 'closing_date',
+    'transaction date': 'closing_date',
 }
 
 
@@ -415,7 +459,14 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.55):
     # Build output DataFrame
     out = pd.DataFrame()
     for t in target_cols:
-        out[t] = df[mappings[t]] if t in mappings else None
+        if t in mappings:
+            col_data = df[mappings[t]]
+            # Safety: if duplicate columns return a DataFrame, take first column
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+            out[t] = col_data.values
+        else:
+            out[t] = None
 
     # Merge address candidates into raw_address_data
     if address_candidates:
@@ -496,10 +547,42 @@ def apply_rate_logic(clean_df, rate_header=None, threshold=HOUSTON_RATE_THRESHOL
 
 
 def _to_float(v):
-    try:
-        return float(str(v).replace(',', '').replace('$', '').replace('sf', '').strip())
-    except (ValueError, TypeError):
+    """Convert a value to float, handling currency strings, percentages, and junk text."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
         return None
+    s = str(v).strip()
+    # Reject obvious non-numeric placeholders
+    if s in ('', '-', '_', '--', 'N/A', 'n/a', 'nan', 'None', 'TBD', 'tbd'):
+        return None
+    # Strip currency symbols and common suffixes
+    s = s.replace(',', '').replace('$', '').replace('sf', '').replace('SF', '')
+    # Handle percentage values like "5.3%" or "6.43% (Yr 3)"
+    pct_match = re.match(r'^([\d.]+)\s*%', s)
+    if pct_match:
+        try:
+            return float(pct_match.group(1))
+        except ValueError:
+            return None
+    # Handle rate strings like "$5,900/acre Gross" — extract the first number
+    slash_match = re.match(r'^([\d.]+)\s*/\s*\w+', s)
+    if slash_match:
+        try:
+            return float(slash_match.group(1))
+        except ValueError:
+            pass
+    # Try direct conversion
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        pass
+    # Last resort: extract first number-like sequence from the string
+    num_match = re.search(r'[\d,]+\.?\d*', s)
+    if num_match:
+        try:
+            return float(num_match.group().replace(',', ''))
+        except (ValueError, TypeError):
+            pass
+    return None
 
 
 # --- 8. GEOCODING ---
@@ -591,10 +674,15 @@ def process_file_to_clean_output(df, filename):
 
     clean_df, confidence = generate_standardized_df(df, schema, ftype)
 
+    # Clean all numeric columns — convert messy strings to proper floats
+    for col_name, col_info in schema.items():
+        if col_info['type'] in ('numeric_money', 'numeric_clean') and col_name in clean_df.columns:
+            clean_df[col_name] = clean_df[col_name].apply(_to_float)
+
     # Calculate price_per_sf for sales if missing
     if ftype == "SALE" and 'sale_price' in clean_df.columns and 'building_size' in clean_df.columns:
-        calc_psf = clean_df['sale_price'].apply(_to_float) / clean_df['building_size'].apply(_to_float)
-        clean_df['price_per_sf'] = clean_df['price_per_sf'].apply(_to_float).fillna(calc_psf.round(2))
+        calc_psf = clean_df['sale_price'] / clean_df['building_size']
+        clean_df['price_per_sf'] = clean_df['price_per_sf'].fillna(calc_psf.round(2))
 
     # Apply Houston lease rate logic
     if ftype == "LEASE":
