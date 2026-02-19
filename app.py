@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import io
 import math
+import base64
 import tempfile
 import yaml
 import streamlit_authenticator as stauth
@@ -77,7 +78,18 @@ def to_excel_bytes(df):
     return buf.getvalue()
 
 # --- APP CONFIG ---
-st.set_page_config(page_title="Harbor Capital Comp Database", layout="wide", page_icon="Slate@512w.png")
+st.set_page_config(page_title="Harbor Capital Comp Database", layout="wide")
+
+# --- LOAD LOGO IMAGES AS BASE64 ---
+def _load_image_b64(path):
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return None
+
+_logo_b64 = _load_image_b64("HC-Logo-Stacked-Left-Charcoal@2000w.png")
+_icon_b64 = _load_image_b64("Slate@512w.png")
 
 # --- GLOBAL CSS ---
 st.markdown("""
@@ -242,10 +254,12 @@ user_role = auth_config['credentials']['usernames'].get(
     st.session_state.get("username", ""), {}
 ).get('role', 'analyst')
 
-st.image("HC-Logo-Stacked-Left-Charcoal@2000w.png", width=320)
+if _logo_b64:
+    st.markdown(f'<img src="data:image/png;base64,{_logo_b64}" width="320" style="margin-bottom:0.5rem;">', unsafe_allow_html=True)
 
 # Sidebar: logo + user info + logout
-st.sidebar.image("Slate@512w.png", width=60)
+if _icon_b64:
+    st.sidebar.markdown(f'<img src="data:image/png;base64,{_icon_b64}" width="60" style="margin-bottom:0.5rem;">', unsafe_allow_html=True)
 st.sidebar.markdown(f"**{st.session_state.get('name', '')}** &nbsp;|&nbsp; {user_role}")
 authenticator.logout("Logout", "sidebar")
 
