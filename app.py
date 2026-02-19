@@ -79,6 +79,127 @@ def to_excel_bytes(df):
 # --- APP CONFIG ---
 st.set_page_config(page_title="Harbor Capital Comp Database", layout="wide")
 
+# --- GLOBAL CSS ---
+st.markdown("""
+<style>
+    .section-header {
+        color: #1B4F72;
+        font-size: 1.3rem;
+        font-weight: 700;
+        margin: 1.2rem 0 0.3rem 0;
+        padding-bottom: 0.4rem;
+        border-bottom: 2px solid #1B4F72;
+    }
+    .section-subtitle {
+        color: #666;
+        font-size: 0.85rem;
+        margin-top: -0.2rem;
+        margin-bottom: 0.8rem;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #1B4F72 0%, #2E86C1 100%);
+        border-radius: 10px;
+        padding: 1rem 1.2rem;
+        color: white;
+        text-align: center;
+        margin-bottom: 0.5rem;
+    }
+    .metric-card .metric-value {
+        font-size: 1.6rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+    .metric-card .metric-label {
+        font-size: 0.8rem;
+        opacity: 0.85;
+        margin-top: 0.2rem;
+    }
+    .step-row {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        margin: 0.6rem 0;
+    }
+    .step-circle {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.85rem;
+        flex-shrink: 0;
+    }
+    .step-active {
+        background-color: #1B4F72;
+        color: white;
+    }
+    .step-done {
+        background-color: #27ae60;
+        color: white;
+    }
+    .step-pending {
+        background-color: #d5d8dc;
+        color: #7f8c8d;
+    }
+    .step-label {
+        font-weight: 600;
+        font-size: 1.05rem;
+    }
+    .step-label-active { color: #1B4F72; }
+    .step-label-done { color: #27ae60; }
+    .step-label-pending { color: #95a5a6; }
+    .badge-filter {
+        display: inline-block;
+        padding: 0.25em 0.7em;
+        border-radius: 12px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        background-color: #d4efff;
+        color: #1B4F72;
+    }
+    .record-count {
+        color: #555;
+        font-size: 0.95rem;
+        margin-bottom: 0.5rem;
+    }
+    .record-count b {
+        color: #1B4F72;
+        font-size: 1.1rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+def section_header(title, subtitle=None):
+    st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
+    if subtitle:
+        st.markdown(f'<div class="section-subtitle">{subtitle}</div>', unsafe_allow_html=True)
+
+def render_step(number, title, status="active"):
+    css_circle = {"active": "step-active", "done": "step-done", "pending": "step-pending"}[status]
+    css_label = {"active": "step-label-active", "done": "step-label-done", "pending": "step-label-pending"}[status]
+    icon = "&#10003;" if status == "done" else str(number)
+    st.markdown(f'''<div class="step-row">
+        <div class="step-circle {css_circle}">{icon}</div>
+        <span class="step-label {css_label}">{title}</span>
+    </div>''', unsafe_allow_html=True)
+
+def render_metric_card(label, value):
+    st.markdown(f'''<div class="metric-card">
+        <div class="metric-value">{value}</div>
+        <div class="metric-label">{label}</div>
+    </div>''', unsafe_allow_html=True)
+
+# --- DATA CACHING ---
+@st.cache_data(ttl=30)
+def load_data(model_name):
+    session = Session()
+    model_cls = SaleComp if model_name == "SaleComp" else LeaseComp
+    df = pd.read_sql(session.query(model_cls).statement, session.bind)
+    session.close()
+    return df
+
 # --- AUTHENTICATION ---
 with open("auth_config.yaml") as f:
     auth_config = yaml.safe_load(f)
@@ -136,7 +257,7 @@ def render_numeric_filter(df, column, label, container=None):
     col_data = df[column].dropna()
     if not col_data.empty:
         min_v, max_v = float(col_data.min()), float(col_data.max())
-        sb.caption(f"Range: {min_v:,.0f} – {max_v:,.0f}")
+        sb.caption(f"Range: {min_v:,.0f} -- {max_v:,.0f}")
     c1, c2 = sb.columns(2)
     val_min = c1.number_input(f"Min {label}", value=None, placeholder=f"{min_v:,.0f}" if not col_data.empty else "0", key=f"filter_min_{column}")
     val_max = c2.number_input(f"Max {label}", value=None, placeholder=f"{max_v:,.0f}" if not col_data.empty else "0", key=f"filter_max_{column}")
@@ -173,7 +294,7 @@ def count_active_filters(prefix):
     return sum(1 for k, v in st.session_state.items()
                if k.startswith(prefix) and v is not None and v != [] and v != "")
 
-def apply_sidebar_filters(df, view_type):
+def apply_sidebar_filters(df, view_type, include_proximity=False):
     """Shared filter logic for Database View and Analytics pages. Returns filtered mask."""
     from utils import extract_zip_from_address, extract_city_from_address
 
@@ -189,10 +310,16 @@ def apply_sidebar_filters(df, view_type):
 
     # Location filters
     loc_count = count_active_filters("filter_cat_city") + count_active_filters("filter_cat_zip")
-    loc_label = f"Location ({loc_count} active)" if loc_count else "Location"
-    with st.sidebar.expander(loc_label, expanded=loc_count > 0):
+    has_proximity = bool(st.session_state.get("filter_loc_center"))
+    total_loc = loc_count + (1 if has_proximity else 0)
+    loc_label = f"Location ({total_loc} active)" if total_loc else "Location"
+    with st.sidebar.expander(loc_label, expanded=total_loc > 0):
         mask &= render_categorical_filter(df, 'city', 'City')
         mask &= render_categorical_filter(df, 'zip_code', 'Zip Code')
+        if include_proximity:
+            st.sidebar.caption("Proximity Search")
+            st.sidebar.text_input("Near address", placeholder="e.g. 123 Main St, Houston TX", key="filter_loc_center")
+            st.sidebar.slider("Radius (mi)", 1, 50, 5, key="filter_loc_radius")
 
     if view_type == "Sales Comps":
         fin_count = count_active_filters("filter_min_sale") + count_active_filters("filter_max_sale")
@@ -243,11 +370,33 @@ def apply_sidebar_filters(df, view_type):
 # --- NAVIGATION ---
 page = st.sidebar.radio("Navigate", ["Upload & Process", "Database View", "Analytics"])
 
+# Global filter indicator
+active_filter_count = sum(1 for k, v in st.session_state.items()
+                          if "filter_" in k and v is not None and v != [] and v != "")
+if active_filter_count > 0:
+    st.sidebar.markdown(
+        f'<div class="badge-filter" style="margin-top:0.5rem;">{active_filter_count} filter(s) active</div>',
+        unsafe_allow_html=True
+    )
+    st.sidebar.button("Clear All Filters", on_click=reset_callback, use_container_width=True)
+
 # =====================================================================
 # PAGE 1: UPLOAD & PROCESS
 # =====================================================================
 if page == "Upload & Process":
-    st.header("1. Upload Raw Comp Sheets")
+    # Determine step states
+    has_data = st.session_state.clean_df is not None
+    geocoded = has_data and st.session_state.clean_df['latitude'].notna().any()
+
+    step1_status = "done" if has_data else "active"
+    step2_status = "done" if geocoded else ("active" if has_data else "pending")
+    step3_status = "active" if geocoded else "pending"
+
+    render_step(1, "Upload & Parse", step1_status)
+    render_step(2, "Geocode Addresses", step2_status)
+    render_step(3, "Preview & Save", step3_status)
+
+    st.markdown("")
     uploaded_file = st.file_uploader("Upload Excel/CSV", type=['csv', 'xlsx', 'xls'])
 
     if uploaded_file:
@@ -277,8 +426,7 @@ if page == "Upload & Process":
 
             # --- MAPPING CONFIDENCE DISPLAY ---
             if conf:
-                st.markdown("---")
-                st.subheader("Column Mapping Confidence")
+                section_header("Column Mapping", "AI confidence scores for each mapped field")
                 conf_df = pd.DataFrame([
                     {"Target Field": k, "Confidence": v, "Status": "Override" if v >= 1.0 else ("High" if v >= 0.60 else ("Medium" if v >= 0.45 else "Not Mapped"))}
                     for k, v in conf.items()
@@ -294,13 +442,12 @@ if page == "Upload & Process":
 
                 st.dataframe(
                     conf_df.style.apply(highlight_confidence, axis=1),
-                    width="stretch",
+                    use_container_width=True,
                     hide_index=True,
                 )
 
             # --- AUTO GEOCODING ---
-            st.markdown("---")
-            st.subheader("2. Geocoding & Standardization")
+            section_header("Geocoding", "Standardizing addresses via Google Maps")
             missing_geos = df['latitude'].isna().sum()
 
             if missing_geos > 0:
@@ -330,13 +477,14 @@ if page == "Upload & Process":
                     geocoded = sum(1 for r in results if r[1] is not None)
                     status_text.text(f"Done! Geocoded {geocoded}/{len(results)} addresses.")
                     if warnings:
-                        st.warning("Geocoding warnings:\n" + "\n".join(warnings))
+                        with st.expander(f"Geocoding warnings ({len(warnings)})"):
+                            for w in warnings:
+                                st.text(w)
             else:
                 st.success("All addresses have been geocoded!")
 
             # --- PREVIEW & SAVE ---
-            st.markdown("---")
-            st.subheader("3. Preview & Save")
+            section_header("Preview & Save", f"{len(df)} records ready -- review and save to database")
 
             cols_to_show = list(df.columns)
             hide_cols = ['source_type', 'source_file', 'rate_basis']
@@ -350,7 +498,7 @@ if page == "Upload & Process":
 
             edited_df = st.data_editor(st.session_state.clean_df[cols_to_show], num_rows="dynamic")
 
-            if st.button("Save to Database", type="primary"):
+            if st.button("Save to Database", type="primary", use_container_width=True):
                 # Upload original file to Supabase Storage
                 file_url = None
                 try:
@@ -371,6 +519,7 @@ if page == "Upload & Process":
                 session = Session()
                 records = []
                 skipped = 0
+                skipped_details = []
                 bar = st.progress(0)
 
                 for i, row in edited_df.iterrows():
@@ -381,6 +530,7 @@ if page == "Upload & Process":
                         matches = find_duplicates(addr, existing_records)
                         if matches:
                             skipped += 1
+                            skipped_details.append(f"Row {i+1}: {addr[:50]} (matched: {matches[0][1][:50]}, {matches[0][2]:.0%})")
                             bar.progress((i + 1) / len(edited_df))
                             continue
 
@@ -432,14 +582,20 @@ if page == "Upload & Process":
                     session.add_all(records)
                 session.commit()
                 session.close()
+                load_data.clear()
 
                 msg_parts = []
                 if records:
                     msg_parts.append(f"Saved {len(records)} new records")
                 if skipped:
                     msg_parts.append(f"skipped {skipped} duplicates")
-                st.success(". ".join(msg_parts) + ".")
-                st.balloons()
+                st.success(" | ".join(msg_parts) if msg_parts else "No records to save.")
+                if skipped_details:
+                    with st.expander(f"View {skipped} skipped duplicates"):
+                        for detail in skipped_details:
+                            st.text(detail)
+                if records:
+                    st.balloons()
 
                 # Cleanup
                 try:
@@ -453,13 +609,20 @@ if page == "Upload & Process":
 # PAGE 2: DATABASE VIEW
 # =====================================================================
 elif page == "Database View":
-    st.header("Database Explorer")
-    view_type = st.radio("Select Data Type", ["Sales Comps", "Lease Comps"], horizontal=True)
+    section_header("Database Explorer")
 
-    session = Session()
+    # Record counts for type selector
+    sale_count = len(load_data("SaleComp"))
+    lease_count = len(load_data("LeaseComp"))
+    view_type = st.radio(
+        "Select Data Type",
+        [f"Sales Comps ({sale_count})", f"Lease Comps ({lease_count})"],
+        horizontal=True
+    )
+    view_type = "Sales Comps" if "Sales" in view_type else "Lease Comps"
+
+    df = load_data("SaleComp" if view_type == "Sales Comps" else "LeaseComp").copy()
     model_cls = SaleComp if view_type == "Sales Comps" else LeaseComp
-    df = pd.read_sql(session.query(model_cls).statement, session.bind)
-    session.close()
 
     if df.empty:
         st.info("Database is empty. Upload files on the Upload page.")
@@ -471,21 +634,14 @@ elif page == "Database View":
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # --- SIDEBAR CONTROLS ---
-        st.sidebar.button("Reset All Filters", on_click=reset_callback)
+        # --- SIDEBAR FILTERS ---
         st.sidebar.markdown("---")
+        mask = apply_sidebar_filters(df, view_type, include_proximity=True)
 
-        # Location search
-        st.sidebar.header("Location Search")
-        center_addr = st.sidebar.text_input("Address (Nearby)", placeholder="e.g. 123 Main St, Houston TX", key="filter_loc_center")
-        radius = st.sidebar.slider("Radius (Miles)", 1, 50, 5, key="filter_loc_radius")
-
-        st.sidebar.markdown("---")
-        st.sidebar.header("Filters")
-
-        mask = apply_sidebar_filters(df, view_type)
-
-        # Distance calculation
+        # Distance calculation for proximity search
+        center_addr = st.session_state.get("filter_loc_center", "")
+        radius = st.session_state.get("filter_loc_radius", 5)
+        lat_c, lon_c = None, None
         if center_addr:
             with st.spinner("Calculating distances..."):
                 _, lat_c, lon_c, _, _, _ = fetch_google_data(center_addr, get_secret("GOOGLE_API_KEY", ""))
@@ -498,18 +654,22 @@ elif page == "Database View":
                     st.error("Could not find that address.")
 
         # --- SORTING ---
-        sort_options = ['id'] + [c for c in df.columns if c not in ('id',)]
-        sort_col = st.selectbox("Sort by", sort_options, index=0, key="sort_col")
-        sort_order = st.radio("Order", ["Ascending", "Descending"], horizontal=True, key="sort_order")
+        sort_col1, sort_col2 = st.columns([2, 1])
+        with sort_col1:
+            sort_options = ['id'] + [c for c in df.columns if c not in ('id',)]
+            sort_col = st.selectbox("Sort by", sort_options, index=0, key="sort_col")
+        with sort_col2:
+            sort_order = st.radio("Order", ["Ascending", "Descending"], horizontal=True, key="sort_order")
 
-        # --- DISPLAY ---
+        # --- APPLY FILTERS ---
         df_filtered = df[mask].copy()
         df_filtered = df_filtered.sort_values(sort_col, ascending=(sort_order == "Ascending"))
-
-        # Add select column
         df_filtered.insert(0, "Select", False)
 
-        st.subheader(f"Showing {len(df_filtered)} / {len(df)} Records")
+        st.markdown(
+            f'<div class="record-count">Showing <b>{len(df_filtered)}</b> of {len(df)} records</div>',
+            unsafe_allow_html=True
+        )
 
         # Column ordering for leases
         if view_type == "Lease Comps":
@@ -533,212 +693,202 @@ elif page == "Database View":
             col_config["leased_sf"] = st.column_config.NumberColumn("Leased SF", format="%,.0f")
             col_config["ti_allowance"] = st.column_config.NumberColumn("TI", format="$%.2f")
 
-        # Pagination
-        PAGE_SIZE = 100
-        total_pages = max(1, math.ceil(len(df_filtered) / PAGE_SIZE))
-        if 'page_num' not in st.session_state:
-            st.session_state.page_num = 1
-        st.session_state.page_num = min(st.session_state.page_num, total_pages)
+        # ---- TABS: Data Table | Map | Export & Actions ----
+        tab_table, tab_map, tab_export = st.tabs(["Data Table", "Map View", "Export & Actions"])
 
-        if total_pages > 1:
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col1:
-                if st.button("Previous") and st.session_state.page_num > 1:
-                    st.session_state.page_num -= 1
-            with col2:
-                st.markdown(f"**Page {st.session_state.page_num} of {total_pages}**")
-            with col3:
-                if st.button("Next") and st.session_state.page_num < total_pages:
-                    st.session_state.page_num += 1
+        with tab_table:
+            # Pagination
+            PAGE_SIZE = 100
+            total_pages = max(1, math.ceil(len(df_filtered) / PAGE_SIZE))
+            if 'page_num' not in st.session_state:
+                st.session_state.page_num = 1
+            st.session_state.page_num = min(st.session_state.page_num, total_pages)
 
-        start_idx = (st.session_state.page_num - 1) * PAGE_SIZE
-        df_page = df_filtered.iloc[start_idx:start_idx + PAGE_SIZE].copy()
+            if total_pages > 1:
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col1:
+                    if st.button("Previous", use_container_width=True) and st.session_state.page_num > 1:
+                        st.session_state.page_num -= 1
+                with col2:
+                    st.markdown(f"<div style='text-align:center; padding:0.4rem;'><b>Page {st.session_state.page_num} of {total_pages}</b></div>", unsafe_allow_html=True)
+                with col3:
+                    if st.button("Next", use_container_width=True) and st.session_state.page_num < total_pages:
+                        st.session_state.page_num += 1
 
-        # --- SELECTION CONTROLS ---
-        sel_col1, sel_col2, sel_col3, sel_col4, sel_col5 = st.columns([1, 1, 0.5, 1, 1])
-        with sel_col1:
-            if st.button("Select All on Page"):
+            start_idx = (st.session_state.page_num - 1) * PAGE_SIZE
+            df_page = df_filtered.iloc[start_idx:start_idx + PAGE_SIZE].copy()
+
+            # Selection controls — simplified
+            sel_col1, sel_col2, sel_col3 = st.columns([1, 1, 2])
+            with sel_col1:
+                if st.button("Select All", use_container_width=True):
+                    st.session_state['_force_select'] = True
+            with sel_col2:
+                if st.button("Clear Selection", use_container_width=True):
+                    st.session_state['_force_select'] = False
+            with sel_col3:
+                if len(df_page) > 1:
+                    range_val = st.slider(
+                        "Select row range", 1, len(df_page), (1, len(df_page)),
+                        key="sel_range_slider", label_visibility="collapsed"
+                    )
+                    if range_val != (1, len(df_page)):
+                        for idx in range(range_val[0] - 1, range_val[1]):
+                            df_page.iloc[idx, df_page.columns.get_loc("Select")] = True
+
+            # Apply forced selection state
+            force = st.session_state.pop('_force_select', None)
+            if force is True:
                 df_page["Select"] = True
-                st.session_state['_force_select'] = True
-        with sel_col2:
-            if st.button("Deselect All"):
+            elif force is False:
                 df_page["Select"] = False
-                st.session_state['_force_select'] = False
-        with sel_col3:
-            st.markdown("**Range:**")
-        with sel_col4:
-            range_from = st.number_input("From row", min_value=1, max_value=len(df_page), value=1, key="sel_range_from", label_visibility="collapsed")
-        with sel_col5:
-            range_to = st.number_input("To row", min_value=1, max_value=len(df_page), value=1, key="sel_range_to", label_visibility="collapsed")
-        if st.button("Select Range"):
-            for idx in range(max(0, range_from - 1), min(len(df_page), range_to)):
-                df_page.iloc[idx, df_page.columns.get_loc("Select")] = True
-            st.session_state['_force_select'] = 'range'
 
-        # Apply forced selection state
-        force = st.session_state.pop('_force_select', None)
-        if force is True:
-            df_page["Select"] = True
-        elif force is False:
-            df_page["Select"] = False
+            edited_view = st.data_editor(
+                df_page,
+                hide_index=True,
+                column_config=col_config,
+                use_container_width=True,
+            )
 
-        edited_view = st.data_editor(
-            df_page,
-            hide_index=True,
-            column_config=col_config,
-            width="stretch",
-        )
-
-        # --- SAVE EDITS ---
-        if st.button("Save Changes to Database"):
-            session = Session()
-            save_count = 0
-            for _, row in edited_view.iterrows():
-                if 'id' not in row or pd.isna(row['id']):
-                    continue
-                record_id = int(row['id'])
-                update_dict = {}
-                skip_cols = {'Select', 'id', 'distance_miles', 'created_at'}
-                for col in edited_view.columns:
-                    if col in skip_cols:
+            # Save edits
+            if st.button("Save Changes to Database", use_container_width=True):
+                session = Session()
+                save_count = 0
+                for _, row in edited_view.iterrows():
+                    if 'id' not in row or pd.isna(row['id']):
                         continue
-                    val = row[col]
-                    if pd.isna(val):
-                        val = None
-                    update_dict[col] = val
-                session.query(model_cls).filter_by(id=record_id).update(update_dict)
-                save_count += 1
-            session.commit()
-            session.close()
-            st.success(f"Saved changes to {save_count} records.")
-            st.rerun()
+                    record_id = int(row['id'])
+                    update_dict = {}
+                    skip_cols = {'Select', 'id', 'distance_miles', 'created_at'}
+                    for col in edited_view.columns:
+                        if col in skip_cols:
+                            continue
+                        val = row[col]
+                        if pd.isna(val):
+                            val = None
+                        update_dict[col] = val
+                    session.query(model_cls).filter_by(id=record_id).update(update_dict)
+                    save_count += 1
+                session.commit()
+                session.close()
+                load_data.clear()
+                st.success(f"Saved changes to {save_count} records.")
+                st.rerun()
 
-        # --- EXPORTS ---
-        selected_rows = edited_view[edited_view["Select"] == True]
-        export_df = selected_rows if not selected_rows.empty else None
-        export_label = f"Selected ({len(selected_rows)})" if export_df is not None else ""
+        with tab_map:
+            from folium.plugins import MarkerCluster
+            map_df = df_filtered[df_filtered['latitude'].notnull() & df_filtered['longitude'].notnull()]
+            if not map_df.empty:
+                center_lat = map_df['latitude'].mean()
+                center_lon = map_df['longitude'].mean()
+                m = folium.Map(location=[center_lat, center_lon], zoom_start=11)
+                cluster = MarkerCluster().add_to(m)
 
-        # Always show "Export All Filtered" + show selected if any
-        st.markdown("---")
-        st.subheader("Export")
+                for _, row in map_df.iterrows():
+                    color = 'green' if view_type == "Sales Comps" else 'blue'
+                    if view_type == "Sales Comps":
+                        popup_text = f"<b>{row.get('address', 'N/A')}</b><br>Price: ${row.get('sale_price', 0):,.0f}<br>Size: {row.get('building_size', 0):,.0f} SF"
+                    else:
+                        popup_text = f"<b>{row.get('address', 'N/A')}</b><br>Rate: ${row.get('rate_monthly', 0):.2f}/SF/Mo<br>Size: {row.get('leased_sf', 0):,.0f} SF"
 
-        if not selected_rows.empty:
-            st.success(f"{len(selected_rows)} properties selected — exporting selection.")
-        else:
-            st.info(f"No rows selected — use checkboxes above to select specific properties, or export all {len(df_filtered)} filtered results below.")
-            export_df = df_filtered
-            export_label = f"All Filtered ({len(df_filtered)})"
+                    folium.Marker(
+                        location=[row['latitude'], row['longitude']],
+                        popup=folium.Popup(popup_text, max_width=300),
+                        icon=folium.Icon(color=color, icon='home', prefix='fa'),
+                    ).add_to(cluster)
 
-        exp1, exp2, exp3 = st.columns(3)
-        with exp1:
-            kml_data = generate_kml(export_df)
-            st.download_button(
-                label=f"KML for Google Earth — {export_label}",
-                data=kml_data,
-                file_name="comps_export.kml",
-                mime="application/vnd.google-earth.kml+xml",
-            )
-        with exp2:
-            clean_export = export_df.drop(columns=['Select'], errors='ignore')
-            excel_data = to_excel_bytes(clean_export)
-            st.download_button(
-                label=f"Excel — {export_label}",
-                data=excel_data,
-                file_name="comps_export.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        with exp3:
-            clean_export = export_df.drop(columns=['Select'], errors='ignore')
-            csv_data = clean_export.to_csv(index=False)
-            st.download_button(
-                label=f"CSV — {export_label}",
-                data=csv_data,
-                file_name="comps_export.csv",
-                mime="text/csv",
-            )
+                # Draw radius circle if searching
+                if center_addr and lat_c and lon_c:
+                    folium.Circle(
+                        location=[lat_c, lon_c],
+                        radius=radius * 1609.34,
+                        color='red',
+                        fill=True,
+                        fill_opacity=0.1,
+                    ).add_to(m)
 
-        # --- FOLIUM MAP WITH CLUSTERING ---
-        from folium.plugins import MarkerCluster
-        map_df = df_filtered[df_filtered['latitude'].notnull() & df_filtered['longitude'].notnull()]
-        if not map_df.empty:
-            center_lat = map_df['latitude'].mean()
-            center_lon = map_df['longitude'].mean()
-            m = folium.Map(location=[center_lat, center_lon], zoom_start=11)
-            cluster = MarkerCluster().add_to(m)
+                st_folium(m, height=600, use_container_width=True)
+            else:
+                st.info("No geocoded properties to display on map.")
 
-            for _, row in map_df.iterrows():
-                color = 'green' if view_type == "Sales Comps" else 'blue'
-                if view_type == "Sales Comps":
-                    popup_text = f"<b>{row.get('address', 'N/A')}</b><br>Price: ${row.get('sale_price', 0):,.0f}<br>Size: {row.get('building_size', 0):,.0f} SF"
-                else:
-                    popup_text = f"<b>{row.get('address', 'N/A')}</b><br>Rate: ${row.get('rate_monthly', 0):.2f}/SF/Mo<br>Size: {row.get('leased_sf', 0):,.0f} SF"
+        with tab_export:
+            selected_rows = edited_view[edited_view["Select"] == True]
 
-                folium.Marker(
-                    location=[row['latitude'], row['longitude']],
-                    popup=folium.Popup(popup_text, max_width=300),
-                    icon=folium.Icon(color=color, icon='home', prefix='fa'),
-                ).add_to(cluster)
+            if not selected_rows.empty:
+                section_header("Export", f"{len(selected_rows)} properties selected")
+                export_df = selected_rows
+            else:
+                section_header("Export", f"All {len(df_filtered)} filtered properties")
+                export_df = df_filtered
 
-            # Draw radius circle if searching
-            if center_addr and 'lat_c' in dir() and lat_c:
-                folium.Circle(
-                    location=[lat_c, lon_c],
-                    radius=radius * 1609.34,  # miles to meters
-                    color='red',
-                    fill=True,
-                    fill_opacity=0.1,
-                ).add_to(m)
+            exp1, exp2, exp3 = st.columns(3)
+            with exp1:
+                st.download_button(
+                    "KML", generate_kml(export_df.drop(columns=['Select'], errors='ignore')),
+                    "comps.kml", "application/vnd.google-earth.kml+xml",
+                    use_container_width=True,
+                )
+            with exp2:
+                st.download_button(
+                    "Excel", to_excel_bytes(export_df.drop(columns=['Select'], errors='ignore')),
+                    "comps.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            with exp3:
+                st.download_button(
+                    "CSV", export_df.drop(columns=['Select'], errors='ignore').to_csv(index=False),
+                    "comps.csv", "text/csv",
+                    use_container_width=True,
+                )
 
-            st_folium(m, height=500, width="stretch")
+            # Admin actions
+            if user_role == "admin":
+                st.markdown("")
+                section_header("Admin Actions")
 
-        # --- ADMIN ACTIONS ---
-        if user_role == "admin":
-            st.sidebar.markdown("---")
-            st.sidebar.markdown("**Admin Actions**")
+                if not selected_rows.empty and 'id' in selected_rows.columns:
+                    if st.button(f"Delete {len(selected_rows)} Selected Records", type="secondary", use_container_width=True):
+                        session = Session()
+                        ids_to_delete = selected_rows['id'].dropna().astype(int).tolist()
+                        session.query(model_cls).filter(model_cls.id.in_(ids_to_delete)).delete(synchronize_session=False)
+                        session.commit()
+                        session.close()
+                        load_data.clear()
+                        st.success(f"Deleted {len(ids_to_delete)} records.")
+                        st.rerun()
 
-            # Bulk delete selected rows
-            if not selected_rows.empty and 'id' in selected_rows.columns:
-                if st.sidebar.button(f"Delete {len(selected_rows)} Selected"):
-                    session = Session()
-                    ids_to_delete = selected_rows['id'].dropna().astype(int).tolist()
-                    session.query(model_cls).filter(model_cls.id.in_(ids_to_delete)).delete(synchronize_session=False)
-                    session.commit()
-                    session.close()
-                    st.sidebar.success(f"Deleted {len(ids_to_delete)} records.")
-                    st.rerun()
-
-            # Delete all data
-            confirm_delete = st.sidebar.checkbox("I want to delete ALL data", key="confirm_delete")
-            if confirm_delete:
-                if st.sidebar.button("Confirm: Clear All Data"):
-                    session = Session()
-                    session.query(SaleComp).delete()
-                    session.query(LeaseComp).delete()
-                    session.commit()
-                    session.close()
-                    st.rerun()
+                confirm_delete = st.checkbox("I want to delete ALL data", key="confirm_delete")
+                if confirm_delete:
+                    if st.button("Confirm: Clear All Data", type="secondary"):
+                        session = Session()
+                        session.query(SaleComp).delete()
+                        session.query(LeaseComp).delete()
+                        session.commit()
+                        session.close()
+                        load_data.clear()
+                        st.rerun()
 
 # =====================================================================
 # PAGE 3: ANALYTICS
 # =====================================================================
 elif page == "Analytics":
-    st.header("Analytics Dashboard")
+    section_header("Analytics Dashboard")
 
-    session = Session()
-    sales_df = pd.read_sql(session.query(SaleComp).statement, session.bind)
-    leases_df = pd.read_sql(session.query(LeaseComp).statement, session.bind)
-    session.close()
+    sales_df = load_data("SaleComp").copy()
+    leases_df = load_data("LeaseComp").copy()
 
-    # Analytics data type selector
-    analytics_type = st.radio("Analyze", ["Sales Comps", "Lease Comps"], horizontal=True, key="analytics_type")
+    # Type selector with counts
+    analytics_type = st.radio(
+        "Analyze",
+        [f"Sales Comps ({len(sales_df)})", f"Lease Comps ({len(leases_df)})"],
+        horizontal=True, key="analytics_type"
+    )
+    analytics_type = "Sales Comps" if "Sales" in analytics_type else "Lease Comps"
 
-    # Apply shared sidebar filters to analytics data
-    st.sidebar.button("Reset Filters", on_click=reset_callback, key="analytics_reset")
+    # Sidebar filters
     st.sidebar.markdown("---")
-    st.sidebar.header("Analytics Filters")
 
     if analytics_type == "Sales Comps" and not sales_df.empty:
-        # Ensure numeric columns are proper dtype
         for col in ['sale_price', 'price_per_sf', 'building_size', 'year_built', 'cap_rate']:
             if col in sales_df.columns:
                 sales_df[col] = pd.to_numeric(sales_df[col], errors='coerce')
@@ -757,31 +907,41 @@ elif page == "Analytics":
         filtered_leases = leases_df
 
     # --- SUMMARY METRICS ---
-    st.subheader("Portfolio Summary")
+    section_header("Portfolio Overview")
     if analytics_type == "Sales Comps":
         df_a = filtered_sales
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Comps", len(df_a))
+        r1c1, r1c2 = st.columns(2)
+        r2c1, r2c2 = st.columns(2)
+        with r1c1:
+            render_metric_card("Total Comps", f"{len(df_a):,}")
         if not df_a.empty:
             avg_price = df_a['sale_price'].dropna().mean()
             avg_psf = df_a['price_per_sf'].dropna().mean()
             avg_size = df_a['building_size'].dropna().mean()
-            m2.metric("Avg Sale Price", f"${avg_price:,.0f}" if pd.notna(avg_price) else "N/A")
-            m3.metric("Avg $/SF", f"${avg_psf:,.2f}" if pd.notna(avg_psf) else "N/A")
-            m4.metric("Avg Size (SF)", f"{avg_size:,.0f}" if pd.notna(avg_size) else "N/A")
+            with r1c2:
+                render_metric_card("Avg Sale Price", f"${avg_price:,.0f}" if pd.notna(avg_price) else "N/A")
+            with r2c1:
+                render_metric_card("Avg $/SF", f"${avg_psf:,.2f}" if pd.notna(avg_psf) else "N/A")
+            with r2c2:
+                render_metric_card("Avg Size (SF)", f"{avg_size:,.0f}" if pd.notna(avg_size) else "N/A")
     else:
         df_a = filtered_leases
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Comps", len(df_a))
+        r1c1, r1c2 = st.columns(2)
+        r2c1, r2c2 = st.columns(2)
+        with r1c1:
+            render_metric_card("Total Comps", f"{len(df_a):,}")
         if not df_a.empty:
             avg_monthly = df_a['rate_monthly'].dropna().mean()
             avg_annual = df_a['rate_annually'].dropna().mean()
             avg_sf = df_a['leased_sf'].dropna().mean()
-            m2.metric("Avg $/SF/Mo", f"${avg_monthly:.2f}" if pd.notna(avg_monthly) else "N/A")
-            m3.metric("Avg $/SF/Yr", f"${avg_annual:.2f}" if pd.notna(avg_annual) else "N/A")
-            m4.metric("Avg Leased SF", f"{avg_sf:,.0f}" if pd.notna(avg_sf) else "N/A")
+            with r1c2:
+                render_metric_card("Avg $/SF/Mo", f"${avg_monthly:.2f}" if pd.notna(avg_monthly) else "N/A")
+            with r2c1:
+                render_metric_card("Avg $/SF/Yr", f"${avg_annual:.2f}" if pd.notna(avg_annual) else "N/A")
+            with r2c2:
+                render_metric_card("Avg Leased SF", f"{avg_sf:,.0f}" if pd.notna(avg_sf) else "N/A")
 
-    st.markdown("---")
+    st.markdown("")
 
     # --- CHARTS ---
     if analytics_type == "Sales Comps":
@@ -821,6 +981,7 @@ elif page == "Analytics":
                                 title="Sale Price vs Building Size",
                                 labels={'building_size': 'Building Size (SF)', 'sale_price': 'Sale Price ($)'})
                 st.plotly_chart(fig, use_container_width=True)
+                st.caption(f"n = {len(scatter_data)} properties | OLS trendline")
             else:
                 st.info("Not enough data for scatter plot.")
 
@@ -835,6 +996,7 @@ elif page == "Analytics":
                                     title="$/SF Over Time",
                                     labels={'closing_date': 'Closing Date', 'price_per_sf': '$/SF'})
                     st.plotly_chart(fig, use_container_width=True)
+                    st.caption(f"n = {len(ts_data)} properties | LOWESS trendline")
                 else:
                     st.info("No valid date data for trend analysis.")
             else:
@@ -854,23 +1016,22 @@ elif page == "Analytics":
                     avg_size=('building_size', 'mean'),
                 ).round(0).reset_index()
                 zip_stats.columns = ['Zip Code', 'Count', 'Avg Price', 'Avg $/SF', 'Avg Size (SF)']
-                st.dataframe(zip_stats, hide_index=True)
+                st.dataframe(zip_stats, hide_index=True, use_container_width=True)
 
                 fig = px.bar(zip_stats, x='Zip Code', y='Avg $/SF', color='Count',
                             title="Average $/SF by Zip Code")
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Zip comparison
                 zips = st.multiselect("Compare Zip Codes (2-5)", zip_stats['Zip Code'].tolist(),
                                       max_selections=5, key="zip_compare_sale")
                 if len(zips) >= 2:
                     compare = zip_stats[zip_stats['Zip Code'].isin(zips)]
-                    st.dataframe(compare, hide_index=True)
+                    st.dataframe(compare, hide_index=True, use_container_width=True)
             else:
                 st.info("No zip code data available.")
 
     else:  # Lease Comps analytics
-        tab1, tab2, tab3 = st.tabs(["Distributions", "Trends", "By Zip Code"])
+        tab1, tab2, tab3, tab4 = st.tabs(["Distributions", "Rate vs Size", "Trends", "By Zip Code"])
 
         with tab1:
             if not filtered_leases.empty:
@@ -899,6 +1060,18 @@ elif page == "Analytics":
                 st.info("No lease data matching filters.")
 
         with tab2:
+            scatter_data = filtered_leases.dropna(subset=['leased_sf', 'rate_monthly'])
+            if not scatter_data.empty:
+                fig = px.scatter(scatter_data, x='leased_sf', y='rate_monthly',
+                                hover_data=['address', 'tenant_name'], trendline='ols',
+                                title="Monthly Rate vs Leased SF",
+                                labels={'leased_sf': 'Leased SF', 'rate_monthly': '$/SF/Mo'})
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption(f"n = {len(scatter_data)} properties | OLS trendline")
+            else:
+                st.info("Not enough data for scatter plot.")
+
+        with tab3:
             ts_data = filtered_leases.dropna(subset=['commencement_date', 'rate_monthly']).copy()
             if not ts_data.empty:
                 ts_data['commencement_date'] = pd.to_datetime(ts_data['commencement_date'], errors='coerce')
@@ -909,12 +1082,13 @@ elif page == "Analytics":
                                     title="Monthly Rate Over Time",
                                     labels={'commencement_date': 'Commencement Date', 'rate_monthly': '$/SF/Mo'})
                     st.plotly_chart(fig, use_container_width=True)
+                    st.caption(f"n = {len(ts_data)} properties | LOWESS trendline")
                 else:
                     st.info("No valid date data for trend analysis.")
             else:
                 st.info("Not enough data for trend analysis.")
 
-        with tab3:
+        with tab4:
             from utils import extract_zip_from_address
             zip_df = filtered_leases.copy()
             if 'zip_code' not in zip_df.columns or zip_df['zip_code'].isna().all():
@@ -928,7 +1102,7 @@ elif page == "Analytics":
                     avg_sf=('leased_sf', 'mean'),
                 ).round(2).reset_index()
                 zip_stats.columns = ['Zip Code', 'Count', 'Avg $/Mo', 'Avg $/Yr', 'Avg Leased SF']
-                st.dataframe(zip_stats, hide_index=True)
+                st.dataframe(zip_stats, hide_index=True, use_container_width=True)
 
                 fig = px.bar(zip_stats, x='Zip Code', y='Avg $/Mo', color='Count',
                             title="Average $/SF/Mo by Zip Code")
@@ -937,8 +1111,7 @@ elif page == "Analytics":
                 st.info("No zip code data available.")
 
     # --- HEAT MAP ---
-    st.markdown("---")
-    st.subheader("Geographic Heat Map")
+    section_header("Geographic Heat Map")
     heat_df = df_a if not df_a.empty else pd.DataFrame()
     if not heat_df.empty:
         geo_data = heat_df.dropna(subset=['latitude', 'longitude'])
@@ -960,27 +1133,36 @@ elif page == "Analytics":
         st.info("No data for heat map.")
 
     # --- PROPERTY COMPARISON ---
-    st.markdown("---")
-    st.subheader("Property Comparison")
-    compare_type = st.radio("Compare", ["Sales", "Leases"], horizontal=True, key="compare_type")
+    section_header("Property Comparison")
 
-    if compare_type == "Sales" and not sales_df.empty:
+    if analytics_type == "Sales Comps" and not sales_df.empty:
         options = sales_df.apply(
             lambda r: f"{r['id']}: {r.get('address', 'N/A')} - ${r.get('sale_price', 0):,.0f}", axis=1
         ).tolist()
-        selected = st.multiselect("Select properties to compare (2-4)", options, max_selections=4)
+        selected = st.multiselect("Select properties to compare (2-5)", options, max_selections=5)
         if len(selected) >= 2:
             ids = [int(s.split(":")[0]) for s in selected]
-            compare_df = sales_df[sales_df['id'].isin(ids)].set_index('address').T
-            st.dataframe(compare_df, width="stretch")
-    elif compare_type == "Leases" and not leases_df.empty:
+            compare_raw = sales_df[sales_df['id'].isin(ids)].copy()
+            display_fields = ['address', 'sale_price', 'price_per_sf', 'building_size',
+                             'year_built', 'cap_rate', 'closing_date', 'buyer', 'seller', 'city', 'zip_code']
+            available = [f for f in display_fields if f in compare_raw.columns]
+            compare_df = compare_raw[available].set_index('address').T
+            compare_df.index = compare_df.index.map(lambda x: x.replace('_', ' ').title())
+            st.dataframe(compare_df, use_container_width=True)
+    elif analytics_type == "Lease Comps" and not leases_df.empty:
         options = leases_df.apply(
             lambda r: f"{r['id']}: {r.get('address', 'N/A')} - {r.get('tenant_name', 'N/A')}", axis=1
         ).tolist()
-        selected = st.multiselect("Select properties to compare (2-4)", options, max_selections=4)
+        selected = st.multiselect("Select properties to compare (2-5)", options, max_selections=5)
         if len(selected) >= 2:
             ids = [int(s.split(":")[0]) for s in selected]
-            compare_df = leases_df[leases_df['id'].isin(ids)].set_index('address').T
-            st.dataframe(compare_df, width="stretch")
+            compare_raw = leases_df[leases_df['id'].isin(ids)].copy()
+            display_fields = ['address', 'rate_monthly', 'rate_annually', 'leased_sf',
+                             'tenant_name', 'term_months', 'ti_allowance', 'lease_type',
+                             'building_type', 'commencement_date', 'city', 'zip_code']
+            available = [f for f in display_fields if f in compare_raw.columns]
+            compare_df = compare_raw[available].set_index('address').T
+            compare_df.index = compare_df.index.map(lambda x: x.replace('_', ' ').title())
+            st.dataframe(compare_df, use_container_width=True)
     else:
         st.info("Add data to use the comparison tool.")
