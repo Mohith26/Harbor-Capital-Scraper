@@ -552,7 +552,35 @@ elif page == "Database View":
                     st.session_state.page_num += 1
 
         start_idx = (st.session_state.page_num - 1) * PAGE_SIZE
-        df_page = df_filtered.iloc[start_idx:start_idx + PAGE_SIZE]
+        df_page = df_filtered.iloc[start_idx:start_idx + PAGE_SIZE].copy()
+
+        # --- SELECTION CONTROLS ---
+        sel_col1, sel_col2, sel_col3, sel_col4, sel_col5 = st.columns([1, 1, 0.5, 1, 1])
+        with sel_col1:
+            if st.button("Select All on Page"):
+                df_page["Select"] = True
+                st.session_state['_force_select'] = True
+        with sel_col2:
+            if st.button("Deselect All"):
+                df_page["Select"] = False
+                st.session_state['_force_select'] = False
+        with sel_col3:
+            st.markdown("**Range:**")
+        with sel_col4:
+            range_from = st.number_input("From row", min_value=1, max_value=len(df_page), value=1, key="sel_range_from", label_visibility="collapsed")
+        with sel_col5:
+            range_to = st.number_input("To row", min_value=1, max_value=len(df_page), value=1, key="sel_range_to", label_visibility="collapsed")
+        if st.button("Select Range"):
+            for idx in range(max(0, range_from - 1), min(len(df_page), range_to)):
+                df_page.iloc[idx, df_page.columns.get_loc("Select")] = True
+            st.session_state['_force_select'] = 'range'
+
+        # Apply forced selection state
+        force = st.session_state.pop('_force_select', None)
+        if force is True:
+            df_page["Select"] = True
+        elif force is False:
+            df_page["Select"] = False
 
         edited_view = st.data_editor(
             df_page,
