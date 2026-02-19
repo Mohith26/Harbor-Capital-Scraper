@@ -245,9 +245,7 @@ if 'comparison_ids' not in st.session_state:
 def reset_callback():
     for key in list(st.session_state.keys()):
         if "filter_" in key:
-            st.session_state[key] = None
-        if "radius" in key:
-            st.session_state[key] = 5
+            del st.session_state[key]
 
 # --- FILTER WIDGETS ---
 def render_numeric_filter(df, column, label, container=None):
@@ -292,7 +290,7 @@ def render_categorical_filter(df, column, label, container=None):
 
 def count_active_filters(prefix):
     return sum(1 for k, v in st.session_state.items()
-               if k.startswith(prefix) and v is not None and v != [] and v != "")
+               if k.startswith(prefix) and v is not None and v != [] and v != "" and v != ())
 
 def apply_sidebar_filters(df, view_type, include_proximity=False):
     """Shared filter logic for Database View and Analytics pages. Returns filtered mask."""
@@ -372,7 +370,8 @@ page = st.sidebar.radio("Navigate", ["Upload & Process", "Database View", "Analy
 
 # Global filter indicator
 active_filter_count = sum(1 for k, v in st.session_state.items()
-                          if "filter_" in k and v is not None and v != [] and v != "")
+                          if "filter_" in k and v is not None and v != [] and v != "" and v != ()
+                          and not k.endswith("_radius"))
 if active_filter_count > 0:
     st.sidebar.markdown(
         f'<div class="badge-filter" style="margin-top:0.5rem;">{active_filter_count} filter(s) active</div>',
