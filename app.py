@@ -9,7 +9,6 @@ import streamlit_authenticator as stauth
 import folium
 from streamlit_folium import st_folium
 import plotly.express as px
-import plotly.io as pio
 from database import Session, SaleComp, LeaseComp, engine
 from comp_engine import robust_load_file, process_file_to_clean_output, fetch_google_data
 from storage import upload_file as upload_to_storage
@@ -185,14 +184,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- PLOTLY BRAND TEMPLATE ---
-_hc_template = pio.templates["plotly_white"]
-_hc_template.layout.colorway = [
-    "#F5A623", "#333333", "#D4910E", "#666666",
-    "#FFC75F", "#999999", "#B37A00", "#CCCCCC",
-]
-_hc_template.layout.font = dict(color="#333333")
-pio.templates.default = _hc_template
+# --- BRAND COLORS FOR CHARTS ---
+HC_COLORS = ["#F5A623", "#333333", "#D4910E", "#666666", "#FFC75F", "#999999", "#B37A00", "#CCCCCC"]
+HC_SCALE = ["#FFF3DC", "#F5A623", "#333333"]
 
 def section_header(title, subtitle=None):
     st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
@@ -977,20 +971,23 @@ elif page == "Analytics":
                     price_data = filtered_sales['sale_price'].dropna()
                     if not price_data.empty:
                         fig = px.histogram(price_data, nbins=20, title="Sale Price Distribution",
-                                           labels={'value': 'Sale Price ($)', 'count': 'Count'})
+                                           labels={'value': 'Sale Price ($)', 'count': 'Count'},
+                                           color_discrete_sequence=HC_COLORS)
                         fig.update_layout(showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 with col2:
                     psf_data = filtered_sales['price_per_sf'].dropna()
                     if not psf_data.empty:
                         fig = px.histogram(psf_data, nbins=20, title="$/SF Distribution",
-                                           labels={'value': '$/SF', 'count': 'Count'})
+                                           labels={'value': '$/SF', 'count': 'Count'},
+                                           color_discrete_sequence=HC_COLORS)
                         fig.update_layout(showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 size_data = filtered_sales['building_size'].dropna()
                 if not size_data.empty:
                     fig = px.histogram(size_data, nbins=20, title="Building Size Distribution",
-                                       labels={'value': 'Building Size (SF)', 'count': 'Count'})
+                                       labels={'value': 'Building Size (SF)', 'count': 'Count'},
+                                       color_discrete_sequence=HC_COLORS)
                     fig.update_layout(showlegend=False)
                     st.plotly_chart(fig, use_container_width=True)
             else:
@@ -1002,7 +999,8 @@ elif page == "Analytics":
                 fig = px.scatter(scatter_data, x='building_size', y='sale_price',
                                 hover_data=['address'], trendline='ols',
                                 title="Sale Price vs Building Size",
-                                labels={'building_size': 'Building Size (SF)', 'sale_price': 'Sale Price ($)'})
+                                labels={'building_size': 'Building Size (SF)', 'sale_price': 'Sale Price ($)'},
+                                color_discrete_sequence=HC_COLORS)
                 st.plotly_chart(fig, use_container_width=True)
                 st.caption(f"n = {len(scatter_data)} properties | OLS trendline")
             else:
@@ -1017,7 +1015,8 @@ elif page == "Analytics":
                     fig = px.scatter(ts_data.sort_values('closing_date'), x='closing_date', y='price_per_sf',
                                     hover_data=['address'], trendline='lowess',
                                     title="$/SF Over Time",
-                                    labels={'closing_date': 'Closing Date', 'price_per_sf': '$/SF'})
+                                    labels={'closing_date': 'Closing Date', 'price_per_sf': '$/SF'},
+                                    color_discrete_sequence=HC_COLORS)
                     st.plotly_chart(fig, use_container_width=True)
                     st.caption(f"n = {len(ts_data)} properties | LOWESS trendline")
                 else:
@@ -1043,7 +1042,7 @@ elif page == "Analytics":
 
                 fig = px.bar(zip_stats, x='Zip Code', y='Avg $/SF', color='Count',
                             title="Average $/SF by Zip Code",
-                            color_continuous_scale=["#FFF3DC", "#F5A623", "#333333"])
+                            color_continuous_scale=HC_SCALE)
                 st.plotly_chart(fig, use_container_width=True)
 
                 zips = st.multiselect("Compare Zip Codes (2-5)", zip_stats['Zip Code'].tolist(),
@@ -1064,20 +1063,23 @@ elif page == "Analytics":
                     rate_data = filtered_leases['rate_monthly'].dropna()
                     if not rate_data.empty:
                         fig = px.histogram(rate_data, nbins=20, title="Monthly Rate Distribution ($/SF/Mo)",
-                                           labels={'value': '$/SF/Mo', 'count': 'Count'})
+                                           labels={'value': '$/SF/Mo', 'count': 'Count'},
+                                           color_discrete_sequence=HC_COLORS)
                         fig.update_layout(showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 with col2:
                     sf_data = filtered_leases['leased_sf'].dropna()
                     if not sf_data.empty:
                         fig = px.histogram(sf_data, nbins=20, title="Leased SF Distribution",
-                                           labels={'value': 'Leased SF', 'count': 'Count'})
+                                           labels={'value': 'Leased SF', 'count': 'Count'},
+                                           color_discrete_sequence=HC_COLORS)
                         fig.update_layout(showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                 ti_data = filtered_leases['ti_allowance'].dropna()
                 if not ti_data.empty:
                     fig = px.histogram(ti_data, nbins=15, title="TI Allowance Distribution",
-                                       labels={'value': 'TI Allowance ($)', 'count': 'Count'})
+                                       labels={'value': 'TI Allowance ($)', 'count': 'Count'},
+                                       color_discrete_sequence=HC_COLORS)
                     fig.update_layout(showlegend=False)
                     st.plotly_chart(fig, use_container_width=True)
             else:
@@ -1089,7 +1091,8 @@ elif page == "Analytics":
                 fig = px.scatter(scatter_data, x='leased_sf', y='rate_monthly',
                                 hover_data=['address', 'tenant_name'], trendline='ols',
                                 title="Monthly Rate vs Leased SF",
-                                labels={'leased_sf': 'Leased SF', 'rate_monthly': '$/SF/Mo'})
+                                labels={'leased_sf': 'Leased SF', 'rate_monthly': '$/SF/Mo'},
+                                color_discrete_sequence=HC_COLORS)
                 st.plotly_chart(fig, use_container_width=True)
                 st.caption(f"n = {len(scatter_data)} properties | OLS trendline")
             else:
@@ -1104,7 +1107,8 @@ elif page == "Analytics":
                     fig = px.scatter(ts_data.sort_values('commencement_date'), x='commencement_date', y='rate_monthly',
                                     hover_data=['address', 'tenant_name'], trendline='lowess',
                                     title="Monthly Rate Over Time",
-                                    labels={'commencement_date': 'Commencement Date', 'rate_monthly': '$/SF/Mo'})
+                                    labels={'commencement_date': 'Commencement Date', 'rate_monthly': '$/SF/Mo'},
+                                    color_discrete_sequence=HC_COLORS)
                     st.plotly_chart(fig, use_container_width=True)
                     st.caption(f"n = {len(ts_data)} properties | LOWESS trendline")
                 else:
@@ -1130,7 +1134,7 @@ elif page == "Analytics":
 
                 fig = px.bar(zip_stats, x='Zip Code', y='Avg $/Mo', color='Count',
                             title="Average $/SF/Mo by Zip Code",
-                            color_continuous_scale=["#FFF3DC", "#F5A623", "#333333"])
+                            color_continuous_scale=HC_SCALE)
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No zip code data available.")
