@@ -9,6 +9,7 @@ import streamlit_authenticator as stauth
 import folium
 from streamlit_folium import st_folium
 import plotly.express as px
+import plotly.io as pio
 from database import Session, SaleComp, LeaseComp, engine
 from comp_engine import robust_load_file, process_file_to_clean_output, fetch_google_data
 from storage import upload_file as upload_to_storage
@@ -77,18 +78,18 @@ def to_excel_bytes(df):
     return buf.getvalue()
 
 # --- APP CONFIG ---
-st.set_page_config(page_title="Harbor Capital Comp Database", layout="wide")
+st.set_page_config(page_title="Harbor Capital Comp Database", layout="wide", page_icon="Slate@512w.png")
 
 # --- GLOBAL CSS ---
 st.markdown("""
 <style>
     .section-header {
-        color: #1B4F72;
+        color: #333333;
         font-size: 1.3rem;
         font-weight: 700;
         margin: 1.2rem 0 0.3rem 0;
         padding-bottom: 0.4rem;
-        border-bottom: 2px solid #1B4F72;
+        border-bottom: 2px solid #F5A623;
     }
     .section-subtitle {
         color: #666;
@@ -97,17 +98,19 @@ st.markdown("""
         margin-bottom: 0.8rem;
     }
     .metric-card {
-        background: linear-gradient(135deg, #1B4F72 0%, #2E86C1 100%);
+        background: linear-gradient(135deg, #333333 0%, #4a4a4a 100%);
         border-radius: 10px;
         padding: 1rem 1.2rem;
         color: white;
         text-align: center;
         margin-bottom: 0.5rem;
+        border-left: 4px solid #F5A623;
     }
     .metric-card .metric-value {
         font-size: 1.6rem;
         font-weight: 700;
         line-height: 1.2;
+        color: #F5A623;
     }
     .metric-card .metric-label {
         font-size: 0.8rem;
@@ -132,32 +135,33 @@ st.markdown("""
         flex-shrink: 0;
     }
     .step-active {
-        background-color: #1B4F72;
-        color: white;
+        background-color: #F5A623;
+        color: #333333;
     }
     .step-done {
-        background-color: #27ae60;
-        color: white;
+        background-color: #333333;
+        color: #F5A623;
     }
     .step-pending {
-        background-color: #d5d8dc;
-        color: #7f8c8d;
+        background-color: #e0e0e0;
+        color: #999;
     }
     .step-label {
         font-weight: 600;
         font-size: 1.05rem;
     }
-    .step-label-active { color: #1B4F72; }
-    .step-label-done { color: #27ae60; }
-    .step-label-pending { color: #95a5a6; }
+    .step-label-active { color: #F5A623; }
+    .step-label-done { color: #333333; }
+    .step-label-pending { color: #999; }
     .badge-filter {
         display: inline-block;
         padding: 0.25em 0.7em;
         border-radius: 12px;
         font-size: 0.78rem;
         font-weight: 600;
-        background-color: #d4efff;
-        color: #1B4F72;
+        background-color: #FFF3DC;
+        color: #333333;
+        border: 1px solid #F5A623;
     }
     .record-count {
         color: #555;
@@ -165,11 +169,30 @@ st.markdown("""
         margin-bottom: 0.5rem;
     }
     .record-count b {
-        color: #1B4F72;
+        color: #333333;
         font-size: 1.1rem;
+    }
+    /* Sidebar logo styling */
+    .sidebar-logo {
+        padding: 0.5rem 0 1rem 0;
+        border-bottom: 2px solid #F5A623;
+        margin-bottom: 1rem;
+    }
+    /* Plotly chart accent override */
+    .js-plotly-plot .plotly .modebar-btn path {
+        fill: #333333 !important;
     }
 </style>
 """, unsafe_allow_html=True)
+
+# --- PLOTLY BRAND TEMPLATE ---
+_hc_template = pio.templates["plotly_white"]
+_hc_template.layout.colorway = [
+    "#F5A623", "#333333", "#D4910E", "#666666",
+    "#FFC75F", "#999999", "#B37A00", "#CCCCCC",
+]
+_hc_template.layout.font = dict(color="#333333")
+pio.templates.default = _hc_template
 
 def section_header(title, subtitle=None):
     st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
@@ -225,10 +248,11 @@ user_role = auth_config['credentials']['usernames'].get(
     st.session_state.get("username", ""), {}
 ).get('role', 'analyst')
 
-st.title("Harbor Capital Comp Intelligence")
+st.image("HC-Logo-Stacked-Left-Charcoal@2000w.png", width=320)
 
-# Sidebar: user info + logout
-st.sidebar.markdown(f"**Logged in as:** {st.session_state.get('name', '')} ({user_role})")
+# Sidebar: logo + user info + logout
+st.sidebar.image("Slate@512w.png", width=60)
+st.sidebar.markdown(f"**{st.session_state.get('name', '')}** &nbsp;|&nbsp; {user_role}")
 authenticator.logout("Logout", "sidebar")
 
 # --- SESSION STATE ---
@@ -784,7 +808,7 @@ elif page == "Database View":
                 cluster = MarkerCluster().add_to(m)
 
                 for _, row in map_df.iterrows():
-                    color = 'green' if view_type == "Sales Comps" else 'blue'
+                    color = 'orange' if view_type == "Sales Comps" else 'darkred'
                     if view_type == "Sales Comps":
                         popup_text = f"<b>{row.get('address', 'N/A')}</b><br>Price: ${row.get('sale_price', 0):,.0f}<br>Size: {row.get('building_size', 0):,.0f} SF"
                     else:
@@ -801,7 +825,7 @@ elif page == "Database View":
                     folium.Circle(
                         location=[lat_c, lon_c],
                         radius=radius * 1609.34,
-                        color='red',
+                        color='#F5A623',
                         fill=True,
                         fill_opacity=0.1,
                     ).add_to(m)
@@ -1018,7 +1042,8 @@ elif page == "Analytics":
                 st.dataframe(zip_stats, hide_index=True, use_container_width=True)
 
                 fig = px.bar(zip_stats, x='Zip Code', y='Avg $/SF', color='Count',
-                            title="Average $/SF by Zip Code")
+                            title="Average $/SF by Zip Code",
+                            color_continuous_scale=["#FFF3DC", "#F5A623", "#333333"])
                 st.plotly_chart(fig, use_container_width=True)
 
                 zips = st.multiselect("Compare Zip Codes (2-5)", zip_stats['Zip Code'].tolist(),
@@ -1104,7 +1129,8 @@ elif page == "Analytics":
                 st.dataframe(zip_stats, hide_index=True, use_container_width=True)
 
                 fig = px.bar(zip_stats, x='Zip Code', y='Avg $/Mo', color='Count',
-                            title="Average $/SF/Mo by Zip Code")
+                            title="Average $/SF/Mo by Zip Code",
+                            color_continuous_scale=["#FFF3DC", "#F5A623", "#333333"])
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No zip code data available.")
