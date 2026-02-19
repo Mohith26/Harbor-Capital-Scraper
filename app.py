@@ -298,7 +298,7 @@ if page == "Upload & Process":
                     hide_index=True,
                 )
 
-            # --- GEOCODING ---
+            # --- AUTO GEOCODING ---
             st.markdown("---")
             st.subheader("2. Geocoding & Standardization")
             missing_geos = df['latitude'].isna().sum()
@@ -308,31 +308,29 @@ if page == "Upload & Process":
                 if not api_key:
                     st.error("Google API Key not configured. Add GOOGLE_API_KEY to your secrets.")
                 else:
-                    st.warning(f"**Approval Required:** {len(df)} properties, {missing_geos} need geocoding.")
-                    if st.button("Approve & Geocode"):
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        results = []
-                        warnings = []
-                        for i, row in df.iterrows():
-                            raw_addr = str(row.get('raw_address_data', '') or row.get('address', '') or '')
-                            status_text.text(f"Geocoding {i+1}/{len(df)}: {raw_addr[:60]}...")
-                            addr, lat, lng, city, zip_code, warn = fetch_google_data(raw_addr, api_key)
-                            results.append((addr, lat, lng, city, zip_code))
-                            if warn:
-                                warnings.append(f"Row {i+1}: {warn}")
-                            progress_bar.progress((i + 1) / len(df))
-                        df['address'] = [x[0] for x in results]
-                        df['latitude'] = [x[1] for x in results]
-                        df['longitude'] = [x[2] for x in results]
-                        df['city'] = [x[3] for x in results]
-                        df['zip_code'] = [x[4] for x in results]
-                        st.session_state.clean_df = df
-                        geocoded = sum(1 for r in results if r[1] is not None)
-                        status_text.text(f"Done! Geocoded {geocoded}/{len(results)} addresses.")
-                        if warnings:
-                            st.warning("Geocoding warnings:\n" + "\n".join(warnings))
-                        st.rerun()
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    status_text.text(f"Geocoding {missing_geos} addresses...")
+                    results = []
+                    warnings = []
+                    for i, row in df.iterrows():
+                        raw_addr = str(row.get('raw_address_data', '') or row.get('address', '') or '')
+                        status_text.text(f"Geocoding {i+1}/{len(df)}: {raw_addr[:60]}...")
+                        addr, lat, lng, city, zip_code, warn = fetch_google_data(raw_addr, api_key)
+                        results.append((addr, lat, lng, city, zip_code))
+                        if warn:
+                            warnings.append(f"Row {i+1}: {warn}")
+                        progress_bar.progress((i + 1) / len(df))
+                    df['address'] = [x[0] for x in results]
+                    df['latitude'] = [x[1] for x in results]
+                    df['longitude'] = [x[2] for x in results]
+                    df['city'] = [x[3] for x in results]
+                    df['zip_code'] = [x[4] for x in results]
+                    st.session_state.clean_df = df
+                    geocoded = sum(1 for r in results if r[1] is not None)
+                    status_text.text(f"Done! Geocoded {geocoded}/{len(results)} addresses.")
+                    if warnings:
+                        st.warning("Geocoding warnings:\n" + "\n".join(warnings))
             else:
                 st.success("All addresses have been geocoded!")
 
@@ -352,44 +350,6 @@ if page == "Upload & Process":
 
             edited_df = st.data_editor(st.session_state.clean_df[cols_to_show], num_rows="dynamic")
 
-            # --- DUPLICATE DETECTION ---
-            st.markdown("---")
-            model_cls = SaleComp if stype == "SALE" else LeaseComp
-            session_dup = Session()
-            existing_records = []
-            try:
-                existing_records = [(r.id, r.address) for r in session_dup.query(model_cls.id, model_cls.address).all()]
-            except Exception:
-                pass
-            session_dup.close()
-
-            # Check each row for duplicates
-            dup_info = {}
-            for i, row in edited_df.iterrows():
-                addr = clean_text_val(row.get('address'))
-                if addr and existing_records:
-                    matches = find_duplicates(addr, existing_records)
-                    if matches:
-                        dup_info[i] = matches
-
-            if dup_info:
-                st.warning(f"Found {len(dup_info)} potential duplicate(s) in database.")
-                if 'dup_actions' not in st.session_state:
-                    st.session_state.dup_actions = {}
-                for row_idx, matches in dup_info.items():
-                    addr = clean_text_val(edited_df.loc[row_idx, 'address']) or "Unknown"
-                    best_match = matches[0]
-                    with st.expander(f"Row {row_idx + 1}: {addr[:60]} ({best_match[2]:.0%} match with #{best_match[0]})"):
-                        st.write(f"**New:** {addr}")
-                        st.write(f"**Existing (#{best_match[0]}):** {best_match[1]}")
-                        action = st.radio(
-                            "Action:",
-                            ["Skip (keep existing)", "Update existing record", "Keep both"],
-                            key=f"dup_action_{row_idx}",
-                            index=0,
-                        )
-                        st.session_state.dup_actions[row_idx] = (action, best_match[0])
-
             if st.button("Save to Database", type="primary"):
                 # Upload original file to Supabase Storage
                 file_url = None
@@ -398,15 +358,31 @@ if page == "Upload & Process":
                 except Exception as e:
                     st.warning(f"Could not upload source file to storage: {e}")
 
+                # Fetch existing records for duplicate detection
+                model_cls = SaleComp if stype == "SALE" else LeaseComp
+                session_dup = Session()
+                existing_records = []
+                try:
+                    existing_records = [(r.id, r.address) for r in session_dup.query(model_cls.id, model_cls.address).all()]
+                except Exception:
+                    pass
+                session_dup.close()
+
                 session = Session()
                 records = []
                 skipped = 0
-                updated = 0
                 bar = st.progress(0)
-                dup_actions = st.session_state.get('dup_actions', {})
 
                 for i, row in edited_df.iterrows():
                     addr = clean_text_val(row.get('address'))
+
+                    # Auto-skip duplicates
+                    if addr and existing_records:
+                        matches = find_duplicates(addr, existing_records)
+                        if matches:
+                            skipped += 1
+                            bar.progress((i + 1) / len(edited_df))
+                            continue
 
                     common = {
                         'address': addr,
@@ -449,22 +425,7 @@ if page == "Upload & Process":
                     else:
                         continue
 
-                    all_fields = {**common, **specific}
-
-                    # Handle duplicates
-                    if i in dup_actions:
-                        action, existing_id = dup_actions[i]
-                        if "Skip" in action:
-                            skipped += 1
-                            bar.progress((i + 1) / len(edited_df))
-                            continue
-                        elif "Update" in action:
-                            session.query(model_cls).filter_by(id=existing_id).update(all_fields)
-                            updated += 1
-                            bar.progress((i + 1) / len(edited_df))
-                            continue
-
-                    records.append(model_cls(**all_fields))
+                    records.append(model_cls(**{**common, **specific}))
                     bar.progress((i + 1) / len(edited_df))
 
                 if records:
@@ -475,8 +436,6 @@ if page == "Upload & Process":
                 msg_parts = []
                 if records:
                     msg_parts.append(f"Saved {len(records)} new records")
-                if updated:
-                    msg_parts.append(f"updated {updated}")
                 if skipped:
                     msg_parts.append(f"skipped {skipped} duplicates")
                 st.success(". ".join(msg_parts) + ".")
@@ -489,7 +448,6 @@ if page == "Upload & Process":
                     pass
                 st.session_state.clean_df = None
                 st.session_state.mapping_confidence = None
-                st.session_state.pop('dup_actions', None)
 
 # =====================================================================
 # PAGE 2: DATABASE VIEW
