@@ -372,6 +372,8 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.55):
     Returns (standardized_df, mapping_confidence_dict)."""
     input_headers = df.columns.tolist()
     clean_headers = [clean_header(h) for h in input_headers]
+    # Replace empty strings with placeholder (OpenAI API rejects empty input)
+    clean_headers = [h if h.strip() else "unknown column" for h in clean_headers]
     target_cols = list(schema_dict.keys())
     col_profiles = [get_column_profile(df[col]) for col in input_headers]
 
