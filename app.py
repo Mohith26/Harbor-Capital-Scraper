@@ -43,7 +43,7 @@ def clean_currency_num(value):
         return None
     s = str(value).strip().replace(',', '').replace('$', '').replace('%', '').lower().replace('sf', '')
     try:
-        return float(s)
+        return round(float(s), 2)
     except Exception:
         return None
 
@@ -223,11 +223,38 @@ def render_metric_card(label, value):
 # --- DATA CACHING ---
 @st.cache_data(ttl=30)
 def load_data(model_name):
+    from utils import extract_zip_from_address, extract_city_from_address
     session = Session()
     model_cls = SaleComp if model_name == "SaleComp" else LeaseComp
     df = pd.read_sql(session.query(model_cls).statement, session.bind)
     session.close()
+    # Pre-convert numeric columns
+    if model_name == "SaleComp":
+        for col in ['sale_price', 'price_per_sf', 'building_size', 'year_built', 'cap_rate']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+    else:
+        for col in ['rate_monthly', 'rate_annually', 'leased_sf', 'ti_allowance', 'clear_height', 'term_months']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+    # Round all floats to 2 decimal places
+    for col in df.select_dtypes(include=['float64', 'float32']).columns:
+        df[col] = df[col].round(2)
+    # Backfill city/zip from address for legacy records
+    if 'address' in df.columns:
+        if 'zip_code' not in df.columns or df['zip_code'].isna().all():
+            df['zip_code'] = df['address'].apply(extract_zip_from_address)
+        if 'city' not in df.columns or df['city'].isna().all():
+            df['city'] = df['address'].apply(extract_city_from_address)
     return df
+
+@st.cache_data(ttl=30)
+def get_record_counts():
+    session = Session()
+    sale_count = session.query(SaleComp).count()
+    lease_count = session.query(LeaseComp).count()
+    session.close()
+    return sale_count, lease_count
 
 # --- AUTHENTICATION ---
 with open("auth_config.yaml") as f:
@@ -272,6 +299,8 @@ if 'current_filename' not in st.session_state:
     st.session_state.current_filename = ""
 if 'comparison_ids' not in st.session_state:
     st.session_state.comparison_ids = []
+if 'geocoding_done' not in st.session_state:
+    st.session_state.geocoding_done = False
 
 # Reset Filter Logic
 def reset_callback():
@@ -281,7 +310,7 @@ def reset_callback():
 
 # --- FILTER WIDGETS ---
 def render_numeric_filter(df, column, label, container=None):
-    sb = container or st.sidebar
+    sb = container if container is not None else st
     if column not in df.columns:
         return pd.Series([True] * len(df))
     col_data = df[column].dropna()
@@ -299,7 +328,7 @@ def render_numeric_filter(df, column, label, container=None):
     return mask
 
 def render_text_filter(df, column, label, container=None):
-    sb = container or st.sidebar
+    sb = container if container is not None else st
     if column not in df.columns:
         return pd.Series([True] * len(df))
     search = sb.text_input(f"{label} contains:", placeholder="Search...", key=f"filter_txt_{column}")
@@ -308,7 +337,7 @@ def render_text_filter(df, column, label, container=None):
     return pd.Series([True] * len(df))
 
 def render_categorical_filter(df, column, label, container=None):
-    sb = container or st.sidebar
+    sb = container if container is not None else st
     if column not in df.columns:
         return pd.Series([True] * len(df))
     unique_vals = sorted(df[column].dropna().astype(str).unique().tolist())
@@ -326,17 +355,7 @@ def count_active_filters(prefix):
 
 def apply_sidebar_filters(df, view_type, include_proximity=False):
     """Shared filter logic for Database View and Analytics pages. Returns filtered mask."""
-    from utils import extract_zip_from_address, extract_city_from_address
-
     mask = pd.Series([True] * len(df))
-
-    # Ensure city/zip columns exist (backfill from address if needed)
-    if 'zip_code' not in df.columns or df['zip_code'].isna().all():
-        if 'address' in df.columns:
-            df['zip_code'] = df['address'].apply(extract_zip_from_address)
-    if 'city' not in df.columns or df['city'].isna().all():
-        if 'address' in df.columns:
-            df['city'] = df['address'].apply(extract_city_from_address)
 
     # Location filters
     loc_count = count_active_filters("filter_cat_city") + count_active_filters("filter_cat_zip")
@@ -347,9 +366,9 @@ def apply_sidebar_filters(df, view_type, include_proximity=False):
         mask &= render_categorical_filter(df, 'city', 'City')
         mask &= render_categorical_filter(df, 'zip_code', 'Zip Code')
         if include_proximity:
-            st.sidebar.caption("Proximity Search")
-            st.sidebar.text_input("Near address", placeholder="e.g. 123 Main St, Houston TX", key="filter_loc_center")
-            st.sidebar.slider("Radius (mi)", 1, 50, 5, key="filter_loc_radius")
+            st.caption("Proximity Search")
+            st.text_input("Near address", placeholder="e.g. 123 Main St, Houston TX", key="filter_loc_center")
+            st.slider("Radius (mi)", 1, 50, 5, key="filter_loc_radius")
 
     if view_type == "Sales Comps":
         fin_count = count_active_filters("filter_min_sale") + count_active_filters("filter_max_sale")
@@ -371,7 +390,7 @@ def apply_sidebar_filters(df, view_type, include_proximity=False):
             mask &= render_text_filter(df, 'notes', 'Notes')
         with st.sidebar.expander("Date Range", expanded=False):
             if 'closing_date' in df.columns:
-                date_range = st.sidebar.date_input("Closing Date", value=(), key="filter_date_sale")
+                date_range = st.date_input("Closing Date", value=(), key="filter_date_sale")
                 if isinstance(date_range, tuple) and len(date_range) == 2:
                     mask &= df['closing_date'].astype(str) >= str(date_range[0])
                     mask &= df['closing_date'].astype(str) <= str(date_range[1])
@@ -390,7 +409,7 @@ def apply_sidebar_filters(df, view_type, include_proximity=False):
             mask &= render_categorical_filter(df, 'lease_type', 'Lease Type')
         with st.sidebar.expander("Date Range", expanded=False):
             if 'commencement_date' in df.columns:
-                date_range = st.sidebar.date_input("Commencement Date", value=(), key="filter_date_lease")
+                date_range = st.date_input("Commencement Date", value=(), key="filter_date_lease")
                 if isinstance(date_range, tuple) and len(date_range) == 2:
                     mask &= df['commencement_date'].astype(str) >= str(date_range[0])
                     mask &= df['commencement_date'].astype(str) <= str(date_range[1])
@@ -442,10 +461,13 @@ if page == "Upload & Process":
             with st.spinner('AI is analyzing columns...'):
                 df_input = robust_load_file(path)
                 if df_input is not None:
+                    if len(df_input) >= 500:
+                        st.warning(f"Large file detected ({len(df_input)} rows). Truncated to 500 rows for processing.")
                     result_df, conf = process_file_to_clean_output(df_input, uploaded_file.name)
                     st.session_state.clean_df = result_df
                     st.session_state.mapping_confidence = conf
                     st.session_state.current_filename = uploaded_file.name
+                    st.session_state.geocoding_done = False
                     st.success("File parsed successfully!")
                 else:
                     st.error("Could not read the file. Check the format.")
@@ -481,7 +503,7 @@ if page == "Upload & Process":
             section_header("Geocoding", "Standardizing addresses via Google Maps")
             missing_geos = df['latitude'].isna().sum()
 
-            if missing_geos > 0:
+            if missing_geos > 0 and not st.session_state.geocoding_done:
                 api_key = get_secret("GOOGLE_API_KEY", "")
                 if not api_key:
                     st.error("Google API Key not configured. Add GOOGLE_API_KEY to your secrets.")
@@ -505,12 +527,14 @@ if page == "Upload & Process":
                     df['city'] = [x[3] for x in results]
                     df['zip_code'] = [x[4] for x in results]
                     st.session_state.clean_df = df
+                    st.session_state.geocoding_done = True
                     geocoded = sum(1 for r in results if r[1] is not None)
                     status_text.text(f"Done! Geocoded {geocoded}/{len(results)} addresses.")
                     if warnings:
-                        with st.expander(f"Geocoding warnings ({len(warnings)})"):
+                        with st.expander(f"Geocoding warnings ({len(warnings)})", expanded=True):
                             for w in warnings:
-                                st.text(w)
+                                st.warning(w)
+                            st.info("Tip: Check that addresses include street numbers and city names. Broad addresses like 'Texas' will produce inaccurate results.")
             else:
                 st.success("All addresses have been geocoded!")
 
@@ -614,19 +638,20 @@ if page == "Upload & Process":
                 session.commit()
                 session.close()
                 load_data.clear()
+                get_record_counts.clear()
 
                 msg_parts = []
                 if records:
                     msg_parts.append(f"Saved {len(records)} new records")
                 if skipped:
                     msg_parts.append(f"skipped {skipped} duplicates")
-                st.success(" | ".join(msg_parts) if msg_parts else "No records to save.")
+                msg = " | ".join(msg_parts) if msg_parts else "No records to save."
+                st.toast(msg, icon="\u2705")
+                st.success(msg)
                 if skipped_details:
                     with st.expander(f"View {skipped} skipped duplicates"):
                         for detail in skipped_details:
                             st.text(detail)
-                if records:
-                    st.balloons()
 
                 # Cleanup
                 try:
@@ -643,8 +668,7 @@ elif page == "Database View":
     section_header("Database Explorer")
 
     # Record counts for type selector
-    sale_count = len(load_data("SaleComp"))
-    lease_count = len(load_data("LeaseComp"))
+    sale_count, lease_count = get_record_counts()
     view_type = st.radio(
         "Select Data Type",
         [f"Sales Comps ({sale_count})", f"Lease Comps ({lease_count})"],
@@ -658,13 +682,6 @@ elif page == "Database View":
     if df.empty:
         st.info("Database is empty. Upload files on the Upload page.")
     else:
-        # Ensure numeric columns are proper dtype
-        numeric_cols_sale = ['sale_price', 'price_per_sf', 'building_size', 'year_built', 'cap_rate']
-        numeric_cols_lease = ['rate_monthly', 'rate_annually', 'leased_sf', 'ti_allowance', 'clear_height', 'term_months']
-        for col in (numeric_cols_sale if view_type == "Sales Comps" else numeric_cols_lease):
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-
         # --- SIDEBAR FILTERS ---
         st.sidebar.markdown("---")
         mask = apply_sidebar_filters(df, view_type, include_proximity=True)
@@ -749,30 +766,37 @@ elif page == "Database View":
             start_idx = (st.session_state.page_num - 1) * PAGE_SIZE
             df_page = df_filtered.iloc[start_idx:start_idx + PAGE_SIZE].copy()
 
-            # Selection controls — simplified
-            sel_col1, sel_col2, sel_col3 = st.columns([1, 1, 2])
-            with sel_col1:
-                if st.button("Select All", use_container_width=True):
-                    st.session_state['_force_select'] = True
-            with sel_col2:
-                if st.button("Clear Selection", use_container_width=True):
-                    st.session_state['_force_select'] = False
-            with sel_col3:
-                if len(df_page) > 1:
-                    range_val = st.slider(
-                        "Select row range", 1, len(df_page), (1, len(df_page)),
-                        key="sel_range_slider", label_visibility="collapsed"
-                    )
-                    if range_val != (1, len(df_page)):
-                        for idx in range(range_val[0] - 1, range_val[1]):
-                            df_page.iloc[idx, df_page.columns.get_loc("Select")] = True
+            # Selection controls — searchable multiselect + buttons
+            row_labels = df_page.apply(
+                lambda r: f"{int(r['id'])}: {str(r.get('address', 'N/A'))[:60]}", axis=1
+            ).tolist()
 
-            # Apply forced selection state
-            force = st.session_state.pop('_force_select', None)
-            if force is True:
-                df_page["Select"] = True
-            elif force is False:
-                df_page["Select"] = False
+            sel_col1, sel_col2 = st.columns([3, 1])
+            with sel_col1:
+                selected_labels = st.multiselect(
+                    "Select rows (type to search)",
+                    row_labels,
+                    default=st.session_state.get('_selected_labels', []),
+                    key="row_selector",
+                    placeholder="Search by address or ID..."
+                )
+                st.session_state['_selected_labels'] = selected_labels
+            with sel_col2:
+                if st.button("Select All", use_container_width=True):
+                    st.session_state['_selected_labels'] = row_labels
+                    st.rerun()
+                if st.button("Clear", use_container_width=True):
+                    st.session_state['_selected_labels'] = []
+                    st.rerun()
+
+            # Sync multiselect to the Select column
+            selected_ids = set()
+            for lbl in selected_labels:
+                try:
+                    selected_ids.add(int(lbl.split(":")[0]))
+                except (ValueError, IndexError):
+                    pass
+            df_page["Select"] = df_page["id"].astype(int).isin(selected_ids)
 
             edited_view = st.data_editor(
                 df_page,
@@ -803,7 +827,8 @@ elif page == "Database View":
                 session.commit()
                 session.close()
                 load_data.clear()
-                st.success(f"Saved changes to {save_count} records.")
+                get_record_counts.clear()
+                st.toast(f"Saved changes to {save_count} records", icon="\u2705")
                 st.rerun()
 
         with tab_map:
@@ -852,6 +877,13 @@ elif page == "Database View":
                 section_header("Export", f"All {len(df_filtered)} filtered properties")
                 export_df = df_filtered
 
+            st.dataframe(
+                export_df.drop(columns=['Select'], errors='ignore'),
+                column_config=col_config,
+                use_container_width=True,
+                hide_index=True,
+            )
+
             exp1, exp2, exp3 = st.columns(3)
             with exp1:
                 st.download_button(
@@ -878,13 +910,15 @@ elif page == "Database View":
                 section_header("Admin Actions")
 
                 if not selected_rows.empty and 'id' in selected_rows.columns:
-                    if st.button(f"Delete {len(selected_rows)} Selected Records", type="secondary", use_container_width=True):
+                    confirm_sel = st.checkbox(f"I confirm deletion of {len(selected_rows)} selected records", key="confirm_delete_selected")
+                    if confirm_sel and st.button(f"Delete {len(selected_rows)} Selected Records", type="secondary", use_container_width=True):
                         session = Session()
                         ids_to_delete = selected_rows['id'].dropna().astype(int).tolist()
                         session.query(model_cls).filter(model_cls.id.in_(ids_to_delete)).delete(synchronize_session=False)
                         session.commit()
                         session.close()
                         load_data.clear()
+                        get_record_counts.clear()
                         st.success(f"Deleted {len(ids_to_delete)} records.")
                         st.rerun()
 
@@ -897,6 +931,7 @@ elif page == "Database View":
                         session.commit()
                         session.close()
                         load_data.clear()
+                        get_record_counts.clear()
                         st.rerun()
 
 # =====================================================================
@@ -905,31 +940,32 @@ elif page == "Database View":
 elif page == "Analytics":
     section_header("Analytics Dashboard")
 
-    sales_df = load_data("SaleComp").copy()
-    leases_df = load_data("LeaseComp").copy()
+    a_sale_count, a_lease_count = get_record_counts()
 
     # Type selector with counts
     analytics_type = st.radio(
         "Analyze",
-        [f"Sales Comps ({len(sales_df)})", f"Lease Comps ({len(leases_df)})"],
+        [f"Sales Comps ({a_sale_count})", f"Lease Comps ({a_lease_count})"],
         horizontal=True, key="analytics_type"
     )
     analytics_type = "Sales Comps" if "Sales" in analytics_type else "Lease Comps"
+
+    # Only load the selected type
+    if analytics_type == "Sales Comps":
+        sales_df = load_data("SaleComp").copy()
+        leases_df = pd.DataFrame()
+    else:
+        leases_df = load_data("LeaseComp").copy()
+        sales_df = pd.DataFrame()
 
     # Sidebar filters
     st.sidebar.markdown("---")
 
     if analytics_type == "Sales Comps" and not sales_df.empty:
-        for col in ['sale_price', 'price_per_sf', 'building_size', 'year_built', 'cap_rate']:
-            if col in sales_df.columns:
-                sales_df[col] = pd.to_numeric(sales_df[col], errors='coerce')
         analytics_mask = apply_sidebar_filters(sales_df, "Sales Comps")
         filtered_sales = sales_df[analytics_mask]
         filtered_leases = pd.DataFrame()
     elif analytics_type == "Lease Comps" and not leases_df.empty:
-        for col in ['rate_monthly', 'rate_annually', 'leased_sf', 'ti_allowance', 'clear_height', 'term_months']:
-            if col in leases_df.columns:
-                leases_df[col] = pd.to_numeric(leases_df[col], errors='coerce')
         analytics_mask = apply_sidebar_filters(leases_df, "Lease Comps")
         filtered_leases = leases_df[analytics_mask]
         filtered_sales = pd.DataFrame()
@@ -1050,7 +1086,7 @@ elif page == "Analytics":
                     avg_price=('sale_price', 'mean'),
                     avg_psf=('price_per_sf', 'mean'),
                     avg_size=('building_size', 'mean'),
-                ).round(0).reset_index()
+                ).round(2).reset_index()
                 zip_stats.columns = ['Zip Code', 'Count', 'Avg Price', 'Avg $/SF', 'Avg Size (SF)']
                 st.dataframe(zip_stats, hide_index=True, use_container_width=True)
 

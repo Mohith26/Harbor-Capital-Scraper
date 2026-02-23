@@ -77,8 +77,12 @@ HEADER_KEYWORDS = {
 
 # --- 3. FILE LOADER (CSV + XLSX) ---
 
-def robust_load_file(file_path):
+MAX_DATA_ROWS = 500
+
+def robust_load_file(file_path, max_rows=None):
     """Load CSV or Excel file with intelligent header detection and split-header merging."""
+    if max_rows is None:
+        max_rows = MAX_DATA_ROWS
     ext = os.path.splitext(file_path)[1].lower()
 
     # Read first 30 rows to find header
@@ -120,6 +124,10 @@ def robust_load_file(file_path):
     # Check for split/multi-row headers (merge up to 2 sub-header rows)
     df = _merge_split_headers(df)
     df = df.dropna(how='all')
+
+    # Truncate large files
+    if max_rows and len(df) > max_rows:
+        df = df.head(max_rows)
 
     # Deduplicate column names (append _2, _3, etc.)
     seen = {}
@@ -436,12 +444,15 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.55):
     address_candidates = []
 
     # Collect address candidates from all input columns
+    exclude_addr_patterns = {'state', 'city', 'zip', 'postal', 'county', 'country', 'submarket'}
     if 'address' in target_cols:
         addr_t_idx = target_cols.index('address')
         for h_idx in range(n_inputs):
             addr_score = 1 - cosine(head_vecs[h_idx], target_vecs[addr_t_idx])
-            if addr_score > 0.35:
-                address_candidates.append((input_headers[h_idx], addr_score))
+            if addr_score > 0.55:
+                hdr_clean = clean_header(input_headers[h_idx])
+                if not any(pat in hdr_clean for pat in exclude_addr_patterns):
+                    address_candidates.append((input_headers[h_idx], addr_score))
 
     for t_idx, h_idx in zip(row_ind, col_ind):
         if t_idx >= n_targets or h_idx >= n_inputs:
@@ -473,7 +484,7 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.55):
     # Merge address candidates into raw_address_data
     if address_candidates:
         address_candidates.sort(key=lambda x: x[1], reverse=True)
-        cand_cols = list(dict.fromkeys([x[0] for x in address_candidates]))
+        cand_cols = list(dict.fromkeys([x[0] for x in address_candidates]))[:3]
         out['raw_address_data'] = df[cand_cols].apply(
             lambda x: ' '.join(x.dropna().astype(str)), axis=1
         )
@@ -490,8 +501,16 @@ def _detect_rate_unit_from_header(rate_header):
     if rate_header is None:
         return None
     h = str(rate_header).lower()
-    monthly_hints = ['monthly', '/mo', 'per month', ' mo ', ' mo.']
-    annual_hints = ['annual', 'yearly', '/yr', 'per year', ' yr ', ' yr.', 'annually']
+    monthly_hints = [
+        'monthly', '/mo', 'per month', ' mo ', ' mo.',
+        'psf/mo', 'per sf per month', '$/sf/mo', 'per mo', '/month', 'per sf/mo',
+    ]
+    annual_hints = [
+        'annual', 'yearly', '/yr', 'per year', ' yr ', ' yr.',
+        'annually', 'psf/yr', 'per sf per year', '$/sf/yr',
+        'per annum', '/year', 'per sf/yr', 'p.a.',
+        'nnn/sf/yr', 'per acre per year',
+    ]
     for hint in monthly_hints:
         if hint in h:
             return 'monthly'
@@ -512,6 +531,14 @@ def apply_rate_logic(clean_df, rate_header=None, threshold=HOUSTON_RATE_THRESHOL
         return clean_df
 
     header_unit = _detect_rate_unit_from_header(rate_header)
+
+    # If no header hint, use column-level median to decide uniformly
+    if header_unit is None:
+        float_vals = [_to_float(v) for v in clean_df['rate_psf']]
+        valid_vals = [v for v in float_vals if v is not None and v > 0]
+        if valid_vals:
+            median_val = sorted(valid_vals)[len(valid_vals) // 2]
+            header_unit = 'monthly' if median_val <= threshold else 'annual'
 
     monthly_list, annual_list, basis_list = [], [], []
 
@@ -577,13 +604,17 @@ def _to_float(v):
         return float(s)
     except (ValueError, TypeError):
         pass
-    # Last resort: extract first number-like sequence from the string
+    # Last resort: extract first number-like sequence, with guards against noise
     num_match = re.search(r'[\d,]+\.?\d*', s)
     if num_match:
-        try:
-            return float(num_match.group().replace(',', ''))
-        except (ValueError, TypeError):
-            pass
+        matched = num_match.group()
+        remaining = s.replace(matched, '', 1).strip()
+        # Reject single-digit matches surrounded by much longer text (e.g., "Building 4 at Park")
+        if len(matched) >= 2 or len(remaining) <= len(matched) * 2:
+            try:
+                return float(matched.replace(',', ''))
+            except (ValueError, TypeError):
+                pass
     return None
 
 
@@ -640,10 +671,14 @@ def fetch_google_data(raw_text, api_key):
         if res['status'] == 'OK':
             top = res['results'][0]
         elif res['status'] == 'ZERO_RESULTS':
-            params.pop("components", None)
-            res = requests.get(url, params=params).json()
-            if res['status'] == 'OK':
-                top = res['results'][0]
+            # Retry with simplified address (strip suite/unit/building) but keep TX restriction
+            simplified = re.sub(r'(?i)\b(suite|ste|unit|bldg|building|floor|fl)\s*[#]?\s*\w+', '', addr).strip()
+            simplified = re.sub(r'\s+', ' ', simplified)
+            if simplified != addr:
+                params['address'] = simplified
+                res = requests.get(url, params=params).json()
+                if res['status'] == 'OK':
+                    top = res['results'][0]
 
         if top is None:
             return raw_text, None, None, None, None, None
@@ -676,10 +711,11 @@ def process_file_to_clean_output(df, filename):
 
     clean_df, confidence = generate_standardized_df(df, schema, ftype)
 
-    # Clean all numeric columns — convert messy strings to proper floats
+    # Clean all numeric columns — convert messy strings to proper floats and round
     for col_name, col_info in schema.items():
         if col_info['type'] in ('numeric_money', 'numeric_clean') and col_name in clean_df.columns:
             clean_df[col_name] = clean_df[col_name].apply(_to_float)
+            clean_df[col_name] = pd.to_numeric(clean_df[col_name], errors='coerce').round(2)
 
     # Calculate price_per_sf for sales if missing
     if ftype == "SALE" and 'sale_price' in clean_df.columns and 'building_size' in clean_df.columns:
