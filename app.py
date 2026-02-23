@@ -12,8 +12,9 @@ from streamlit_folium import st_folium
 import plotly.express as px
 from database import Session, SaleComp, LeaseComp, engine
 from comp_engine import robust_load_file, process_file_to_clean_output, fetch_google_data
+from comp_finder import compute_match_scores, compute_ai_scores, blend_scores, load_comps
 from storage import upload_file as upload_to_storage
-from utils import normalize_address, find_duplicates
+from utils import normalize_address, find_duplicates, haversine_miles
 
 # --- SECRETS ---
 def get_secret(key, default=None):
@@ -25,19 +26,6 @@ def get_secret(key, default=None):
 GOOGLE_API_KEY = get_secret("GOOGLE_API_KEY", "")
 
 # --- HELPERS ---
-def haversine_miles(lat1, lon1, lat2, lon2):
-    if any(x is None for x in [lat1, lon1, lat2, lon2]):
-        return 99999
-    R = 3958.8
-    try:
-        dlat = math.radians(lat2 - lat1)
-        dlon = math.radians(lon2 - lon1)
-        a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        return R * c
-    except Exception:
-        return 99999
-
 def clean_currency_num(value):
     if pd.isna(value) or value == "":
         return None
@@ -417,7 +405,7 @@ def apply_sidebar_filters(df, view_type, include_proximity=False):
     return mask
 
 # --- NAVIGATION ---
-page = st.sidebar.radio("Navigate", ["Upload & Process", "Database View", "Analytics"])
+page = st.sidebar.radio("Navigate", ["Upload & Process", "Database View", "Analytics", "Comp Finder"])
 
 # Global filter indicator
 active_filter_count = sum(1 for k, v in st.session_state.items()
@@ -1245,3 +1233,289 @@ elif page == "Analytics":
             st.dataframe(compare_df, use_container_width=True)
     else:
         st.info("Add data to use the comparison tool.")
+
+# =====================================================================
+# PAGE 4: COMP FINDER
+# =====================================================================
+elif page == "Comp Finder":
+    section_header("Comp Finder", "Input subject property details to find comparable properties")
+
+    # Session state for results persistence
+    if 'cf_results' not in st.session_state:
+        st.session_state.cf_results = None
+    if 'cf_subject' not in st.session_state:
+        st.session_state.cf_subject = None
+    if 'cf_subject_coords' not in st.session_state:
+        st.session_state.cf_subject_coords = None
+
+    # --- Comp type selector ---
+    cf_type = st.radio("Search in", ["Sales Comps", "Leases Comps"], horizontal=True, key="cf_type_radio")
+    cf_type_key = "Sales" if "Sales" in cf_type else "Leases"
+
+    # --- Sidebar: Comp Finder Settings ---
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Comp Finder Settings**")
+    w_proximity = st.sidebar.slider("Proximity Weight", 0.0, 1.0, 0.30, 0.05, key="cf_w_prox")
+    w_size = st.sidebar.slider("Size Weight", 0.0, 1.0, 0.25, 0.05, key="cf_w_size")
+    w_price = st.sidebar.slider("Price / Rate Weight", 0.0, 1.0, 0.20, 0.05, key="cf_w_price")
+    w_recency = st.sidebar.slider("Recency Weight", 0.0, 1.0, 0.15, 0.05, key="cf_w_recency")
+    w_other = st.sidebar.slider("Other Attributes Weight", 0.0, 1.0, 0.10, 0.05, key="cf_w_other")
+    max_radius = st.sidebar.slider("Max Radius (miles)", 1, 50, 25, key="cf_max_radius")
+    max_results = st.sidebar.slider("Max Results", 5, 50, 20, key="cf_max_results")
+    use_ai = st.sidebar.checkbox("AI Enhancement", value=False, key="cf_use_ai")
+    ai_blend = 0.3
+    if use_ai:
+        ai_blend = st.sidebar.slider("AI Blend Ratio", 0.1, 0.9, 0.3, 0.05, key="cf_ai_blend")
+
+    # --- Subject property form ---
+    st.markdown("")
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.markdown("**Required**")
+        cf_address = st.text_input("Subject Address", placeholder="e.g. 123 Main St, Houston TX", key="cf_address")
+        geo_col1, geo_col2 = st.columns([1, 2])
+        with geo_col1:
+            geocode_btn = st.button("Geocode", key="cf_geocode_btn")
+        with geo_col2:
+            if st.session_state.cf_subject_coords:
+                lat, lng = st.session_state.cf_subject_coords
+                st.success(f"{lat:.4f}, {lng:.4f}")
+
+        if geocode_btn and cf_address:
+            api_key = get_secret("GOOGLE_API_KEY", "")
+            if api_key:
+                with st.spinner("Geocoding..."):
+                    addr, lat, lng, city, zip_code, warn = fetch_google_data(cf_address, api_key)
+                    if lat and lng:
+                        st.session_state.cf_subject_coords = (lat, lng)
+                        st.toast(f"Geocoded: {addr}", icon="\u2705")
+                        st.rerun()
+                    else:
+                        st.error("Could not geocode this address. Try a more specific address.")
+            else:
+                st.error("Google API Key not configured.")
+
+        if cf_type_key == "Sales":
+            cf_size = st.number_input("Building Size (SF)", value=None, min_value=0, step=100, key="cf_size")
+        else:
+            cf_size = st.number_input("Leased SF", value=None, min_value=0, step=100, key="cf_size")
+
+    with col_right:
+        st.markdown("**Optional**")
+        if cf_type_key == "Sales":
+            cf_price = st.number_input("Sale Price ($)", value=None, min_value=0, step=10000, key="cf_price")
+            cf_psf = st.number_input("Price per SF ($)", value=None, min_value=0.0, step=1.0, key="cf_psf")
+            cf_year = st.number_input("Year Built", value=None, min_value=1900, max_value=2030, step=1, key="cf_year")
+        else:
+            cf_rate_mo = st.number_input("Rate $/SF/Mo", value=None, min_value=0.0, step=0.25, key="cf_rate_mo")
+            cf_rate_yr = st.number_input("Rate $/SF/Yr", value=None, min_value=0.0, step=1.0, key="cf_rate_yr")
+            cf_btype = st.text_input("Building Type", placeholder="e.g. Industrial, Office", key="cf_btype")
+        cf_city = st.text_input("City", placeholder="e.g. Houston", key="cf_city")
+        cf_zip = st.text_input("Zip Code", placeholder="e.g. 77001", key="cf_zip")
+
+    # --- Build subject dict ---
+    subject = {}
+    if st.session_state.cf_subject_coords:
+        subject["lat"] = st.session_state.cf_subject_coords[0]
+        subject["lng"] = st.session_state.cf_subject_coords[1]
+    subject["address"] = cf_address or None
+    subject["city"] = cf_city or None
+    subject["zip_code"] = cf_zip or None
+
+    if cf_type_key == "Sales":
+        subject["building_size"] = cf_size
+        subject["sale_price"] = cf_price
+        subject["price_per_sf"] = cf_psf
+        subject["year_built"] = cf_year
+    else:
+        subject["leased_sf"] = cf_size
+        subject["rate_monthly"] = cf_rate_mo
+        subject["rate_annually"] = cf_rate_yr
+        subject["building_type"] = cf_btype or None
+
+    # --- Weights dict ---
+    if cf_type_key == "Sales":
+        weights = {
+            "proximity": w_proximity,
+            "size": w_size,
+            "price": w_price,
+            "price_psf": w_other,
+            "year_built": w_other,
+            "recency": w_recency,
+        }
+    else:
+        weights = {
+            "proximity": w_proximity,
+            "size": w_size,
+            "rate_monthly": w_price,
+            "rate_annually": w_other,
+            "building_type": w_other,
+            "recency": w_recency,
+        }
+
+    # --- Find Comps button ---
+    st.markdown("")
+    can_search = st.session_state.cf_subject_coords is not None
+    if not can_search:
+        st.warning("Geocode the subject address first to enable search.")
+
+    if st.button("Find Comparable Properties", type="primary", use_container_width=True, disabled=not can_search):
+        comps_df = load_comps(cf_type_key)
+        if comps_df.empty:
+            st.info(f"No {cf_type_key.lower()} comps in database yet. Upload comps first.")
+        else:
+            with st.spinner("Scoring comparables..."):
+                results = compute_match_scores(subject, comps_df, cf_type_key, weights, max_radius)
+
+                # AI enhancement
+                if use_ai:
+                    try:
+                        ai_scores = compute_ai_scores(subject, results, cf_type_key)
+                        results["match_score"] = blend_scores(results["match_score"], ai_scores, ai_blend)
+                        results = results.sort_values("match_score", ascending=False).reset_index(drop=True)
+                    except Exception as e:
+                        st.toast(f"AI scoring failed, using weighted scores only: {e}", icon="\u26a0\ufe0f")
+
+                # Filter to non-zero scores and limit results
+                results = results[results["match_score"] > 0].head(max_results)
+
+                st.session_state.cf_results = results
+                st.session_state.cf_subject = subject
+
+    # --- Display Results ---
+    if st.session_state.cf_results is not None and not st.session_state.cf_results.empty:
+        results = st.session_state.cf_results
+        subject = st.session_state.cf_subject
+
+        st.markdown("")
+        section_header("Results", f"{len(results)} comparable properties found")
+
+        tab_ranked, tab_map, tab_breakdown = st.tabs(["Ranked Results", "Map", "Score Breakdown"])
+
+        with tab_ranked:
+            display_df = results.copy()
+            display_df.insert(0, "Rank", range(1, len(display_df) + 1))
+            display_df["match_score"] = (display_df["match_score"] * 100).round(1)
+
+            if cf_type_key == "Sales":
+                show_cols = ["Rank", "address", "match_score", "distance_miles",
+                             "sale_price", "price_per_sf", "building_size", "year_built",
+                             "closing_date", "city", "zip_code"]
+                col_cfg = {
+                    "match_score": st.column_config.ProgressColumn("Match %", min_value=0, max_value=100, format="%.1f%%"),
+                    "distance_miles": st.column_config.NumberColumn("Distance (mi)", format="%.1f"),
+                    "sale_price": st.column_config.NumberColumn("Sale Price", format="$%,.0f"),
+                    "price_per_sf": st.column_config.NumberColumn("$/SF", format="$%.2f"),
+                    "building_size": st.column_config.NumberColumn("Size (SF)", format="%,.0f"),
+                }
+            else:
+                show_cols = ["Rank", "address", "match_score", "distance_miles",
+                             "rate_monthly", "rate_annually", "leased_sf", "tenant_name",
+                             "building_type", "commencement_date", "city", "zip_code"]
+                col_cfg = {
+                    "match_score": st.column_config.ProgressColumn("Match %", min_value=0, max_value=100, format="%.1f%%"),
+                    "distance_miles": st.column_config.NumberColumn("Distance (mi)", format="%.1f"),
+                    "rate_monthly": st.column_config.NumberColumn("$/SF/Mo", format="$%.2f"),
+                    "rate_annually": st.column_config.NumberColumn("$/SF/Yr", format="$%.2f"),
+                    "leased_sf": st.column_config.NumberColumn("Leased SF", format="%,.0f"),
+                }
+
+            available_cols = [c for c in show_cols if c in display_df.columns]
+            st.dataframe(
+                display_df[available_cols],
+                column_config=col_cfg,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # Export results
+            csv_data = display_df[available_cols].to_csv(index=False)
+            st.download_button("Download Results (CSV)", csv_data, "comp_finder_results.csv", "text/csv",
+                               use_container_width=True)
+
+        with tab_map:
+            map_results = results.dropna(subset=["latitude", "longitude"])
+            if not map_results.empty and subject.get("lat") and subject.get("lng"):
+                m = folium.Map(location=[subject["lat"], subject["lng"]], zoom_start=11)
+
+                # Subject marker
+                folium.Marker(
+                    location=[subject["lat"], subject["lng"]],
+                    popup=folium.Popup(f"<b>Subject Property</b><br>{subject.get('address', 'N/A')}", max_width=300),
+                    icon=folium.Icon(color="red", icon="star", prefix="fa"),
+                ).add_to(m)
+
+                # Comp markers color-coded by score
+                for _, row in map_results.iterrows():
+                    score = row["match_score"]
+                    if score >= 0.7:
+                        color = "green"
+                    elif score >= 0.4:
+                        color = "orange"
+                    else:
+                        color = "lightred"
+
+                    if cf_type_key == "Sales":
+                        popup_html = f"<b>{row.get('address', 'N/A')}</b><br>Match: {score:.0%}<br>Price: ${row.get('sale_price', 0):,.0f}<br>Size: {row.get('building_size', 0):,.0f} SF<br>Distance: {row.get('distance_miles', 0):.1f} mi"
+                    else:
+                        popup_html = f"<b>{row.get('address', 'N/A')}</b><br>Match: {score:.0%}<br>Rate: ${row.get('rate_monthly', 0):.2f}/SF/Mo<br>Size: {row.get('leased_sf', 0):,.0f} SF<br>Distance: {row.get('distance_miles', 0):.1f} mi"
+
+                    folium.Marker(
+                        location=[row["latitude"], row["longitude"]],
+                        popup=folium.Popup(popup_html, max_width=300),
+                        icon=folium.Icon(color=color, icon="building", prefix="fa"),
+                    ).add_to(m)
+
+                    # Line from subject to comp
+                    folium.PolyLine(
+                        locations=[[subject["lat"], subject["lng"]], [row["latitude"], row["longitude"]]],
+                        color="#F5A623",
+                        weight=1.5,
+                        opacity=0.4,
+                    ).add_to(m)
+
+                # Radius circle
+                folium.Circle(
+                    location=[subject["lat"], subject["lng"]],
+                    radius=max_radius * 1609.34,
+                    color="#F5A623",
+                    fill=True,
+                    fill_opacity=0.05,
+                ).add_to(m)
+
+                st_folium(m, height=600, use_container_width=True)
+            else:
+                st.info("No geocoded results to display on map.")
+
+        with tab_breakdown:
+            score_suffix = "_score"
+            score_columns = [c for c in results.columns if c.endswith(score_suffix) and c != "match_score"]
+            if score_columns:
+                breakdown_df = results[["address"] + score_columns].head(min(10, len(results))).copy()
+                # Rename columns for display
+                breakdown_df.columns = ["Address"] + [c.replace("_score", "").replace("_", " ").title() for c in score_columns]
+
+                melted = breakdown_df.melt(id_vars=["Address"], var_name="Category", value_name="Score")
+                melted["Score"] = melted["Score"].fillna(0)
+                # Truncate long addresses
+                melted["Address"] = melted["Address"].apply(lambda x: str(x)[:40] if x else "N/A")
+
+                fig = px.bar(
+                    melted, y="Address", x="Score", color="Category",
+                    orientation="h", barmode="group",
+                    title="Score Breakdown by Category",
+                    color_discrete_sequence=HC_COLORS,
+                )
+                fig.update_layout(
+                    xaxis_title="Score (0 = no match, 1 = perfect)",
+                    yaxis_title="",
+                    height=max(400, len(breakdown_df) * 60),
+                    legend=dict(orientation="h", y=-0.15),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No score breakdown available.")
+
+    elif st.session_state.cf_results is not None and st.session_state.cf_results.empty:
+        st.info("No comparable properties found within the specified radius. Try increasing the max radius or adjusting weights.")

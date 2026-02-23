@@ -1,4 +1,5 @@
 import re
+import math
 from difflib import SequenceMatcher
 
 
@@ -56,3 +57,17 @@ def extract_city_from_address(address):
     # Pattern: "..., City, TX 77001" or "..., City, Texas"
     match = re.search(r',\s*([A-Za-z\s]+?),\s*(?:TX|Texas)\b', str(address), re.IGNORECASE)
     return match.group(1).strip() if match else None
+
+
+def haversine_miles(lat1, lon1, lat2, lon2):
+    if any(x is None for x in [lat1, lon1, lat2, lon2]):
+        return 99999
+    R = 3958.8
+    try:
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+    except Exception:
+        return 99999
