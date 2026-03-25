@@ -786,15 +786,24 @@ elif page == "Database View":
                     pass
             df_page["Select"] = df_page["id"].astype(int).isin(selected_ids)
 
-            edited_view = st.data_editor(
-                df_page,
-                hide_index=True,
-                column_config=col_config,
-                use_container_width=True,
-            )
+            if user_role == "admin":
+                edited_view = st.data_editor(
+                    df_page,
+                    hide_index=True,
+                    column_config=col_config,
+                    use_container_width=True,
+                )
+            else:
+                edited_view = df_page
+                st.dataframe(
+                    df_page,
+                    hide_index=True,
+                    column_config=col_config,
+                    use_container_width=True,
+                )
 
-            # Save edits
-            if st.button("Save Changes to Database", use_container_width=True):
+            # Save edits (admin only)
+            if user_role == "admin" and st.button("Save Changes to Database", use_container_width=True):
                 session = Session()
                 save_count = 0
                 for _, row in edited_view.iterrows():

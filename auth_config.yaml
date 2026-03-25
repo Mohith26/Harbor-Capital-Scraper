@@ -10,6 +10,41 @@ credentials:
       name: Analyst
       password: "$2b$12$Km5r6VC9Opr2gsRx3Hr3ROJnjJBL5u8v0B2.uo/j60dqlg7c5hPcW"
       role: analyst
+    isaac@harborcap.com:
+      email: isaac@harborcap.com
+      name: Isaac Specter
+      password: "$2b$12$fZ4zPJdJk.KReFMEr8dpJu5.nhHBzcpnG6kVCiBpPt2aa5EhPtH1y"
+      role: admin
+    chad@harborcap.com:
+      email: chad@harborcap.com
+      name: Chad Gustenhoven
+      password: "$2b$12$TFjoIk1cZOFUWBIV3zdb4OPu.v499.sisXzn.1.aAkd74a.XvfIZG"
+      role: analyst
+    will@harborcap.com:
+      email: will@harborcap.com
+      name: Will Ghiselli
+      password: "$2b$12$uC622iW5nidOD6DmP9AslOp4DkNty3aRLjijCsEC39AMKKJmfgA4q"
+      role: analyst
+    trevor@harborcap.com:
+      email: trevor@harborcap.com
+      name: Trevor Allison
+      password: "$2b$12$Efd2HFQIWKLyoY41ms/62eNedUlXqj5vEJWxh4daFfxRARzSJZ4uW"
+      role: analyst
+    steve@harborcap.com:
+      email: steve@harborcap.com
+      name: Steve Naidu
+      password: "$2b$12$FA/KQux8caIbfXZrrG4sv.q5EUQGotQfcOmCyjAfok9ivSErdrkwK"
+      role: analyst
+    hahn@harborcap.com:
+      email: hahn@harborcap.com
+      name: Hahn Franklin-Mitchell
+      password: "$2b$12$DemB9XbBHkV6n.5YtW0WJOqJwdb5BXViw8BhdbV757k/hpVvwl4Ta"
+      role: analyst
+    harris@harborcap.com:
+      email: harris@harborcap.com
+      name: Harris Quiner
+      password: "$2b$12$oUjkUQvVwrczWIwB2v/X/umfiibBqro4arBAxjHWECT/OE7sMPbZS"
+      role: analyst
 cookie:
   expiry_days: 30
   key: harbor_capital_comp_db_secret_key
