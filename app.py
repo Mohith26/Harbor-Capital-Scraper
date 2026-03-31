@@ -487,7 +487,10 @@ if page == "Upload & Process":
         if st.session_state.clean_df is not None:
             df = st.session_state.clean_df
             conf = st.session_state.mapping_confidence
-            stype = df['source_type'].iloc[0]
+            types_in_file = df['source_type'].unique().tolist()
+            has_leases = any(t in ('LEASE', 'BOTH') for t in types_in_file)
+            has_sales = any(t in ('SALE', 'BOTH') for t in types_in_file)
+            stype = types_in_file[0] if len(types_in_file) == 1 else "MIXED"
 
             # --- MAPPING CONFIDENCE DISPLAY ---
             if conf:
@@ -554,13 +557,20 @@ if page == "Upload & Process":
             section_header("Preview & Save", f"{len(df)} records ready -- review and save to database")
 
             cols_to_show = list(df.columns)
-            hide_cols = ['source_type', 'source_file', 'rate_basis']
-            if stype == "LEASE" and 'rate_monthly' in cols_to_show:
+            hide_cols = ['source_file', 'rate_basis']
+            if stype == "MIXED":
+                # Show source_type so users can see which rows are lease vs sale
+                hide_cols_mixed = ['source_file', 'rate_basis']
+                cols_to_show = [c for c in cols_to_show if c not in hide_cols_mixed]
+            elif stype == "LEASE" and 'rate_monthly' in cols_to_show:
+                hide_cols.append('source_type')
                 priority = ['address', 'rate_monthly', 'rate_annually', 'rate_basis']
                 cols_to_show = priority + [c for c in cols_to_show if c not in priority and c not in hide_cols]
             elif stype == "SALE":
+                hide_cols.append('source_type')
                 cols_to_show = [c for c in cols_to_show if c not in ['rate_monthly', 'rate_annually', 'rate_basis'] and c not in hide_cols]
             else:
+                hide_cols.append('source_type')
                 cols_to_show = [c for c in cols_to_show if c not in hide_cols]
 
             edited_df = st.data_editor(st.session_state.clean_df[cols_to_show], num_rows="dynamic")
@@ -573,12 +583,15 @@ if page == "Upload & Process":
                 except Exception as e:
                     st.warning(f"Could not upload source file to storage: {e}")
 
-                # Fetch existing records for duplicate detection
-                model_cls = SaleComp if stype == "SALE" else LeaseComp
+                # Fetch existing records for duplicate detection (both tables)
                 session_dup = Session()
-                existing_records = []
+                existing_sale_records = []
+                existing_lease_records = []
                 try:
-                    existing_records = [(r.id, r.address) for r in session_dup.query(model_cls.id, model_cls.address).all()]
+                    if has_sales:
+                        existing_sale_records = [(r.id, r.address) for r in session_dup.query(SaleComp.id, SaleComp.address).all()]
+                    if has_leases:
+                        existing_lease_records = [(r.id, r.address) for r in session_dup.query(LeaseComp.id, LeaseComp.address).all()]
                 except Exception:
                     pass
                 session_dup.close()
@@ -587,10 +600,16 @@ if page == "Upload & Process":
                 records = []
                 skipped = 0
                 skipped_details = []
+                sale_count = 0
+                lease_count = 0
                 bar = st.progress(0)
 
                 for i, row in edited_df.iterrows():
                     addr = clean_text_val(row.get('address'))
+                    row_type = row.get('source_type', stype)
+                    is_sale = row_type == "SALE"
+                    row_model = SaleComp if is_sale else LeaseComp
+                    existing_records = existing_sale_records if is_sale else existing_lease_records
 
                     # Auto-skip duplicates
                     if addr and existing_records:
@@ -613,7 +632,7 @@ if page == "Upload & Process":
                         'notes': clean_text_val(row.get('notes')),
                     }
 
-                    if stype == "SALE":
+                    if is_sale:
                         specific = {
                             'sale_price': clean_currency_num(row.get('sale_price')),
                             'building_size': clean_currency_num(row.get('building_size')),
@@ -624,7 +643,8 @@ if page == "Upload & Process":
                             'buyer': clean_text_val(row.get('buyer')),
                             'seller': clean_text_val(row.get('seller')),
                         }
-                    elif stype == "LEASE":
+                        sale_count += 1
+                    else:
                         specific = {
                             'tenant_name': clean_text_val(row.get('tenant_name')),
                             'leased_sf': clean_currency_num(row.get('leased_sf')),
@@ -639,10 +659,9 @@ if page == "Upload & Process":
                             'building_type': clean_text_val(row.get('building_type')),
                             'clear_height': clean_currency_num(row.get('clear_height')),
                         }
-                    else:
-                        continue
+                        lease_count += 1
 
-                    records.append(model_cls(**{**common, **specific}))
+                    records.append(row_model(**{**common, **specific}))
                     bar.progress((i + 1) / len(edited_df))
 
                 if records:
@@ -654,7 +673,12 @@ if page == "Upload & Process":
 
                 msg_parts = []
                 if records:
-                    msg_parts.append(f"Saved {len(records)} new records")
+                    type_detail = []
+                    if sale_count:
+                        type_detail.append(f"{sale_count} sales")
+                    if lease_count:
+                        type_detail.append(f"{lease_count} leases")
+                    msg_parts.append(f"Saved {len(records)} new records ({', '.join(type_detail)})")
                 if skipped:
                     msg_parts.append(f"skipped {skipped} duplicates")
                 msg = " | ".join(msg_parts) if msg_parts else "No records to save."
