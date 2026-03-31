@@ -11,7 +11,7 @@ import folium
 from streamlit_folium import st_folium
 import plotly.express as px
 from database import Session, SaleComp, LeaseComp, engine
-from comp_engine import robust_load_file, process_file_to_clean_output, fetch_google_data
+from comp_engine import robust_load_file, process_file_to_clean_output, fetch_google_data, get_sheet_names, process_all_sheets
 from comp_finder import compute_match_scores, compute_ai_scores, blend_scores, load_comps
 from storage import upload_file as upload_to_storage
 from utils import normalize_address, find_duplicates, haversine_miles
@@ -445,18 +445,42 @@ if page == "Upload & Process":
         tmp.close()
         path = tmp.name
 
-        if st.session_state.current_filename != uploaded_file.name:
+        # Detect sheets for multi-sheet Excel files
+        sheets = get_sheet_names(path)
+        selected_sheets = sheets  # default: all sheets
+        if len(sheets) > 1:
+            selected_sheets = st.multiselect(
+                f"This file has {len(sheets)} sheets. Select which to process:",
+                sheets,
+                default=sheets,
+                key="sheet_selector",
+            )
+            if not selected_sheets:
+                st.warning("Select at least one sheet to process.")
+
+        if st.session_state.current_filename != uploaded_file.name and selected_sheets:
             with st.spinner('AI is analyzing columns...'):
-                df_input = robust_load_file(path)
-                if df_input is not None:
-                    if len(df_input) >= 500:
-                        st.warning(f"Large file detected ({len(df_input)} rows). Truncated to 500 rows for processing.")
-                    result_df, conf = process_file_to_clean_output(df_input, uploaded_file.name)
+                if len(sheets) > 1:
+                    result_df, conf, sheet_errors = process_all_sheets(path, uploaded_file.name, selected_sheets)
+                    if sheet_errors:
+                        for err in sheet_errors:
+                            st.warning(err)
+                else:
+                    df_input = robust_load_file(path)
+                    if df_input is not None:
+                        if len(df_input) >= 500:
+                            st.warning(f"Large file detected ({len(df_input)} rows). Truncated to 500 rows for processing.")
+                        result_df, conf = process_file_to_clean_output(df_input, uploaded_file.name)
+                    else:
+                        result_df, conf = None, None
+
+                if result_df is not None:
                     st.session_state.clean_df = result_df
                     st.session_state.mapping_confidence = conf
                     st.session_state.current_filename = uploaded_file.name
                     st.session_state.geocoding_done = False
-                    st.success("File parsed successfully!")
+                    sheet_msg = f" from {len(selected_sheets)} sheet(s)" if len(sheets) > 1 else ""
+                    st.success(f"Parsed {len(result_df)} records{sheet_msg}!")
                 else:
                     st.error("Could not read the file. Check the format.")
 

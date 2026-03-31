@@ -50,6 +50,7 @@ LEASE_SCHEMA = {
     'free_rent':         {'desc': "free rent abatement concessions months free",    'type': 'text'},
     'clear_height':      {'desc': "clear height ceiling height clearance",          'type': 'numeric_clean'},
     'building_type':     {'desc': "building type construction class metal tilt wall", 'type': 'text'},
+    'year_built':        {'desc': "year built age renovated constructed vintage",   'type': 'numeric_clean'},
     'notes':             {'desc': "notes comments details observations",            'type': 'text'},
 }
 
@@ -79,16 +80,34 @@ HEADER_KEYWORDS = {
 
 MAX_DATA_ROWS = 500
 
-def robust_load_file(file_path, max_rows=None):
+
+def get_sheet_names(file_path):
+    """Return list of sheet names for Excel files, or [None] for CSV."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in ('.xlsx', '.xls'):
+        import openpyxl
+        wb = openpyxl.load_workbook(file_path, read_only=True)
+        names = wb.sheetnames
+        wb.close()
+        return names
+    return [None]
+
+
+def robust_load_file(file_path, max_rows=None, sheet_name=None):
     """Load CSV or Excel file with intelligent header detection and split-header merging."""
     if max_rows is None:
         max_rows = MAX_DATA_ROWS
     ext = os.path.splitext(file_path)[1].lower()
 
+    # Build common kwargs for Excel reads
+    excel_kwargs = {'engine': 'openpyxl'}
+    if sheet_name is not None:
+        excel_kwargs['sheet_name'] = sheet_name
+
     # Read first 30 rows to find header
     try:
         if ext in ('.xlsx', '.xls'):
-            df_raw = pd.read_excel(file_path, header=None, nrows=30, engine='openpyxl')
+            df_raw = pd.read_excel(file_path, header=None, nrows=30, **excel_kwargs)
         else:
             df_raw = pd.read_csv(file_path, header=None, nrows=30)
     except Exception as e:
@@ -107,7 +126,7 @@ def robust_load_file(file_path, max_rows=None):
     if best_row_idx == -1 or max_score < 2:
         try:
             if ext in ('.xlsx', '.xls'):
-                return pd.read_excel(file_path, engine='openpyxl')
+                return pd.read_excel(file_path, **excel_kwargs)
             return pd.read_csv(file_path)
         except:
             return None
@@ -115,7 +134,7 @@ def robust_load_file(file_path, max_rows=None):
     # Reload with detected header
     try:
         if ext in ('.xlsx', '.xls'):
-            df = pd.read_excel(file_path, header=best_row_idx, engine='openpyxl')
+            df = pd.read_excel(file_path, header=best_row_idx, **excel_kwargs)
         else:
             df = pd.read_csv(file_path, header=best_row_idx)
     except:
@@ -251,11 +270,19 @@ def get_column_profile(series):
     return 'text'
 
 
-def classify_file_type(headers, filename=""):
-    """Classify file as LEASE, SALE, BOTH, or UNKNOWN based on headers and filename."""
+def classify_file_type(headers, filename="", sheet_name=None):
+    """Classify file as LEASE, SALE, BOTH, or UNKNOWN based on headers, filename, and sheet name."""
     fname = str(filename).lower()
     lease_score = 10 if any(x in fname for x in ['lease', 'leasing', 'tenant']) else 0
     sale_score = 10 if any(x in fname for x in ['sale', 'sold', 'transaction', 'purchase']) else 0
+
+    # Sheet name is a stronger signal than filename (weight 15 vs 10)
+    if sheet_name:
+        sname = str(sheet_name).lower()
+        if any(x in sname for x in ['lease', 'leasing', 'tenant']):
+            lease_score += 15
+        if any(x in sname for x in ['sale', 'sold', 'transaction', 'purchase']):
+            sale_score += 15
 
     clean_headers = [str(h).lower().strip() for h in headers]
     lease_triggers = {'tenant', 'lessee', 'term', 'commencement', 'base rent', 'rent', 'leased',
@@ -271,7 +298,7 @@ def classify_file_type(headers, filename=""):
         return "LEASE"
     elif sale_score > lease_score:
         return "SALE"
-    elif lease_score > 0:
+    elif lease_score > 0 and sale_score > 0:
         return "BOTH"
     return "UNKNOWN"
 
@@ -291,6 +318,10 @@ BASE_OVERRIDES = {
     'rate sf': 'rate_psf', 'rate per sf': 'rate_psf',
     'rate/acre': 'rate_psf', 'rate acre': 'rate_psf', 'rate / acre / month': 'rate_psf',
     'rate per acre': 'rate_psf',
+    'lease rate': 'rate_psf', 'lease rate/sf': 'rate_psf',
+    'first year rent': 'rate_psf', 'first year rent per area': 'rate_psf',
+    'asking rent': 'rate_psf', 'effective rent': 'rate_psf',
+    'effective rent per area': 'rate_psf', 'rent per area': 'rate_psf',
     'date closed': 'closing_date', 'closing date': 'closing_date', 'sale date': 'closing_date',
     'transaction date': 'closing_date', 'date of sale': 'closing_date', 'closed': 'closing_date',
     'close date': 'closing_date',
@@ -334,7 +365,10 @@ LEASE_OVERRIDES = {
     'sf': 'leased_sf', 'size': 'leased_sf', 'sqft': 'leased_sf',
     'area leased': 'leased_sf', 'leased sf': 'leased_sf', 'space': 'leased_sf',
     'leased area': 'leased_sf', 'deal sf': 'leased_sf',
+    'lease size': 'leased_sf', 'lease size sf': 'leased_sf',
+    'total space': 'leased_sf', 'building area': 'leased_sf',
     'price': 'rate_psf', 'date': 'commencement_date',
+    'sign date': 'commencement_date', 'signed date': 'commencement_date',
 }
 
 SALE_OVERRIDES = {
@@ -348,22 +382,32 @@ SALE_OVERRIDES = {
 # --- 6. SEMANTIC COLUMN MAPPER ---
 
 def _find_override(cleaned_header, overrides, target_col):
-    """Check if a cleaned header matches any override for a given target column.
-    Uses exact match first, then substring containment, then fuzzy matching."""
-    # Exact match
+    """Return override score (0.0 = no match, higher = better).
+    Exact matches score highest, longer/more-specific substring matches score higher."""
+    best_score = 0.0
+
+    # Exact match — highest priority
     if cleaned_header in overrides and overrides[cleaned_header] == target_col:
-        return True
-    # Substring: check if any override key is contained in the header
+        return 100.0 + len(cleaned_header)
+
+    # Substring: score by match specificity (key length / header length)
     for key, val in overrides.items():
         if val == target_col and len(key) >= 3 and key in cleaned_header:
-            return True
-    # Fuzzy match for misspellings
+            specificity = len(key) / max(len(cleaned_header), 1)
+            score = 90.0 + (specificity * 10.0)
+            best_score = max(best_score, score)
+
+    if best_score > 0:
+        return best_score
+
+    # Fuzzy match for misspellings — lowest override tier
     override_keys_for_target = [k for k, v in overrides.items() if v == target_col and len(k) >= 4]
     if override_keys_for_target:
         matches = get_close_matches(cleaned_header, override_keys_for_target, n=1, cutoff=0.8)
         if matches:
-            return True
-    return False
+            return 85.0
+
+    return 0.0
 
 
 def _get_schema_embeddings(schema_dict):
@@ -402,17 +446,16 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.55):
     # Build score matrix for Hungarian algorithm
     # score_matrix[t_idx][h_idx] = score (higher is better)
     score_matrix = np.zeros((n_targets, n_inputs))
-    override_locks = {}  # target_idx -> input_idx forced assignments
 
     for t_idx, target_col in enumerate(target_cols):
         target_type = schema_dict[target_col]['type']
         for h_idx in range(n_inputs):
             in_clean = clean_headers[h_idx]
 
-            # Check overrides
-            if _find_override(in_clean, overrides, target_col):
-                score_matrix[t_idx, h_idx] = 100.0
-                override_locks[t_idx] = h_idx
+            # Check overrides — specificity-weighted score
+            override_score = _find_override(in_clean, overrides, target_col)
+            if override_score > 0:
+                score_matrix[t_idx, h_idx] = override_score
                 continue
 
             # Semantic similarity
@@ -458,7 +501,7 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.55):
         if t_idx >= n_targets or h_idx >= n_inputs:
             continue
         score = score_matrix[t_idx, h_idx]
-        if score >= threshold or score >= 100.0:
+        if score >= threshold or score >= 80.0:
             mappings[target_cols[t_idx]] = input_headers[h_idx]
             confidence[target_cols[t_idx]] = round(min(score, 1.0), 3)
         else:
@@ -491,7 +534,7 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.55):
     else:
         out['raw_address_data'] = out.get('address', "")
 
-    return out, confidence
+    return out, confidence, mappings
 
 
 # --- 7. RATE LOGIC ---
@@ -702,14 +745,14 @@ def fetch_google_data(raw_text, api_key):
 
 # --- 9. MAIN PIPELINE ---
 
-def process_file_to_clean_output(df, filename):
+def process_file_to_clean_output(df, filename, sheet_name=None):
     """Full pipeline: classify → map columns → apply rate logic → return (df, confidence)."""
-    ftype = classify_file_type(df.columns, filename)
+    ftype = classify_file_type(df.columns, filename, sheet_name=sheet_name)
     schema = LEASE_SCHEMA if ftype == "LEASE" else SALE_SCHEMA
     if ftype in ("BOTH", "UNKNOWN"):
         schema = {**LEASE_SCHEMA, **SALE_SCHEMA}
 
-    clean_df, confidence = generate_standardized_df(df, schema, ftype)
+    clean_df, confidence, mappings = generate_standardized_df(df, schema, ftype)
 
     # Clean all numeric columns — convert messy strings to proper floats and round
     for col_name, col_info in schema.items():
@@ -722,27 +765,9 @@ def process_file_to_clean_output(df, filename):
         calc_psf = clean_df['sale_price'] / clean_df['building_size']
         clean_df['price_per_sf'] = clean_df['price_per_sf'].fillna(calc_psf.round(2))
 
-    # Apply Houston lease rate logic
-    if ftype == "LEASE":
-        # Find the original header that mapped to rate_psf
-        rate_header = None
-        for col_name in df.columns:
-            if clean_header(col_name) in ('rate psf', 'rent', 'base rent', 'base rent yearly',
-                                           'base rent monthly', 'rental rate'):
-                rate_header = col_name
-                break
-        # Also check the mappings via confidence dict
-        if rate_header is None and 'rate_psf' in confidence and confidence['rate_psf'] > 0:
-            # The mapped column header
-            for orig_col in df.columns:
-                if clean_df.get('rate_psf') is not None:
-                    try:
-                        if df[orig_col].equals(clean_df['rate_psf']):
-                            rate_header = orig_col
-                            break
-                    except Exception:
-                        pass
-
+    # Apply Houston lease rate logic — use actual mapped column header for rate detection
+    if ftype in ("LEASE", "BOTH"):
+        rate_header = mappings.get('rate_psf')
         clean_df = apply_rate_logic(clean_df, rate_header=rate_header)
 
     clean_df['latitude'] = None
@@ -752,3 +777,39 @@ def process_file_to_clean_output(df, filename):
     clean_df['source_type'] = ftype
     clean_df['source_file'] = filename
     return clean_df, confidence
+
+
+def process_all_sheets(file_path, filename, selected_sheets=None):
+    """Process all (or selected) sheets in an Excel file and concatenate results.
+    Returns (combined_df, merged_confidence) or (None, None) on failure."""
+    sheets = get_sheet_names(file_path)
+
+    if selected_sheets is not None:
+        sheets = [s for s in sheets if s in selected_sheets]
+
+    all_dfs = []
+    all_confidences = {}
+    errors = []
+
+    for sheet in sheets:
+        try:
+            df_input = robust_load_file(file_path, sheet_name=sheet)
+            if df_input is None or df_input.empty:
+                errors.append(f"Sheet '{sheet}': could not read or empty")
+                continue
+            result_df, conf = process_file_to_clean_output(df_input, filename, sheet_name=sheet)
+            result_df['source_sheet'] = sheet or filename
+            all_dfs.append(result_df)
+            # Merge confidences — keep per-sheet with sheet prefix
+            sheet_label = sheet or "Sheet1"
+            for k, v in conf.items():
+                key = f"{sheet_label}: {k}" if len(sheets) > 1 else k
+                all_confidences[key] = v
+        except Exception as e:
+            errors.append(f"Sheet '{sheet}': {e}")
+
+    if not all_dfs:
+        return None, None, errors
+
+    combined = pd.concat(all_dfs, ignore_index=True)
+    return combined, all_confidences, errors
