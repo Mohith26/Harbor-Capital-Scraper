@@ -10,8 +10,9 @@ import streamlit_authenticator as stauth
 import folium
 from streamlit_folium import st_folium
 import plotly.express as px
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 from database import Session, SaleComp, LeaseComp, engine
-from comp_engine import robust_load_file, process_file_to_clean_output, fetch_google_data, get_sheet_names, process_all_sheets
+from comp_engine import robust_load_file, process_file_to_clean_output, fetch_google_data, get_sheet_names, process_all_sheets, apply_manual_mapping, LEASE_SCHEMA, SALE_SCHEMA
 from comp_finder import compute_match_scores, compute_ai_scores, blend_scores, load_comps
 from storage import upload_file as upload_to_storage
 from utils import normalize_address, find_duplicates, haversine_miles
@@ -289,6 +290,14 @@ if 'comparison_ids' not in st.session_state:
     st.session_state.comparison_ids = []
 if 'geocoding_done' not in st.session_state:
     st.session_state.geocoding_done = False
+if 'raw_input_df' not in st.session_state:
+    st.session_state.raw_input_df = None
+if 'current_mappings' not in st.session_state:
+    st.session_state.current_mappings = {}
+if 'input_columns' not in st.session_state:
+    st.session_state.input_columns = []
+if 'current_file_type' not in st.session_state:
+    st.session_state.current_file_type = None
 
 # Reset Filter Logic
 def reset_callback():
@@ -460,17 +469,23 @@ if page == "Upload & Process":
 
         if st.session_state.current_filename != uploaded_file.name and selected_sheets:
             with st.spinner('AI is analyzing columns...'):
+                mappings = {}
                 if len(sheets) > 1:
-                    result_df, conf, sheet_errors = process_all_sheets(path, uploaded_file.name, selected_sheets)
+                    result_df, conf, all_mappings, sheet_errors = process_all_sheets(path, uploaded_file.name, selected_sheets)
                     if sheet_errors:
                         for err in sheet_errors:
                             st.warning(err)
+                    # Flatten all_mappings: merge all sheet mappings (last wins for overlapping keys)
+                    for sheet_maps in all_mappings.values():
+                        mappings.update(sheet_maps)
+                    # Store the first sheet's raw df for mapping override
+                    raw_df = robust_load_file(path, sheet_name=selected_sheets[0])
                 else:
-                    df_input = robust_load_file(path)
-                    if df_input is not None:
-                        if len(df_input) >= 500:
-                            st.warning(f"Large file detected ({len(df_input)} rows). Truncated to 500 rows for processing.")
-                        result_df, conf = process_file_to_clean_output(df_input, uploaded_file.name)
+                    raw_df = robust_load_file(path)
+                    if raw_df is not None:
+                        if len(raw_df) >= 500:
+                            st.warning(f"Large file detected ({len(raw_df)} rows). Truncated to 500 rows for processing.")
+                        result_df, conf, mappings = process_file_to_clean_output(raw_df, uploaded_file.name)
                     else:
                         result_df, conf = None, None
 
@@ -479,6 +494,12 @@ if page == "Upload & Process":
                     st.session_state.mapping_confidence = conf
                     st.session_state.current_filename = uploaded_file.name
                     st.session_state.geocoding_done = False
+                    st.session_state.current_mappings = mappings or {}
+                    st.session_state.raw_input_df = raw_df
+                    st.session_state.input_columns = list(raw_df.columns) if raw_df is not None else []
+                    # Determine file type from source_type column
+                    types = result_df['source_type'].unique().tolist()
+                    st.session_state.current_file_type = types[0] if len(types) == 1 else "MIXED"
                     sheet_msg = f" from {len(selected_sheets)} sheet(s)" if len(sheets) > 1 else ""
                     st.success(f"Parsed {len(result_df)} records{sheet_msg}!")
                 else:
@@ -492,27 +513,86 @@ if page == "Upload & Process":
             has_sales = any(t in ('SALE', 'BOTH') for t in types_in_file)
             stype = types_in_file[0] if len(types_in_file) == 1 else "MIXED"
 
-            # --- MAPPING CONFIDENCE DISPLAY ---
+            # --- COLUMN MAPPING — REVIEW & OVERRIDE ---
             if conf:
-                section_header("Column Mapping", "AI confidence scores for each mapped field")
-                conf_df = pd.DataFrame([
-                    {"Target Field": k, "Confidence": v, "Status": "Override" if v >= 1.0 else ("High" if v >= 0.60 else ("Medium" if v >= 0.45 else "Not Mapped"))}
-                    for k, v in conf.items()
-                ])
-                conf_df = conf_df[conf_df['Confidence'] > 0].sort_values('Confidence', ascending=False)
+                # Determine which schema to use for the mapping UI
+                ftype = st.session_state.current_file_type or stype
+                if ftype == "SALE":
+                    mapping_schema = SALE_SCHEMA
+                elif ftype in ("LEASE", "BOTH"):
+                    mapping_schema = LEASE_SCHEMA
+                else:
+                    mapping_schema = {**LEASE_SCHEMA, **SALE_SCHEMA}
 
-                def highlight_confidence(row):
-                    if row['Status'] == 'Not Mapped':
-                        return ['background-color: #ffcccc'] * len(row)
-                    elif row['Status'] == 'Medium':
-                        return ['background-color: #fff3cd'] * len(row)
-                    return [''] * len(row)
+                current_maps = st.session_state.current_mappings or {}
+                input_cols = st.session_state.input_columns or []
+                skip_option = "-- Skip --"
+                selectbox_options = [skip_option] + input_cols
 
-                st.dataframe(
-                    conf_df.style.apply(highlight_confidence, axis=1),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+                with st.expander("Column Mapping — review & override", expanded=True):
+                    st.markdown('<p style="color:#666;font-size:0.85rem;margin-bottom:0.8rem;">Each row shows the AI\'s best guess. Change any dropdown to override.</p>', unsafe_allow_html=True)
+
+                    for target_field, field_info in mapping_schema.items():
+                        c1, c2, c3 = st.columns([2, 3, 1])
+
+                        # Get current mapping and confidence for this field
+                        mapped_col = current_maps.get(target_field)
+                        # Handle per-sheet confidence keys (e.g., "Sheet1: address")
+                        field_conf = conf.get(target_field, 0.0)
+                        if field_conf == 0.0:
+                            # Try per-sheet keys
+                            for k, v in conf.items():
+                                if k.endswith(f": {target_field}") and v > field_conf:
+                                    field_conf = v
+
+                        # Confidence badge
+                        if field_conf >= 1.0:
+                            badge_color, badge_bg, badge_label = "#333", "#E8F5E9", "Override"
+                        elif field_conf >= 0.60:
+                            badge_color, badge_bg, badge_label = "#333", "#E8F5E9", "High"
+                        elif field_conf >= 0.45:
+                            badge_color, badge_bg, badge_label = "#333", "#FFF3DC", "Medium"
+                        else:
+                            badge_color, badge_bg, badge_label = "#333", "#FFCDD2", "Not Mapped"
+
+                        with c1:
+                            label = target_field.replace('_', ' ').title()
+                            st.markdown(f'**{label}**<br><span style="font-size:0.75rem;color:#888;">{field_info["type"]}</span>', unsafe_allow_html=True)
+                        with c2:
+                            default_idx = 0
+                            if mapped_col and mapped_col in input_cols:
+                                default_idx = selectbox_options.index(mapped_col)
+                            st.selectbox(
+                                f"Map to {target_field}",
+                                selectbox_options,
+                                index=default_idx,
+                                key=f"mapping_sel_{target_field}",
+                                label_visibility="collapsed",
+                            )
+                        with c3:
+                            st.markdown(f'<div style="padding:0.4rem 0.6rem;border-radius:8px;background:{badge_bg};color:{badge_color};font-size:0.78rem;font-weight:600;text-align:center;margin-top:0.2rem;">{badge_label}</div>', unsafe_allow_html=True)
+
+                    st.markdown("")
+                    if st.button("Re-Map Columns", type="primary", use_container_width=True):
+                        # Collect user selections
+                        user_mappings = {}
+                        for target_field in mapping_schema:
+                            sel = st.session_state.get(f"mapping_sel_{target_field}", skip_option)
+                            if sel != skip_option:
+                                user_mappings[target_field] = sel
+
+                        # Re-process with manual mapping
+                        raw_df = st.session_state.raw_input_df
+                        if raw_df is not None:
+                            new_df, new_conf = apply_manual_mapping(
+                                raw_df, user_mappings, mapping_schema, ftype, uploaded_file.name
+                            )
+                            st.session_state.clean_df = new_df
+                            st.session_state.mapping_confidence = new_conf
+                            st.session_state.current_mappings = user_mappings
+                            st.session_state.geocoding_done = False
+                            st.toast("Column mapping updated!", icon="\u2705")
+                            st.rerun()
 
             # --- AUTO GEOCODING ---
             section_header("Geocoding", "Standardizing addresses via Google Maps")
@@ -737,18 +817,8 @@ elif page == "Database View":
                 else:
                     st.error("Could not find that address.")
 
-        # --- SORTING ---
-        sort_col1, sort_col2 = st.columns([2, 1])
-        with sort_col1:
-            sort_options = ['id'] + [c for c in df.columns if c not in ('id',)]
-            sort_col = st.selectbox("Sort by", sort_options, index=0, key="sort_col")
-        with sort_col2:
-            sort_order = st.radio("Order", ["Ascending", "Descending"], horizontal=True, key="sort_order")
-
         # --- APPLY FILTERS ---
         df_filtered = df[mask].copy()
-        df_filtered = df_filtered.sort_values(sort_col, ascending=(sort_order == "Ascending"))
-        df_filtered.insert(0, "Select", False)
 
         st.markdown(
             f'<div class="record-count">Showing <b>{len(df_filtered)}</b> of {len(df)} records</div>',
@@ -757,13 +827,12 @@ elif page == "Database View":
 
         # Column ordering for leases
         if view_type == "Lease Comps":
-            cols = list(df_filtered.columns)
-            priority = ['Select', 'address', 'rate_monthly', 'rate_annually', 'leased_sf', 'tenant_name']
-            cols = priority + [c for c in cols if c not in priority]
-            df_filtered = df_filtered[cols]
+            priority = ['address', 'rate_monthly', 'rate_annually', 'leased_sf', 'tenant_name']
+            other_cols = [c for c in df_filtered.columns if c not in priority]
+            df_filtered = df_filtered[priority + other_cols]
 
-        # Column config for formatting
-        col_config = {"Select": st.column_config.CheckboxColumn(required=True)}
+        # Column config for st.dataframe in export tab
+        col_config = {}
         if 'source_file_url' in df_filtered.columns:
             col_config["source_file_url"] = st.column_config.LinkColumn("Source File", display_text="View")
         if view_type == "Sales Comps":
@@ -781,87 +850,67 @@ elif page == "Database View":
         tab_table, tab_map, tab_export = st.tabs(["Data Table", "Map View", "Export & Actions"])
 
         with tab_table:
-            # Pagination
-            PAGE_SIZE = 100
-            total_pages = max(1, math.ceil(len(df_filtered) / PAGE_SIZE))
-            if 'page_num' not in st.session_state:
-                st.session_state.page_num = 1
-            st.session_state.page_num = min(st.session_state.page_num, total_pages)
+            # --- AG Grid ---
+            gb = GridOptionsBuilder.from_dataframe(df_filtered)
+            gb.configure_selection(
+                selection_mode="multiple",
+                use_checkbox=True,
+                header_checkbox=True,
+            )
+            gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=100)
+            gb.configure_default_column(
+                filterable=True,
+                sortable=True,
+                resizable=True,
+                editable=(user_role == "admin"),
+            )
+            # Pin key columns and set widths
+            gb.configure_column("id", pinned="left", width=70, editable=False)
+            gb.configure_column("address", pinned="left", width=280, editable=False)
 
-            if total_pages > 1:
-                col1, col2, col3 = st.columns([1, 2, 1])
-                with col1:
-                    if st.button("Previous", use_container_width=True) and st.session_state.page_num > 1:
-                        st.session_state.page_num -= 1
-                with col2:
-                    st.markdown(f"<div style='text-align:center; padding:0.4rem;'><b>Page {st.session_state.page_num} of {total_pages}</b></div>", unsafe_allow_html=True)
-                with col3:
-                    if st.button("Next", use_container_width=True) and st.session_state.page_num < total_pages:
-                        st.session_state.page_num += 1
-
-            start_idx = (st.session_state.page_num - 1) * PAGE_SIZE
-            df_page = df_filtered.iloc[start_idx:start_idx + PAGE_SIZE].copy()
-
-            # Selection controls — searchable multiselect + buttons
-            row_labels = df_page.apply(
-                lambda r: f"{int(r['id'])}: {str(r.get('address', 'N/A'))[:60]}", axis=1
-            ).tolist()
-
-            sel_col1, sel_col2 = st.columns([3, 1])
-            with sel_col1:
-                selected_labels = st.multiselect(
-                    "Select rows (type to search)",
-                    row_labels,
-                    default=st.session_state.get('_selected_labels', []),
-                    key="row_selector",
-                    placeholder="Search by address or ID..."
-                )
-                st.session_state['_selected_labels'] = selected_labels
-            with sel_col2:
-                if st.button("Select All", use_container_width=True):
-                    st.session_state['_selected_labels'] = row_labels
-                    st.rerun()
-                if st.button("Clear", use_container_width=True):
-                    st.session_state['_selected_labels'] = []
-                    st.rerun()
-
-            # Sync multiselect to the Select column
-            selected_ids = set()
-            for lbl in selected_labels:
-                try:
-                    selected_ids.add(int(lbl.split(":")[0]))
-                except (ValueError, IndexError):
-                    pass
-            df_page["Select"] = df_page["id"].astype(int).isin(selected_ids)
-
-            if user_role == "admin":
-                edited_view = st.data_editor(
-                    df_page,
-                    hide_index=True,
-                    column_config=col_config,
-                    use_container_width=True,
-                )
+            # Number formatting
+            if view_type == "Sales Comps":
+                gb.configure_column("sale_price", type=["numericColumn"], valueFormatter="x ? '$' + Number(x).toLocaleString() : ''")
+                gb.configure_column("price_per_sf", type=["numericColumn"], valueFormatter="x ? '$' + Number(x).toFixed(2) : ''")
+                gb.configure_column("building_size", type=["numericColumn"], valueFormatter="x ? Number(x).toLocaleString() : ''")
+                gb.configure_column("cap_rate", type=["numericColumn"], valueFormatter="x ? Number(x).toFixed(2) + '%' : ''")
             else:
-                edited_view = df_page
-                st.dataframe(
-                    df_page,
-                    hide_index=True,
-                    column_config=col_config,
-                    use_container_width=True,
-                )
+                gb.configure_column("rate_monthly", type=["numericColumn"], valueFormatter="x ? '$' + Number(x).toFixed(2) : ''")
+                gb.configure_column("rate_annually", type=["numericColumn"], valueFormatter="x ? '$' + Number(x).toFixed(2) : ''")
+                gb.configure_column("leased_sf", type=["numericColumn"], valueFormatter="x ? Number(x).toLocaleString() : ''")
+                gb.configure_column("ti_allowance", type=["numericColumn"], valueFormatter="x ? '$' + Number(x).toFixed(2) : ''")
+
+            # Hide internal columns
+            for hide_col in ['created_at', 'raw_address_data', 'source_file']:
+                if hide_col in df_filtered.columns:
+                    gb.configure_column(hide_col, hide=True)
+
+            grid_response = AgGrid(
+                df_filtered,
+                gridOptions=gb.build(),
+                update_mode=GridUpdateMode.SELECTION_CHANGED | GridUpdateMode.VALUE_CHANGED,
+                data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+                fit_columns_on_grid_load=False,
+                height=600,
+                theme="streamlit",
+                allow_unsafe_jscode=True,
+            )
+
+            selected_rows = pd.DataFrame(grid_response.get('selected_rows', []))
+            edited_data = pd.DataFrame(grid_response.get('data', []))
 
             # Save edits (admin only)
             if user_role == "admin" and st.button("Save Changes to Database", use_container_width=True):
                 session = Session()
                 save_count = 0
-                for _, row in edited_view.iterrows():
+                for _, row in edited_data.iterrows():
                     if 'id' not in row or pd.isna(row['id']):
                         continue
                     record_id = int(row['id'])
                     update_dict = {}
-                    skip_cols = {'Select', 'id', 'distance_miles', 'created_at'}
-                    for col in edited_view.columns:
-                        if col in skip_cols:
+                    skip_cols = {'id', 'distance_miles', 'created_at', '_selectedRowNodeInfo'}
+                    for col in edited_data.columns:
+                        if col in skip_cols or col.startswith('_'):
                             continue
                         val = row[col]
                         if pd.isna(val):
@@ -913,8 +962,6 @@ elif page == "Database View":
                 st.info("No geocoded properties to display on map.")
 
         with tab_export:
-            selected_rows = edited_view[edited_view["Select"] == True]
-
             if not selected_rows.empty:
                 section_header("Export", f"{len(selected_rows)} properties selected")
                 export_df = selected_rows
@@ -923,7 +970,7 @@ elif page == "Database View":
                 export_df = df_filtered
 
             st.dataframe(
-                export_df.drop(columns=['Select'], errors='ignore'),
+                export_df,
                 column_config=col_config,
                 use_container_width=True,
                 hide_index=True,
@@ -932,19 +979,19 @@ elif page == "Database View":
             exp1, exp2, exp3 = st.columns(3)
             with exp1:
                 st.download_button(
-                    "KML", generate_kml(export_df.drop(columns=['Select'], errors='ignore')),
+                    "KML", generate_kml(export_df),
                     "comps.kml", "application/vnd.google-earth.kml+xml",
                     use_container_width=True,
                 )
             with exp2:
                 st.download_button(
-                    "Excel", to_excel_bytes(export_df.drop(columns=['Select'], errors='ignore')),
+                    "Excel", to_excel_bytes(export_df),
                     "comps.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                 )
             with exp3:
                 st.download_button(
-                    "CSV", export_df.drop(columns=['Select'], errors='ignore').to_csv(index=False),
+                    "CSV", export_df.to_csv(index=False),
                     "comps.csv", "text/csv",
                     use_container_width=True,
                 )

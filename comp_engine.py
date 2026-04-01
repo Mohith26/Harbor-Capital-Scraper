@@ -776,7 +776,7 @@ def process_file_to_clean_output(df, filename, sheet_name=None):
     clean_df['zip_code'] = None
     clean_df['source_type'] = ftype
     clean_df['source_file'] = filename
-    return clean_df, confidence
+    return clean_df, confidence, mappings
 
 
 def process_all_sheets(file_path, filename, selected_sheets=None):
@@ -789,6 +789,7 @@ def process_all_sheets(file_path, filename, selected_sheets=None):
 
     all_dfs = []
     all_confidences = {}
+    all_mappings = {}
     errors = []
 
     for sheet in sheets:
@@ -797,11 +798,12 @@ def process_all_sheets(file_path, filename, selected_sheets=None):
             if df_input is None or df_input.empty:
                 errors.append(f"Sheet '{sheet}': could not read or empty")
                 continue
-            result_df, conf = process_file_to_clean_output(df_input, filename, sheet_name=sheet)
+            result_df, conf, sheet_mappings = process_file_to_clean_output(df_input, filename, sheet_name=sheet)
             result_df['source_sheet'] = sheet or filename
             all_dfs.append(result_df)
             # Merge confidences — keep per-sheet with sheet prefix
             sheet_label = sheet or "Sheet1"
+            all_mappings[sheet_label] = sheet_mappings
             for k, v in conf.items():
                 key = f"{sheet_label}: {k}" if len(sheets) > 1 else k
                 all_confidences[key] = v
@@ -809,7 +811,58 @@ def process_all_sheets(file_path, filename, selected_sheets=None):
             errors.append(f"Sheet '{sheet}': {e}")
 
     if not all_dfs:
-        return None, None, errors
+        return None, None, {}, errors
 
     combined = pd.concat(all_dfs, ignore_index=True)
-    return combined, all_confidences, errors
+    return combined, all_confidences, all_mappings, errors
+
+
+def apply_manual_mapping(input_df, mapping_dict, schema_dict, file_type, filename):
+    """Re-map columns using a user-provided mapping dict. Skips the AI/Hungarian step.
+    mapping_dict: {target_field: input_column_name_or_None}
+    Returns (clean_df, confidence_dict)."""
+    out = pd.DataFrame()
+    confidence = {}
+
+    for target in schema_dict:
+        src_col = mapping_dict.get(target)
+        if src_col and src_col in input_df.columns:
+            col_data = input_df[src_col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+            out[target] = col_data.values
+            confidence[target] = 1.0  # user override = full confidence
+        else:
+            out[target] = None
+            confidence[target] = 0.0
+
+    # Build raw_address_data from address-related columns
+    addr_col = mapping_dict.get('address')
+    if addr_col and addr_col in input_df.columns:
+        out['raw_address_data'] = input_df[addr_col].astype(str)
+    else:
+        out['raw_address_data'] = ""
+
+    # Clean numeric columns
+    for col_name, col_info in schema_dict.items():
+        if col_info['type'] in ('numeric_money', 'numeric_clean') and col_name in out.columns:
+            out[col_name] = out[col_name].apply(_to_float)
+            out[col_name] = pd.to_numeric(out[col_name], errors='coerce').round(2)
+
+    # Calculate price_per_sf for sales if missing
+    if file_type == "SALE" and 'sale_price' in out.columns and 'building_size' in out.columns:
+        calc_psf = out['sale_price'] / out['building_size']
+        out['price_per_sf'] = out['price_per_sf'].fillna(calc_psf.round(2))
+
+    # Apply rate logic for leases
+    if file_type in ("LEASE", "BOTH"):
+        rate_header = mapping_dict.get('rate_psf')
+        out = apply_rate_logic(out, rate_header=rate_header)
+
+    out['latitude'] = None
+    out['longitude'] = None
+    out['city'] = None
+    out['zip_code'] = None
+    out['source_type'] = file_type
+    out['source_file'] = filename
+    return out, confidence
