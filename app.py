@@ -10,7 +10,6 @@ import streamlit_authenticator as stauth
 import folium
 from streamlit_folium import st_folium
 import plotly.express as px
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 from database import Session, SaleComp, LeaseComp, engine
 from comp_engine import robust_load_file, process_file_to_clean_output, fetch_google_data, get_sheet_names, process_all_sheets, apply_manual_mapping, LEASE_SCHEMA, SALE_SCHEMA
 from comp_finder import compute_match_scores, compute_ai_scores, blend_scores, load_comps
@@ -831,8 +830,8 @@ elif page == "Database View":
             other_cols = [c for c in df_filtered.columns if c not in priority]
             df_filtered = df_filtered[priority + other_cols]
 
-        # Column config for st.dataframe in export tab
-        col_config = {}
+        # Column config
+        col_config = {"Select": st.column_config.CheckboxColumn("Select", default=False)}
         if 'source_file_url' in df_filtered.columns:
             col_config["source_file_url"] = st.column_config.LinkColumn("Source File", display_text="View")
         if view_type == "Sales Comps":
@@ -850,62 +849,47 @@ elif page == "Database View":
         tab_table, tab_map, tab_export = st.tabs(["Data Table", "Map View", "Export & Actions"])
 
         with tab_table:
-            # --- AG Grid ---
-            gb = GridOptionsBuilder.from_dataframe(df_filtered)
-            gb.configure_selection(
-                selection_mode="multiple",
-                use_checkbox=True,
-                header_checkbox=True,
-            )
-            gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=100)
-            gb.configure_default_column(
-                filterable=True,
-                sortable=True,
-                resizable=True,
-                editable=(user_role == "admin"),
-            )
-            # Pin key columns and set widths
-            gb.configure_column("id", pinned="left", width=70, editable=False)
-            gb.configure_column("address", pinned="left", width=280, editable=False)
+            # Hide internal columns from display
+            hide_cols = ['created_at', 'raw_address_data', 'source_file']
+            display_df = df_filtered.drop(columns=[c for c in hide_cols if c in df_filtered.columns])
 
-            # Hide internal columns
-            for hide_col in ['created_at', 'raw_address_data', 'source_file']:
-                if hide_col in df_filtered.columns:
-                    gb.configure_column(hide_col, hide=True)
-
-            grid_response = AgGrid(
-                df_filtered,
-                gridOptions=gb.build(),
-                update_mode=GridUpdateMode.SELECTION_CHANGED | GridUpdateMode.VALUE_CHANGED,
-                data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-                height=600,
-                theme="streamlit",
-                allow_unsafe_jscode=True,
-            )
-
-            selected_rows = grid_response.selected_rows
-            if selected_rows is None:
-                selected_rows = pd.DataFrame()
-            elif not isinstance(selected_rows, pd.DataFrame):
-                selected_rows = pd.DataFrame(selected_rows)
-            edited_data = grid_response.data
-            if edited_data is None:
-                edited_data = df_filtered
-            elif not isinstance(edited_data, pd.DataFrame):
-                edited_data = pd.DataFrame(edited_data)
+            if user_role == "admin":
+                # Admin: editable data_editor with checkbox selection
+                display_df.insert(0, "Select", False)
+                edited_view = st.data_editor(
+                    display_df,
+                    hide_index=True,
+                    column_config=col_config,
+                    use_container_width=True,
+                    height=600,
+                )
+                selected_rows = edited_view[edited_view["Select"] == True].drop(columns=["Select"], errors="ignore")
+            else:
+                # Non-admin: read-only with native row selection
+                event = st.dataframe(
+                    display_df,
+                    hide_index=True,
+                    column_config=col_config,
+                    use_container_width=True,
+                    height=600,
+                    on_select="rerun",
+                    selection_mode="multi-row",
+                )
+                sel_indices = event.selection.rows if event.selection else []
+                selected_rows = display_df.iloc[sel_indices] if sel_indices else pd.DataFrame()
 
             # Save edits (admin only)
             if user_role == "admin" and st.button("Save Changes to Database", use_container_width=True):
                 session = Session()
                 save_count = 0
-                for _, row in edited_data.iterrows():
+                for _, row in edited_view.iterrows():
                     if 'id' not in row or pd.isna(row['id']):
                         continue
                     record_id = int(row['id'])
                     update_dict = {}
-                    skip_cols = {'id', 'distance_miles', 'created_at', '_selectedRowNodeInfo'}
-                    for col in edited_data.columns:
-                        if col in skip_cols or col.startswith('_'):
+                    skip_cols = {'Select', 'id', 'distance_miles', 'created_at'}
+                    for col in edited_view.columns:
+                        if col in skip_cols:
                             continue
                         val = row[col]
                         if pd.isna(val):
@@ -959,7 +943,7 @@ elif page == "Database View":
         with tab_export:
             if not selected_rows.empty:
                 section_header("Export", f"{len(selected_rows)} properties selected")
-                export_df = selected_rows
+                export_df = selected_rows.drop(columns=["Select"], errors="ignore")
             else:
                 section_header("Export", f"All {len(df_filtered)} filtered properties")
                 export_df = df_filtered
