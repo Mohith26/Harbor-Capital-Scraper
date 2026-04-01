@@ -289,14 +289,8 @@ if 'comparison_ids' not in st.session_state:
     st.session_state.comparison_ids = []
 if 'geocoding_done' not in st.session_state:
     st.session_state.geocoding_done = False
-if 'raw_input_df' not in st.session_state:
-    st.session_state.raw_input_df = None
-if 'current_mappings' not in st.session_state:
-    st.session_state.current_mappings = {}
-if 'input_columns' not in st.session_state:
-    st.session_state.input_columns = []
-if 'current_file_type' not in st.session_state:
-    st.session_state.current_file_type = None
+if 'sheet_data' not in st.session_state:
+    st.session_state.sheet_data = {}  # {sheet_name: {raw_df, clean_df, mappings, confidence, file_type, input_columns}}
 
 # Reset Filter Logic
 def reset_callback():
@@ -468,132 +462,155 @@ if page == "Upload & Process":
 
         if st.session_state.current_filename != uploaded_file.name and selected_sheets:
             with st.spinner('AI is analyzing columns...'):
-                mappings = {}
-                if len(sheets) > 1:
-                    result_df, conf, all_mappings, sheet_errors = process_all_sheets(path, uploaded_file.name, selected_sheets)
-                    if sheet_errors:
-                        for err in sheet_errors:
-                            st.warning(err)
-                    # Flatten all_mappings: merge all sheet mappings (last wins for overlapping keys)
-                    for sheet_maps in all_mappings.values():
-                        mappings.update(sheet_maps)
-                    # Store the first sheet's raw df for mapping override
-                    raw_df = robust_load_file(path, sheet_name=selected_sheets[0])
-                else:
-                    raw_df = robust_load_file(path)
-                    if raw_df is not None:
-                        if len(raw_df) >= 500:
-                            st.warning(f"Large file detected ({len(raw_df)} rows). Truncated to 500 rows for processing.")
-                        result_df, conf, mappings = process_file_to_clean_output(raw_df, uploaded_file.name)
-                    else:
-                        result_df, conf = None, None
+                sheet_data = {}
+                for sheet in selected_sheets:
+                    sheet_label = sheet or "Sheet1"
+                    raw_df = robust_load_file(path, sheet_name=sheet)
+                    if raw_df is None or raw_df.empty:
+                        st.warning(f"Sheet '{sheet_label}': could not read or empty")
+                        continue
+                    if len(raw_df) >= 500:
+                        st.warning(f"Sheet '{sheet_label}': {len(raw_df)} rows, truncated to 500.")
+                    try:
+                        clean_df, conf, mappings = process_file_to_clean_output(raw_df, uploaded_file.name, sheet_name=sheet)
+                        ftype = clean_df['source_type'].iloc[0] if not clean_df.empty else "UNKNOWN"
+                        sheet_data[sheet_label] = {
+                            'raw_df': raw_df,
+                            'clean_df': clean_df,
+                            'mappings': mappings,
+                            'confidence': conf,
+                            'file_type': ftype,
+                            'input_columns': list(raw_df.columns),
+                        }
+                    except Exception as e:
+                        st.warning(f"Sheet '{sheet_label}': {e}")
 
-                if result_df is not None:
-                    st.session_state.clean_df = result_df
-                    st.session_state.mapping_confidence = conf
+                if sheet_data:
+                    # Combine all clean_dfs for the unified pipeline
+                    all_clean = []
+                    for sl, sd in sheet_data.items():
+                        cdf = sd['clean_df'].copy()
+                        cdf['source_sheet'] = sl
+                        all_clean.append(cdf)
+                    combined = pd.concat(all_clean, ignore_index=True)
+                    st.session_state.clean_df = combined
+                    st.session_state.mapping_confidence = None  # per-sheet now
                     st.session_state.current_filename = uploaded_file.name
                     st.session_state.geocoding_done = False
-                    st.session_state.current_mappings = mappings or {}
-                    st.session_state.raw_input_df = raw_df
-                    st.session_state.input_columns = list(raw_df.columns) if raw_df is not None else []
-                    # Determine file type from source_type column
-                    types = result_df['source_type'].unique().tolist()
-                    st.session_state.current_file_type = types[0] if len(types) == 1 else "MIXED"
-                    sheet_msg = f" from {len(selected_sheets)} sheet(s)" if len(sheets) > 1 else ""
-                    st.success(f"Parsed {len(result_df)} records{sheet_msg}!")
+                    st.session_state.sheet_data = sheet_data
+                    st.success(f"Parsed {len(combined)} records from {len(sheet_data)} sheet(s)!")
                 else:
-                    st.error("Could not read the file. Check the format.")
+                    st.error("Could not read any sheets. Check the file format.")
 
         if st.session_state.clean_df is not None:
             df = st.session_state.clean_df
-            conf = st.session_state.mapping_confidence
-            types_in_file = df['source_type'].unique().tolist()
-            has_leases = any(t in ('LEASE', 'BOTH') for t in types_in_file)
-            has_sales = any(t in ('SALE', 'BOTH') for t in types_in_file)
-            stype = types_in_file[0] if len(types_in_file) == 1 else "MIXED"
+            sheet_data = st.session_state.sheet_data
+            sheet_names = list(sheet_data.keys())
 
-            # --- COLUMN MAPPING — REVIEW & OVERRIDE ---
-            if conf:
-                # Determine which schema to use for the mapping UI
-                ftype = st.session_state.current_file_type or stype
-                if ftype == "SALE":
-                    mapping_schema = SALE_SCHEMA
-                elif ftype in ("LEASE", "BOTH"):
-                    mapping_schema = LEASE_SCHEMA
-                else:
-                    mapping_schema = {**LEASE_SCHEMA, **SALE_SCHEMA}
+            # --- PER-SHEET TABS: Mapping + Preview ---
+            if len(sheet_names) > 1:
+                section_header("Sheets", f"{len(sheet_names)} sheets loaded — review each tab")
+                sheet_tabs = st.tabs(sheet_names)
+            else:
+                sheet_tabs = [st.container()]
 
-                current_maps = st.session_state.current_mappings or {}
-                input_cols = st.session_state.input_columns or []
-                skip_option = "-- Skip --"
-                selectbox_options = [skip_option] + input_cols
+            for tab_idx, (sheet_tab, sheet_name) in enumerate(zip(sheet_tabs, sheet_names)):
+                sd = sheet_data[sheet_name]
+                with sheet_tab:
+                    if len(sheet_names) > 1:
+                        st.markdown(f'<div class="section-subtitle">{sheet_name} — {len(sd["clean_df"])} records ({sd["file_type"]})</div>', unsafe_allow_html=True)
 
-                with st.expander("Column Mapping — review & override", expanded=True):
-                    st.markdown('<p style="color:#666;font-size:0.85rem;margin-bottom:0.8rem;">Each row shows the AI\'s best guess. Change any dropdown to override.</p>', unsafe_allow_html=True)
+                    # --- COLUMN MAPPING for this sheet ---
+                    ftype = sd['file_type']
+                    if ftype == "SALE":
+                        mapping_schema = SALE_SCHEMA
+                    elif ftype in ("LEASE", "BOTH"):
+                        mapping_schema = LEASE_SCHEMA
+                    else:
+                        mapping_schema = {**LEASE_SCHEMA, **SALE_SCHEMA}
 
-                    for target_field, field_info in mapping_schema.items():
-                        c1, c2, c3 = st.columns([2, 3, 1])
+                    current_maps = sd['mappings'] or {}
+                    input_cols = sd['input_columns']
+                    conf = sd['confidence']
+                    skip_option = "-- Skip --"
+                    selectbox_options = [skip_option] + input_cols
 
-                        # Get current mapping and confidence for this field
-                        mapped_col = current_maps.get(target_field)
-                        # Handle per-sheet confidence keys (e.g., "Sheet1: address")
-                        field_conf = conf.get(target_field, 0.0)
-                        if field_conf == 0.0:
-                            # Try per-sheet keys
-                            for k, v in conf.items():
-                                if k.endswith(f": {target_field}") and v > field_conf:
-                                    field_conf = v
+                    with st.expander(f"Column Mapping — {sheet_name}", expanded=(tab_idx == 0)):
+                        st.markdown('<p style="color:#666;font-size:0.85rem;margin-bottom:0.8rem;">Change any dropdown to override the AI mapping.</p>', unsafe_allow_html=True)
 
-                        # Confidence badge
-                        if field_conf >= 1.0:
-                            badge_color, badge_bg, badge_label = "#333", "#E8F5E9", "Override"
-                        elif field_conf >= 0.60:
-                            badge_color, badge_bg, badge_label = "#333", "#E8F5E9", "High"
-                        elif field_conf >= 0.45:
-                            badge_color, badge_bg, badge_label = "#333", "#FFF3DC", "Medium"
-                        else:
-                            badge_color, badge_bg, badge_label = "#333", "#FFCDD2", "Not Mapped"
+                        for target_field, field_info in mapping_schema.items():
+                            c1, c2, c3 = st.columns([2, 3, 1])
+                            mapped_col = current_maps.get(target_field)
+                            field_conf = conf.get(target_field, 0.0)
 
-                        with c1:
-                            label = target_field.replace('_', ' ').title()
-                            st.markdown(f'**{label}**<br><span style="font-size:0.75rem;color:#888;">{field_info["type"]}</span>', unsafe_allow_html=True)
-                        with c2:
-                            default_idx = 0
-                            if mapped_col and mapped_col in input_cols:
-                                default_idx = selectbox_options.index(mapped_col)
-                            st.selectbox(
-                                f"Map to {target_field}",
-                                selectbox_options,
-                                index=default_idx,
-                                key=f"mapping_sel_{target_field}",
-                                label_visibility="collapsed",
-                            )
-                        with c3:
-                            st.markdown(f'<div style="padding:0.4rem 0.6rem;border-radius:8px;background:{badge_bg};color:{badge_color};font-size:0.78rem;font-weight:600;text-align:center;margin-top:0.2rem;">{badge_label}</div>', unsafe_allow_html=True)
+                            if field_conf >= 1.0:
+                                badge_bg, badge_label = "#E8F5E9", "Override"
+                            elif field_conf >= 0.60:
+                                badge_bg, badge_label = "#E8F5E9", "High"
+                            elif field_conf >= 0.45:
+                                badge_bg, badge_label = "#FFF3DC", "Medium"
+                            else:
+                                badge_bg, badge_label = "#FFCDD2", "Not Mapped"
 
-                    st.markdown("")
-                    if st.button("Re-Map Columns", type="primary", use_container_width=True):
-                        # Collect user selections
-                        user_mappings = {}
-                        for target_field in mapping_schema:
-                            sel = st.session_state.get(f"mapping_sel_{target_field}", skip_option)
-                            if sel != skip_option:
-                                user_mappings[target_field] = sel
+                            with c1:
+                                label = target_field.replace('_', ' ').title()
+                                st.markdown(f'**{label}**<br><span style="font-size:0.75rem;color:#888;">{field_info["type"]}</span>', unsafe_allow_html=True)
+                            with c2:
+                                default_idx = 0
+                                if mapped_col and mapped_col in input_cols:
+                                    default_idx = selectbox_options.index(mapped_col)
+                                st.selectbox(
+                                    f"Map to {target_field}",
+                                    selectbox_options,
+                                    index=default_idx,
+                                    key=f"mapping_sel_{sheet_name}_{target_field}",
+                                    label_visibility="collapsed",
+                                )
+                            with c3:
+                                st.markdown(f'<div style="padding:0.4rem 0.6rem;border-radius:8px;background:{badge_bg};color:#333;font-size:0.78rem;font-weight:600;text-align:center;margin-top:0.2rem;">{badge_label}</div>', unsafe_allow_html=True)
 
-                        # Re-process with manual mapping
-                        raw_df = st.session_state.raw_input_df
-                        if raw_df is not None:
+                        st.markdown("")
+                        if st.button("Re-Map Columns", type="primary", use_container_width=True, key=f"remap_btn_{sheet_name}"):
+                            user_mappings = {}
+                            for target_field in mapping_schema:
+                                sel = st.session_state.get(f"mapping_sel_{sheet_name}_{target_field}", skip_option)
+                                if sel != skip_option:
+                                    user_mappings[target_field] = sel
+
                             new_df, new_conf = apply_manual_mapping(
-                                raw_df, user_mappings, mapping_schema, ftype, uploaded_file.name
+                                sd['raw_df'], user_mappings, mapping_schema, ftype, uploaded_file.name
                             )
-                            st.session_state.clean_df = new_df
-                            st.session_state.mapping_confidence = new_conf
-                            st.session_state.current_mappings = user_mappings
+                            sd['clean_df'] = new_df
+                            sd['confidence'] = new_conf
+                            sd['mappings'] = user_mappings
+                            st.session_state.sheet_data[sheet_name] = sd
+                            # Rebuild combined clean_df
+                            all_clean = []
+                            for sl, s in st.session_state.sheet_data.items():
+                                cdf = s['clean_df'].copy()
+                                cdf['source_sheet'] = sl
+                                all_clean.append(cdf)
+                            st.session_state.clean_df = pd.concat(all_clean, ignore_index=True)
                             st.session_state.geocoding_done = False
-                            st.toast("Column mapping updated!", icon="\u2705")
+                            st.toast(f"Mapping updated for {sheet_name}!", icon="\u2705")
                             st.rerun()
 
-            # --- AUTO GEOCODING ---
+                    # --- PREVIEW for this sheet ---
+                    sheet_df = sd['clean_df']
+                    cols_to_show = list(sheet_df.columns)
+                    hide_cols = ['source_type', 'source_file', 'rate_basis']
+                    if ftype == "LEASE" and 'rate_monthly' in cols_to_show:
+                        priority = ['address', 'rate_monthly', 'rate_annually']
+                        cols_to_show = priority + [c for c in cols_to_show if c not in priority and c not in hide_cols]
+                    elif ftype == "SALE":
+                        cols_to_show = [c for c in cols_to_show if c not in ['rate_monthly', 'rate_annually', 'rate_basis'] and c not in hide_cols]
+                    else:
+                        cols_to_show = [c for c in cols_to_show if c not in hide_cols]
+
+                    st.dataframe(sheet_df[cols_to_show], use_container_width=True, hide_index=True, height=300)
+
+            # --- GEOCODING (runs on combined df) ---
+            df = st.session_state.clean_df
             section_header("Geocoding", "Standardizing addresses via Google Maps")
             missing_geos = df['latitude'].isna().sum()
 
@@ -628,17 +645,20 @@ if page == "Upload & Process":
                         with st.expander(f"Geocoding warnings ({len(warnings)})", expanded=True):
                             for w in warnings:
                                 st.warning(w)
-                            st.info("Tip: Check that addresses include street numbers and city names. Broad addresses like 'Texas' will produce inaccurate results.")
+                            st.info("Tip: Check that addresses include street numbers and city names.")
             else:
                 st.success("All addresses have been geocoded!")
 
-            # --- PREVIEW & SAVE ---
-            section_header("Preview & Save", f"{len(df)} records ready -- review and save to database")
+            # --- FINAL PREVIEW & SAVE ---
+            section_header("Save to Database", f"{len(df)} total records ready")
+            types_in_file = df['source_type'].unique().tolist()
+            has_leases = any(t in ('LEASE', 'BOTH') for t in types_in_file)
+            has_sales = any(t in ('SALE', 'BOTH') for t in types_in_file)
+            stype = types_in_file[0] if len(types_in_file) == 1 else "MIXED"
 
             cols_to_show = list(df.columns)
             hide_cols = ['source_file', 'rate_basis']
             if stype == "MIXED":
-                # Show source_type so users can see which rows are lease vs sale
                 hide_cols_mixed = ['source_file', 'rate_basis']
                 cols_to_show = [c for c in cols_to_show if c not in hide_cols_mixed]
             elif stype == "LEASE" and 'rate_monthly' in cols_to_show:
@@ -775,6 +795,7 @@ if page == "Upload & Process":
                     pass
                 st.session_state.clean_df = None
                 st.session_state.mapping_confidence = None
+                st.session_state.sheet_data = {}
 
 # =====================================================================
 # PAGE 2: DATABASE VIEW
