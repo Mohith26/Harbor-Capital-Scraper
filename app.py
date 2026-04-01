@@ -868,18 +868,6 @@ elif page == "Database View":
             gb.configure_column("id", pinned="left", width=70, editable=False)
             gb.configure_column("address", pinned="left", width=280, editable=False)
 
-            # Number formatting
-            if view_type == "Sales Comps":
-                gb.configure_column("sale_price", type=["numericColumn"], valueFormatter="x ? '$' + Number(x).toLocaleString() : ''")
-                gb.configure_column("price_per_sf", type=["numericColumn"], valueFormatter="x ? '$' + Number(x).toFixed(2) : ''")
-                gb.configure_column("building_size", type=["numericColumn"], valueFormatter="x ? Number(x).toLocaleString() : ''")
-                gb.configure_column("cap_rate", type=["numericColumn"], valueFormatter="x ? Number(x).toFixed(2) + '%' : ''")
-            else:
-                gb.configure_column("rate_monthly", type=["numericColumn"], valueFormatter="x ? '$' + Number(x).toFixed(2) : ''")
-                gb.configure_column("rate_annually", type=["numericColumn"], valueFormatter="x ? '$' + Number(x).toFixed(2) : ''")
-                gb.configure_column("leased_sf", type=["numericColumn"], valueFormatter="x ? Number(x).toLocaleString() : ''")
-                gb.configure_column("ti_allowance", type=["numericColumn"], valueFormatter="x ? '$' + Number(x).toFixed(2) : ''")
-
             # Hide internal columns
             for hide_col in ['created_at', 'raw_address_data', 'source_file']:
                 if hide_col in df_filtered.columns:
@@ -890,14 +878,21 @@ elif page == "Database View":
                 gridOptions=gb.build(),
                 update_mode=GridUpdateMode.SELECTION_CHANGED | GridUpdateMode.VALUE_CHANGED,
                 data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-                fit_columns_on_grid_load=False,
                 height=600,
                 theme="streamlit",
                 allow_unsafe_jscode=True,
             )
 
-            selected_rows = pd.DataFrame(grid_response.get('selected_rows', []))
-            edited_data = pd.DataFrame(grid_response.get('data', []))
+            selected_rows = grid_response.selected_rows
+            if selected_rows is None:
+                selected_rows = pd.DataFrame()
+            elif not isinstance(selected_rows, pd.DataFrame):
+                selected_rows = pd.DataFrame(selected_rows)
+            edited_data = grid_response.data
+            if edited_data is None:
+                edited_data = df_filtered
+            elif not isinstance(edited_data, pd.DataFrame):
+                edited_data = pd.DataFrame(edited_data)
 
             # Save edits (admin only)
             if user_role == "admin" and st.button("Save Changes to Database", use_container_width=True):
