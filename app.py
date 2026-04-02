@@ -547,67 +547,134 @@ if page == "Upload & Process":
                     skip_option = "-- Skip --"
                     selectbox_options = [skip_option] + input_cols
 
-                    with st.expander(f"Column Mapping — {sheet_name}", expanded=(tab_idx == 0)):
-                        st.markdown('<p style="color:#666;font-size:0.85rem;margin-bottom:0.8rem;">Change any dropdown to override the AI mapping.</p>', unsafe_allow_html=True)
+                    # --- RAW INPUT DATA PREVIEW ---
+                    raw_df = sd['raw_df']
+                    raw_preview = raw_df.head(5)
 
-                        for target_field, field_info in mapping_schema.items():
-                            c1, c2, c3 = st.columns([2, 3, 1])
-                            mapped_col = current_maps.get(target_field)
-                            field_conf = conf.get(target_field, 0.0)
+                    st.markdown(f'<div class="section-header" style="font-size:1.1rem;">Raw Input Data</div>', unsafe_allow_html=True)
+                    st.markdown(f'<p style="color:#666;font-size:0.82rem;margin-bottom:0.5rem;">{len(raw_df)} rows, {len(raw_df.columns)} columns — showing first 5 rows</p>', unsafe_allow_html=True)
 
-                            if field_conf >= 1.0:
-                                badge_bg, badge_label = "#E8F5E9", "Override"
-                            elif field_conf >= 0.60:
-                                badge_bg, badge_label = "#E8F5E9", "High"
-                            elif field_conf >= 0.45:
-                                badge_bg, badge_label = "#FFF3DC", "Medium"
-                            else:
-                                badge_bg, badge_label = "#FFCDD2", "Not Mapped"
+                    # Build a color-coded version: highlight columns that are mapped
+                    mapped_input_cols = set(current_maps.values())
 
-                            with c1:
+                    # Build column highlights HTML table
+                    def _col_badge(col_name):
+                        """Return which target field this input column is mapped to, if any."""
+                        for target, src in current_maps.items():
+                            if src == col_name:
+                                return target
+                        return None
+
+                    # Show raw data with column header badges
+                    header_html = '<div style="overflow-x:auto;border:1px solid #e0e0e0;border-radius:8px;margin-bottom:1rem;">'
+                    header_html += '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">'
+
+                    # Column name row with mapping badges
+                    header_html += '<tr style="background:#FAF7F2;">'
+                    for col in raw_preview.columns:
+                        target = _col_badge(col)
+                        if target:
+                            badge = f'<div style="background:#F5A623;color:#fff;padding:2px 6px;border-radius:4px;font-size:0.7rem;margin-top:2px;display:inline-block;">{target.replace("_"," ").title()}</div>'
+                        else:
+                            badge = '<div style="background:#e0e0e0;color:#999;padding:2px 6px;border-radius:4px;font-size:0.7rem;margin-top:2px;display:inline-block;">unmapped</div>'
+                        col_display = str(col)[:25]
+                        header_html += f'<th style="padding:8px 10px;border-bottom:2px solid #F5A623;text-align:left;white-space:nowrap;">{col_display}<br>{badge}</th>'
+                    header_html += '</tr>'
+
+                    # Data rows
+                    for _, row in raw_preview.iterrows():
+                        header_html += '<tr>'
+                        for col in raw_preview.columns:
+                            val = row[col]
+                            cell_text = str(val)[:30] if pd.notna(val) else '<span style="color:#ccc;">—</span>'
+                            bg = '' if col not in mapped_input_cols else 'background:#FFF8EC;'
+                            header_html += f'<td style="padding:6px 10px;border-bottom:1px solid #eee;{bg}white-space:nowrap;">{cell_text}</td>'
+                        header_html += '</tr>'
+
+                    header_html += '</table></div>'
+                    st.markdown(header_html, unsafe_allow_html=True)
+
+                    # --- COLUMN MAPPING CONTROLS ---
+                    st.markdown(f'<div class="section-header" style="font-size:1.1rem;">Column Mapping</div>', unsafe_allow_html=True)
+                    st.markdown('<p style="color:#666;font-size:0.82rem;margin-bottom:0.5rem;">Select which input column maps to each target field. Amber-highlighted columns above are currently mapped.</p>', unsafe_allow_html=True)
+
+                    # Render mapping rows in a compact 2-column grid
+                    target_fields = list(mapping_schema.items())
+                    mid = (len(target_fields) + 1) // 2
+                    left_fields = target_fields[:mid]
+                    right_fields = target_fields[mid:]
+
+                    map_col_left, map_col_right = st.columns(2)
+
+                    for col_container, fields in [(map_col_left, left_fields), (map_col_right, right_fields)]:
+                        with col_container:
+                            for target_field, field_info in fields:
+                                mapped_col = current_maps.get(target_field)
+                                field_conf = conf.get(target_field, 0.0)
+
+                                if field_conf >= 1.0:
+                                    dot_color = "#4CAF50"
+                                elif field_conf >= 0.60:
+                                    dot_color = "#4CAF50"
+                                elif field_conf >= 0.45:
+                                    dot_color = "#F5A623"
+                                else:
+                                    dot_color = "#EF5350"
+
                                 label = target_field.replace('_', ' ').title()
-                                st.markdown(f'**{label}**<br><span style="font-size:0.75rem;color:#888;">{field_info["type"]}</span>', unsafe_allow_html=True)
-                            with c2:
+                                # Show sample value from mapped column
+                                sample = ""
+                                if mapped_col and mapped_col in raw_df.columns:
+                                    first_val = raw_df[mapped_col].dropna().head(1)
+                                    if not first_val.empty:
+                                        sample = str(first_val.iloc[0])[:25]
+
+                                st.markdown(
+                                    f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{dot_color};margin-right:6px;vertical-align:middle;"></span>'
+                                    f'<b style="font-size:0.9rem;">{label}</b>'
+                                    f'{f" — <i style=&quot;color:#888;font-size:0.78rem;&quot;>{sample}</i>" if sample else ""}',
+                                    unsafe_allow_html=True,
+                                )
+
                                 default_idx = 0
                                 if mapped_col and mapped_col in input_cols:
                                     default_idx = selectbox_options.index(mapped_col)
                                 st.selectbox(
-                                    f"Map to {target_field}",
+                                    f"Map {target_field}",
                                     selectbox_options,
                                     index=default_idx,
                                     key=f"mapping_sel_{sheet_name}_{target_field}",
                                     label_visibility="collapsed",
                                 )
-                            with c3:
-                                st.markdown(f'<div style="padding:0.4rem 0.6rem;border-radius:8px;background:{badge_bg};color:#333;font-size:0.78rem;font-weight:600;text-align:center;margin-top:0.2rem;">{badge_label}</div>', unsafe_allow_html=True)
 
-                        st.markdown("")
-                        if st.button("Re-Map Columns", type="primary", use_container_width=True, key=f"remap_btn_{sheet_name}"):
-                            user_mappings = {}
-                            for target_field in mapping_schema:
-                                sel = st.session_state.get(f"mapping_sel_{sheet_name}_{target_field}", skip_option)
-                                if sel != skip_option:
-                                    user_mappings[target_field] = sel
+                    st.markdown("")
+                    if st.button("Re-Map Columns", type="primary", use_container_width=True, key=f"remap_btn_{sheet_name}"):
+                        user_mappings = {}
+                        for target_field in mapping_schema:
+                            sel = st.session_state.get(f"mapping_sel_{sheet_name}_{target_field}", skip_option)
+                            if sel != skip_option:
+                                user_mappings[target_field] = sel
 
-                            new_df, new_conf = apply_manual_mapping(
-                                sd['raw_df'], user_mappings, mapping_schema, ftype, uploaded_file.name
-                            )
-                            sd['clean_df'] = new_df
-                            sd['confidence'] = new_conf
-                            sd['mappings'] = user_mappings
-                            st.session_state.sheet_data[sheet_name] = sd
-                            # Rebuild combined clean_df
-                            all_clean = []
-                            for sl, s in st.session_state.sheet_data.items():
-                                cdf = s['clean_df'].copy()
-                                cdf['source_sheet'] = sl
-                                all_clean.append(cdf)
-                            st.session_state.clean_df = pd.concat(all_clean, ignore_index=True)
-                            st.session_state.geocoding_done = False
-                            st.toast(f"Mapping updated for {sheet_name}!", icon="\u2705")
-                            st.rerun()
+                        new_df, new_conf = apply_manual_mapping(
+                            sd['raw_df'], user_mappings, mapping_schema, ftype, uploaded_file.name
+                        )
+                        sd['clean_df'] = new_df
+                        sd['confidence'] = new_conf
+                        sd['mappings'] = user_mappings
+                        st.session_state.sheet_data[sheet_name] = sd
+                        # Rebuild combined clean_df
+                        all_clean = []
+                        for sl, s in st.session_state.sheet_data.items():
+                            cdf = s['clean_df'].copy()
+                            cdf['source_sheet'] = sl
+                            all_clean.append(cdf)
+                        st.session_state.clean_df = pd.concat(all_clean, ignore_index=True)
+                        st.session_state.geocoding_done = False
+                        st.toast(f"Mapping updated for {sheet_name}!", icon="\u2705")
+                        st.rerun()
 
-                    # --- PREVIEW for this sheet ---
+                    # --- MAPPED OUTPUT PREVIEW ---
+                    st.markdown(f'<div class="section-header" style="font-size:1.1rem;">Mapped Output</div>', unsafe_allow_html=True)
                     sheet_df = sd['clean_df']
                     cols_to_show = list(sheet_df.columns)
                     hide_cols = ['source_type', 'source_file', 'rate_basis']
@@ -619,7 +686,7 @@ if page == "Upload & Process":
                     else:
                         cols_to_show = [c for c in cols_to_show if c not in hide_cols]
 
-                    st.dataframe(sheet_df[cols_to_show], use_container_width=True, hide_index=True, height=300)
+                    st.dataframe(sheet_df[cols_to_show], use_container_width=True, hide_index=True, height=250)
 
             # --- GEOCODING (runs on combined df) ---
             df = st.session_state.clean_df
