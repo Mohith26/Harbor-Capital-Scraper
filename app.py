@@ -776,8 +776,8 @@ if page == "Upload & Process":
 
                 session = Session()
                 records = []
-                skipped = 0
-                skipped_details = []
+                replaced = 0
+                replaced_details = []
                 sale_count = 0
                 lease_count = 0
                 bar = st.progress(0)
@@ -789,14 +789,14 @@ if page == "Upload & Process":
                     row_model = SaleComp if is_sale else LeaseComp
                     existing_records = existing_sale_records if is_sale else existing_lease_records
 
-                    # Auto-skip duplicates
+                    # Auto-replace duplicates: update existing record with new data
+                    dup_id = None
                     if addr and existing_records:
                         matches = find_duplicates(addr, existing_records)
                         if matches:
-                            skipped += 1
-                            skipped_details.append(f"Row {i+1}: {addr[:50]} (matched: {matches[0][1][:50]}, {matches[0][2]:.0%})")
-                            bar.progress((i + 1) / len(edited_df))
-                            continue
+                            dup_id = matches[0][0]
+                            replaced += 1
+                            replaced_details.append(f"Row {i+1}: {addr[:50]} (replaced ID {dup_id}: {matches[0][1][:50]})")
 
                     common = {
                         'address': addr,
@@ -839,7 +839,12 @@ if page == "Upload & Process":
                         }
                         lease_count += 1
 
-                    records.append(row_model(**{**common, **specific}))
+                    all_fields = {**common, **specific}
+                    if dup_id:
+                        # Update existing record
+                        session.query(row_model).filter_by(id=dup_id).update(all_fields)
+                    else:
+                        records.append(row_model(**all_fields))
                     bar.progress((i + 1) / len(edited_df))
 
                 if records:
@@ -850,21 +855,22 @@ if page == "Upload & Process":
                 get_record_counts.clear()
 
                 msg_parts = []
-                if records:
+                new_count = len(records)
+                if new_count:
                     type_detail = []
                     if sale_count:
                         type_detail.append(f"{sale_count} sales")
                     if lease_count:
                         type_detail.append(f"{lease_count} leases")
-                    msg_parts.append(f"Saved {len(records)} new records ({', '.join(type_detail)})")
-                if skipped:
-                    msg_parts.append(f"skipped {skipped} duplicates")
-                msg = " | ".join(msg_parts) if msg_parts else "No records to save."
+                    msg_parts.append(f"{new_count} new records ({', '.join(type_detail)})")
+                if replaced:
+                    msg_parts.append(f"{replaced} updated (replaced duplicates)")
+                msg = "Saved: " + " | ".join(msg_parts) if msg_parts else "No records to save."
                 st.toast(msg, icon="\u2705")
                 st.success(msg)
-                if skipped_details:
-                    with st.expander(f"View {skipped} skipped duplicates"):
-                        for detail in skipped_details:
+                if replaced_details:
+                    with st.expander(f"View {replaced} replaced duplicates"):
+                        for detail in replaced_details:
                             st.text(detail)
 
                 # Cleanup
