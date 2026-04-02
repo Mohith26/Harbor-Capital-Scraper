@@ -93,6 +93,139 @@ def get_sheet_names(file_path):
     return [None]
 
 
+def detect_table_segments(file_path, sheet_name=None, max_rows=None):
+    """Split an Excel/CSV sheet into multiple table segments at gap rows.
+    Returns list of dicts: [{'df': DataFrame, 'segment_title': str|None, 'segment_index': int}, ...]
+    Each df has its own header detected and applied. Single-table sheets return a 1-element list."""
+    if max_rows is None:
+        max_rows = MAX_DATA_ROWS
+    ext = os.path.splitext(file_path)[1].lower()
+
+    # Read the entire sheet raw
+    try:
+        read_kwargs = {'header': None}
+        if ext in ('.xlsx', '.xls'):
+            read_kwargs['engine'] = 'openpyxl'
+            if sheet_name is not None:
+                read_kwargs['sheet_name'] = sheet_name
+            df_raw = pd.read_excel(file_path, **read_kwargs)
+        else:
+            df_raw = pd.read_csv(file_path, **read_kwargs)
+    except Exception:
+        return []
+
+    if df_raw.empty:
+        return []
+
+    # Identify gap rows (entirely empty or whitespace-only)
+    gap_mask = df_raw.apply(
+        lambda row: row.isna().all() or row.astype(str).str.strip().eq('').all(), axis=1
+    )
+
+    # Group consecutive non-gap rows into segments
+    raw_segments = []
+    current_start = None
+    for idx in range(len(df_raw)):
+        if gap_mask.iloc[idx]:
+            if current_start is not None:
+                raw_segments.append((current_start, idx))
+                current_start = None
+        else:
+            if current_start is None:
+                current_start = idx
+    if current_start is not None:
+        raw_segments.append((current_start, len(df_raw)))
+
+    if not raw_segments:
+        return []
+
+    # Process each segment: detect header, build DataFrame
+    results = []
+    pending_title = None
+
+    for seg_start, seg_end in raw_segments:
+        seg_raw = df_raw.iloc[seg_start:seg_end].reset_index(drop=True)
+
+        # Trim leading empty columns
+        seg_raw = _trim_leading_empty_columns(seg_raw)
+        if seg_raw.empty or len(seg_raw.columns) == 0:
+            continue
+
+        # Score rows for header keywords
+        best_row_idx, max_score = -1, 0
+        for ridx, row in seg_raw.iterrows():
+            row_text = " ".join(row.dropna().astype(str)).lower()
+            score = sum(1 for k in HEADER_KEYWORDS if k in row_text)
+            if score > max_score:
+                max_score, best_row_idx = score, ridx
+
+        # If score is too low, this might be a title-only row
+        if max_score < 2:
+            if len(seg_raw) <= 2:
+                # Capture as title for next segment
+                title_text = " ".join(seg_raw.iloc[0].dropna().astype(str)).strip()
+                if title_text:
+                    pending_title = title_text
+                continue
+            # No clear header — skip this segment
+            continue
+
+        # Build DataFrame with detected header
+        header_row = seg_raw.iloc[best_row_idx]
+        col_names = [str(v).strip() if pd.notna(v) and str(v).strip() else f"Unnamed_{i}"
+                     for i, v in enumerate(header_row)]
+        data_rows = seg_raw.iloc[best_row_idx + 1:].copy()
+        data_rows.columns = col_names
+
+        # Merge split headers
+        data_rows = _merge_split_headers(data_rows)
+        data_rows = data_rows.dropna(how='all')
+
+        # Truncate
+        if max_rows and len(data_rows) > max_rows:
+            data_rows = data_rows.head(max_rows)
+
+        # Trim leading empty columns again after header assignment
+        data_rows = _trim_leading_empty_columns(data_rows)
+
+        # Deduplicate column names
+        seen = {}
+        new_cols = []
+        for col in data_rows.columns:
+            col_str = str(col)
+            if col_str in seen:
+                seen[col_str] += 1
+                new_cols.append(f"{col_str}_{seen[col_str]}")
+            else:
+                seen[col_str] = 1
+                new_cols.append(col_str)
+        data_rows.columns = new_cols
+
+        if data_rows.empty:
+            continue
+
+        results.append({
+            'df': data_rows.reset_index(drop=True),
+            'segment_title': pending_title,
+            'segment_index': len(results),
+        })
+        pending_title = None
+
+    return results
+
+
+def robust_load_file_segmented(file_path, sheet_name=None, max_rows=None):
+    """Return list of segment dicts for a sheet. Falls back to robust_load_file()."""
+    segments = detect_table_segments(file_path, sheet_name=sheet_name, max_rows=max_rows)
+    if segments:
+        return segments
+    # Fallback to original loader
+    df = robust_load_file(file_path, max_rows=max_rows, sheet_name=sheet_name)
+    if df is not None and not df.empty:
+        return [{'df': df, 'segment_title': None, 'segment_index': 0}]
+    return []
+
+
 def robust_load_file(file_path, max_rows=None, sheet_name=None):
     """Load CSV or Excel file with intelligent header detection and split-header merging."""
     if max_rows is None:
@@ -210,6 +343,18 @@ def _merge_split_headers(df):
         df = df.iloc[1:].reset_index(drop=True)
 
     return df
+
+
+def _trim_leading_empty_columns(df):
+    """Drop leading columns that are entirely NaN/empty."""
+    cols_to_drop = []
+    for col in df.columns:
+        col_data = df[col]
+        if col_data.isna().all() or col_data.astype(str).str.strip().eq('').all():
+            cols_to_drop.append(col)
+        else:
+            break
+    return df.drop(columns=cols_to_drop) if cols_to_drop else df
 
 
 # --- 4. HELPERS ---
@@ -794,19 +939,29 @@ def process_all_sheets(file_path, filename, selected_sheets=None):
 
     for sheet in sheets:
         try:
-            df_input = robust_load_file(file_path, sheet_name=sheet)
-            if df_input is None or df_input.empty:
+            segments = robust_load_file_segmented(file_path, sheet_name=sheet)
+            if not segments:
                 errors.append(f"Sheet '{sheet}': could not read or empty")
                 continue
-            result_df, conf, sheet_mappings = process_file_to_clean_output(df_input, filename, sheet_name=sheet)
-            result_df['source_sheet'] = sheet or filename
-            all_dfs.append(result_df)
-            # Merge confidences — keep per-sheet with sheet prefix
-            sheet_label = sheet or "Sheet1"
-            all_mappings[sheet_label] = sheet_mappings
-            for k, v in conf.items():
-                key = f"{sheet_label}: {k}" if len(sheets) > 1 else k
-                all_confidences[key] = v
+            for seg in segments:
+                df_input = seg['df']
+                if df_input.empty:
+                    continue
+                base_label = sheet or "Sheet1"
+                if len(segments) == 1:
+                    seg_label = base_label
+                else:
+                    title = seg.get('segment_title')
+                    sec_num = seg['segment_index'] + 1
+                    seg_label = f"{base_label} - {title or f'Section {sec_num}'}"
+
+                result_df, conf, seg_mappings = process_file_to_clean_output(df_input, filename, sheet_name=sheet)
+                result_df['source_sheet'] = seg_label
+                all_dfs.append(result_df)
+                all_mappings[seg_label] = seg_mappings
+                for k, v in conf.items():
+                    key = f"{seg_label}: {k}" if len(sheets) > 1 else k
+                    all_confidences[key] = v
         except Exception as e:
             errors.append(f"Sheet '{sheet}': {e}")
 

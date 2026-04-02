@@ -11,7 +11,7 @@ import folium
 from streamlit_folium import st_folium
 import plotly.express as px
 from database import Session, SaleComp, LeaseComp, engine
-from comp_engine import robust_load_file, process_file_to_clean_output, fetch_google_data, get_sheet_names, process_all_sheets, apply_manual_mapping, LEASE_SCHEMA, SALE_SCHEMA
+from comp_engine import robust_load_file, robust_load_file_segmented, process_file_to_clean_output, fetch_google_data, get_sheet_names, process_all_sheets, apply_manual_mapping, LEASE_SCHEMA, SALE_SCHEMA
 from comp_finder import compute_match_scores, compute_ai_scores, blend_scores, load_comps
 from storage import upload_file as upload_to_storage
 from utils import normalize_address, find_duplicates, haversine_miles
@@ -464,26 +464,38 @@ if page == "Upload & Process":
             with st.spinner('AI is analyzing columns...'):
                 sheet_data = {}
                 for sheet in selected_sheets:
-                    sheet_label = sheet or "Sheet1"
-                    raw_df = robust_load_file(path, sheet_name=sheet)
-                    if raw_df is None or raw_df.empty:
-                        st.warning(f"Sheet '{sheet_label}': could not read or empty")
+                    base_label = sheet or "Sheet1"
+                    segments = robust_load_file_segmented(path, sheet_name=sheet)
+                    if not segments:
+                        st.warning(f"Sheet '{base_label}': could not read or empty")
                         continue
-                    if len(raw_df) >= 500:
-                        st.warning(f"Sheet '{sheet_label}': {len(raw_df)} rows, truncated to 500.")
-                    try:
-                        clean_df, conf, mappings = process_file_to_clean_output(raw_df, uploaded_file.name, sheet_name=sheet)
-                        ftype = clean_df['source_type'].iloc[0] if not clean_df.empty else "UNKNOWN"
-                        sheet_data[sheet_label] = {
-                            'raw_df': raw_df,
-                            'clean_df': clean_df,
-                            'mappings': mappings,
-                            'confidence': conf,
-                            'file_type': ftype,
-                            'input_columns': list(raw_df.columns),
-                        }
-                    except Exception as e:
-                        st.warning(f"Sheet '{sheet_label}': {e}")
+                    for seg in segments:
+                        # Build label
+                        if len(segments) == 1:
+                            seg_label = base_label
+                        else:
+                            title = seg.get('segment_title')
+                            sec_num = seg['segment_index'] + 1
+                            seg_label = f"{base_label} - {title or f'Section {sec_num}'}"
+
+                        raw_df = seg['df']
+                        if raw_df.empty:
+                            continue
+                        if len(raw_df) >= 500:
+                            st.warning(f"'{seg_label}': {len(raw_df)} rows, truncated to 500.")
+                        try:
+                            clean_df, conf, mappings = process_file_to_clean_output(raw_df, uploaded_file.name, sheet_name=sheet)
+                            ftype = clean_df['source_type'].iloc[0] if not clean_df.empty else "UNKNOWN"
+                            sheet_data[seg_label] = {
+                                'raw_df': raw_df,
+                                'clean_df': clean_df,
+                                'mappings': mappings,
+                                'confidence': conf,
+                                'file_type': ftype,
+                                'input_columns': list(raw_df.columns),
+                            }
+                        except Exception as e:
+                            st.warning(f"'{seg_label}': {e}")
 
                 if sheet_data:
                     # Combine all clean_dfs for the unified pipeline
