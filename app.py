@@ -1275,28 +1275,86 @@ if page == "Upload & Process":
 # PAGE 2: DATABASE VIEW
 # =====================================================================
 elif page == "Database View":
-    section_header("Database Explorer")
 
-    # Record counts for type selector
     sale_count, lease_count = get_record_counts()
-    view_type = st.radio(
-        "Select Data Type",
-        [f"Sales Comps ({sale_count})", f"Lease Comps ({lease_count})"],
-        horizontal=True
-    )
+
+    # ── Build filter chips HTML from active session state ──
+    def _db_chip_html(label, rm_key):
+        return f'<span class="hc-chip" id="chip-{rm_key}">{label} &nbsp;<span style="color:#F5A623;font-weight:900;">x</span></span>'
+
+    filter_chips_html = ""
+    if st.session_state.get("filter_cat_city"):
+        for v in st.session_state["filter_cat_city"]:
+            filter_chips_html += _db_chip_html(f"City: {v}", "filter_cat_city")
+    if st.session_state.get("filter_cat_zip_code"):
+        for v in st.session_state["filter_cat_zip_code"]:
+            filter_chips_html += _db_chip_html(f"Zip: {v}", "filter_cat_zip_code")
+    for _fk in ["filter_min_sale_price", "filter_max_sale_price", "filter_min_price_per_sf",
+                "filter_max_price_per_sf", "filter_min_building_size", "filter_max_building_size",
+                "filter_min_rate_monthly", "filter_max_rate_monthly"]:
+        if st.session_state.get(_fk) is not None:
+            _label = _fk.replace("filter_min_", "Min ").replace("filter_max_", "Max ").replace("_", " ").title()
+            filter_chips_html += _db_chip_html(_label, _fk)
+    if st.session_state.get("filter_loc_center"):
+        filter_chips_html += _db_chip_html(f"Near: {st.session_state['filter_loc_center'][:20]}", "filter_loc_center")
+
+    render_topbar("Database View", filter_chips_html)
+
+    # ── Filter chip remove buttons ──
+    _active_filter_keys = [k for k, v in st.session_state.items()
+                           if k.startswith("filter_") and v not in (None, [], "", ())
+                           and not k.endswith("_radius")]
+    if _active_filter_keys:
+        _rm_cols = st.columns(len(_active_filter_keys) + 1)
+        for _i, _fk in enumerate(_active_filter_keys):
+            with _rm_cols[_i]:
+                if st.button(f"x {_fk.replace('filter_', '').replace('_', ' ')[:12]}", key=f"rm_{_fk}",
+                             help=f"Remove {_fk} filter"):
+                    del st.session_state[_fk]
+                    st.rerun()
+        with _rm_cols[-1]:
+            if st.button("Clear all", key="rm_all_db"):
+                reset_callback()
+                st.rerun()
+
+    # ── View type toggle ──
+    _db_col1, _db_col2 = st.columns([2, 3])
+    with _db_col1:
+        view_type = st.radio(
+            "Type",
+            [f"Sales ({sale_count})", f"Leases ({lease_count})"],
+            horizontal=True,
+            key="db_view_type_radio",
+            label_visibility="collapsed",
+        )
     view_type = "Sales Comps" if "Sales" in view_type else "Lease Comps"
 
     df = load_data("SaleComp" if view_type == "Sales Comps" else "LeaseComp").copy()
     model_cls = SaleComp if view_type == "Sales Comps" else LeaseComp
 
-    if df.empty:
-        st.info("Database is empty. Upload files on the Upload page.")
-    else:
-        # --- SIDEBAR FILTERS ---
-        st.sidebar.markdown("---")
-        mask = apply_sidebar_filters(df, view_type, include_proximity=True)
+    # ── Inline filter panel ──
+    with _db_col2:
+        if st.button("+ Filter", key="db_filter_btn"):
+            st.session_state.show_filter_panel = not st.session_state.get("show_filter_panel", False)
 
-        # Distance calculation for proximity search
+    if st.session_state.get("show_filter_panel"):
+        with st.container():
+            st.markdown("---")
+            mask = apply_sidebar_filters(df, view_type, include_proximity=True)
+            st.markdown("---")
+    else:
+        mask = pd.Series([True] * len(df))
+
+    if df.empty:
+        # ── Metrics row: empty state ──
+        m1, m2, m3, m4 = st.columns(4)
+        with m1: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Sales Comps</div></div>', unsafe_allow_html=True)
+        with m2: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Lease Comps</div></div>', unsafe_allow_html=True)
+        with m3: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Avg Sale Price</div></div>', unsafe_allow_html=True)
+        with m4: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Avg $/SF</div></div>', unsafe_allow_html=True)
+        st.info("No records yet. Upload a file to get started.")
+    else:
+        # ── Apply proximity filter if set ──
         center_addr = st.session_state.get("filter_loc_center", "")
         radius = st.session_state.get("filter_loc_radius", 5)
         lat_c, lon_c = None, None
@@ -1311,13 +1369,27 @@ elif page == "Database View":
                 else:
                     st.error("Could not find that address.")
 
-        # --- APPLY FILTERS ---
         df_filtered = df[mask].copy()
 
-        st.markdown(
-            f'<div class="record-count">Showing <b>{len(df_filtered)}</b> of {len(df)} records</div>',
-            unsafe_allow_html=True
-        )
+        # ── Metrics row ──
+        _avg_sale = df_filtered['sale_price'].dropna().mean() if 'sale_price' in df_filtered.columns and view_type == "Sales Comps" else None
+        _avg_psf  = df_filtered['price_per_sf'].dropna().mean() if 'price_per_sf' in df_filtered.columns and view_type == "Sales Comps" else None
+        _avg_rate = df_filtered['rate_monthly'].dropna().mean() if 'rate_monthly' in df_filtered.columns and view_type == "Lease Comps" else None
+
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.markdown(f'<div class="hc-metric-card"><div class="hc-metric-value">{sale_count:,}</div><div class="hc-metric-label">Sales Comps</div></div>', unsafe_allow_html=True)
+        with m2:
+            st.markdown(f'<div class="hc-metric-card"><div class="hc-metric-value">{lease_count:,}</div><div class="hc-metric-label">Lease Comps</div></div>', unsafe_allow_html=True)
+        with m3:
+            _val = f"${_avg_sale:,.0f}" if _avg_sale is not None and pd.notna(_avg_sale) else (f"${_avg_rate:.2f}/mo" if _avg_rate is not None and pd.notna(_avg_rate) else "—")
+            _lbl = "Avg Sale Price" if view_type == "Sales Comps" else "Avg $/SF/Mo"
+            st.markdown(f'<div class="hc-metric-card"><div class="hc-metric-value">{_val}</div><div class="hc-metric-label">{_lbl}</div></div>', unsafe_allow_html=True)
+        with m4:
+            _val4 = f"${_avg_psf:.2f}" if _avg_psf is not None and pd.notna(_avg_psf) else "—"
+            st.markdown(f'<div class="hc-metric-card"><div class="hc-metric-value">{_val4}</div><div class="hc-metric-label">Avg $/SF</div></div>', unsafe_allow_html=True)
+
+        st.markdown("")
 
         # Column ordering for leases
         if view_type == "Lease Comps":
@@ -1325,8 +1397,25 @@ elif page == "Database View":
             other_cols = [c for c in df_filtered.columns if c not in priority]
             df_filtered = df_filtered[priority + other_cols]
 
+        # ── Table controls: inline search + record count ──
+        _tc1, _tc2, _tc3 = st.columns([3, 1, 1])
+        with _tc1:
+            _search = st.text_input("Search", placeholder="Address, buyer/seller, notes...",
+                                    key="db_search_text", label_visibility="collapsed")
+        if _search:
+            _addr_match = df_filtered.get('address', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False)
+            _buyer_match = df_filtered.get('buyer', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False)
+            _seller_match = df_filtered.get('seller', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False)
+            _tenant_match = df_filtered.get('tenant_name', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False)
+            _notes_match = df_filtered.get('notes', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False)
+            df_filtered = df_filtered[_addr_match | _buyer_match | _seller_match | _tenant_match | _notes_match]
+        with _tc3:
+            st.markdown(f'<div class="hc-record-count" style="padding-top:8px;"><b>{len(df_filtered)}</b> of {len(df)}</div>', unsafe_allow_html=True)
+
+        st.caption("-- shift+click for range select --")
+
         # Column config
-        col_config = {"Select": st.column_config.CheckboxColumn("Select", default=False)}
+        col_config = {}
         if 'source_file_url' in df_filtered.columns:
             col_config["source_file_url"] = st.column_config.LinkColumn("Source File", display_text="View")
         if view_type == "Sales Comps":
@@ -1340,38 +1429,37 @@ elif page == "Database View":
             col_config["leased_sf"] = st.column_config.NumberColumn("Leased SF", format="%,.0f")
             col_config["ti_allowance"] = st.column_config.NumberColumn("TI", format="$%.2f")
 
-        # ---- TABS: Data Table | Map | Export & Actions ----
-        tab_table, tab_map, tab_export = st.tabs(["Data Table", "Map View", "Export & Actions"])
+        # ── Tabs: Data Table | Map View ──
+        tab_table, tab_map = st.tabs(["Data Table", "Map View"])
 
         with tab_table:
-            # Hide internal columns from display
             hide_cols = ['created_at', 'raw_address_data', 'source_file']
             display_df = df_filtered.drop(columns=[c for c in hide_cols if c in df_filtered.columns])
 
             if user_role == "admin":
-                # Admin: editable data_editor with checkbox selection
+                display_df = display_df.copy()
                 display_df.insert(0, "Select", False)
+                admin_col_config = {"Select": st.column_config.CheckboxColumn("Select", default=False)}
+                admin_col_config.update(col_config)
+                if 'source_file_url' in display_df.columns:
+                    admin_col_config["source_file_url"] = st.column_config.LinkColumn("Source File", display_text="View")
                 edited_view = st.data_editor(
-                    display_df,
-                    hide_index=True,
-                    column_config=col_config,
-                    use_container_width=True,
-                    height=600,
+                    display_df, hide_index=True, column_config=admin_col_config,
+                    use_container_width=True, height=600,
                 )
                 selected_rows = edited_view[edited_view["Select"] == True].drop(columns=["Select"], errors="ignore")
             else:
-                # Non-admin: read-only with native row selection
                 event = st.dataframe(
-                    display_df,
-                    hide_index=True,
-                    column_config=col_config,
-                    use_container_width=True,
-                    height=600,
-                    on_select="rerun",
-                    selection_mode="multi-row",
+                    display_df, hide_index=True, column_config=col_config,
+                    use_container_width=True, height=600,
+                    on_select="rerun", selection_mode="multi-row",
                 )
                 sel_indices = event.selection.rows if event.selection else []
                 selected_rows = display_df.iloc[sel_indices] if sel_indices else pd.DataFrame()
+
+            # Selection count badge
+            if not selected_rows.empty:
+                st.markdown(f'<span class="hc-selection-badge">{len(selected_rows)} selected</span>', unsafe_allow_html=True)
 
             # Save edits (admin only)
             if user_role == "admin" and st.button("Save Changes to Database", use_container_width=True):
@@ -1396,8 +1484,29 @@ elif page == "Database View":
                 session.close()
                 load_data.clear()
                 get_record_counts.clear()
-                st.toast(f"Saved changes to {save_count} records", icon="\u2705")
+                st.toast(f"Saved changes to {save_count} records")
                 st.rerun()
+
+            # ── Export dropdown panel ──
+            export_df = selected_rows.drop(columns=["Select"], errors="ignore") if not selected_rows.empty else df_filtered
+            export_label = f"{len(selected_rows)} selected" if not selected_rows.empty else f"All {len(df_filtered)} filtered"
+
+            if st.button(f"Export ({export_label}) ▾", key="db_export_toggle"):
+                st.session_state.show_export_menu = not st.session_state.get("show_export_menu", False)
+
+            if st.session_state.get("show_export_menu"):
+                _ex1, _ex2, _ex3 = st.columns(3)
+                with _ex1:
+                    st.download_button("Excel", to_excel_bytes(export_df),
+                                       "comps.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                       use_container_width=True)
+                with _ex2:
+                    st.download_button("CSV", export_df.to_csv(index=False),
+                                       "comps.csv", "text/csv", use_container_width=True)
+                with _ex3:
+                    st.download_button("KML", generate_kml(export_df),
+                                       "comps.kml", "application/vnd.google-earth.kml+xml",
+                                       use_container_width=True)
 
         with tab_map:
             from folium.plugins import MarkerCluster
@@ -1421,7 +1530,6 @@ elif page == "Database View":
                         icon=folium.Icon(color=color, icon='home', prefix='fa'),
                     ).add_to(cluster)
 
-                # Draw radius circle if searching
                 if center_addr and lat_c and lon_c:
                     folium.Circle(
                         location=[lat_c, lon_c],
@@ -1435,48 +1543,11 @@ elif page == "Database View":
             else:
                 st.info("No geocoded properties to display on map.")
 
-        with tab_export:
-            if not selected_rows.empty:
-                section_header("Export", f"{len(selected_rows)} properties selected")
-                export_df = selected_rows.drop(columns=["Select"], errors="ignore")
-            else:
-                section_header("Export", f"All {len(df_filtered)} filtered properties")
-                export_df = df_filtered
-
-            st.dataframe(
-                export_df,
-                column_config=col_config,
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            exp1, exp2, exp3 = st.columns(3)
-            with exp1:
-                st.download_button(
-                    "KML", generate_kml(export_df),
-                    "comps.kml", "application/vnd.google-earth.kml+xml",
-                    use_container_width=True,
-                )
-            with exp2:
-                st.download_button(
-                    "Excel", to_excel_bytes(export_df),
-                    "comps.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
-            with exp3:
-                st.download_button(
-                    "CSV", export_df.to_csv(index=False),
-                    "comps.csv", "text/csv",
-                    use_container_width=True,
-                )
-
-            # Admin actions
-            if user_role == "admin":
-                st.markdown("")
-                section_header("Admin Actions")
-
+        # ── Admin actions (below tabs) ──
+        if user_role == "admin":
+            with st.expander("Admin Actions"):
                 if not selected_rows.empty and 'id' in selected_rows.columns:
-                    confirm_sel = st.checkbox(f"I confirm deletion of {len(selected_rows)} selected records", key="confirm_delete_selected")
+                    confirm_sel = st.checkbox(f"Confirm deletion of {len(selected_rows)} selected records", key="confirm_delete_selected")
                     if confirm_sel and st.button(f"Delete {len(selected_rows)} Selected Records", type="secondary", use_container_width=True):
                         session = Session()
                         ids_to_delete = selected_rows['id'].dropna().astype(int).tolist()
@@ -1488,7 +1559,7 @@ elif page == "Database View":
                         st.success(f"Deleted {len(ids_to_delete)} records.")
                         st.rerun()
 
-                confirm_delete = st.checkbox("I want to delete ALL data", key="confirm_delete")
+                confirm_delete = st.checkbox("Delete ALL data", key="confirm_delete")
                 if confirm_delete:
                     if st.button("Confirm: Clear All Data", type="secondary"):
                         session = Session()
