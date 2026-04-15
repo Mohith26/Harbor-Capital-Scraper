@@ -143,9 +143,11 @@ st.markdown("""
 <style>
 /* ── Hide Streamlit chrome ── */
 #MainMenu {visibility: hidden;}
-header {display: none !important;}
+header, div[data-testid="stHeader"], div[data-testid="stDecoration"],
+div[data-testid="stToolbar"], div[data-testid="stStatusWidget"] {display: none !important;}
 footer {visibility: hidden;}
 .block-container {padding-top: 0 !important; padding-left: 74px !important;}
+section[data-testid="stMain"] {padding-top: 0 !important;}
 section[data-testid="stMain"] > div:first-child {padding-top: 0 !important;}
 section[data-testid="stSidebar"] {display: none;}
 
@@ -213,8 +215,10 @@ a.hc-nav-item, a.hc-nav-item:link, a.hc-nav-item:visited {color: #aaa; text-deco
 
 /* ── Page topbar ── */
 .hc-topbar {
-    position: sticky;
+    position: fixed;
     top: 0;
+    left: 58px;
+    right: 0;
     z-index: 100;
     background: #ffffff;
     border-bottom: 1px solid #e8e8e8;
@@ -223,8 +227,8 @@ a.hc-nav-item, a.hc-nav-item:link, a.hc-nav-item:visited {color: #aaa; text-deco
     align-items: center;
     gap: 10px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    margin-bottom: 1rem;
 }
+.hc-topbar-spacer {height: 57px;}
 .hc-topbar-logo {height: 28px; object-fit: contain;}
 .hc-topbar-divider {width: 1px; height: 24px; background: #e0e0e0; flex-shrink: 0;}
 .hc-topbar-title {
@@ -542,7 +546,7 @@ def render_topbar(page_title, filter_chips_html="", right_html=""):
         f'<div class="hc-topbar-title">{_html.escape(page_title)}</div>'
         f'{chips_section}'
         f'<div class="hc-topbar-right">{right_html}</div>'
-        f'</div>',
+        f'</div><div class="hc-topbar-spacer"></div>',
         unsafe_allow_html=True,
     )
 
