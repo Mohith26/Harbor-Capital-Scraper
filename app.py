@@ -1298,7 +1298,8 @@ elif page == "Database View":
     if st.session_state.get("filter_loc_center"):
         filter_chips_html += _db_chip_html(f"Near: {st.session_state['filter_loc_center'][:20]}", "filter_loc_center")
 
-    render_topbar("Database View", filter_chips_html)
+    right_html = '<button class="hc-export-btn" onclick="document.getElementById(\'db_export_toggle\').click()">Export ▾</button>'
+    render_topbar("Database View", filter_chips_html, right_html)
 
     # ── Filter chip remove buttons ──
     _active_filter_keys = [k for k, v in st.session_state.items()
@@ -1350,7 +1351,9 @@ elif page == "Database View":
         m1, m2, m3, m4 = st.columns(4)
         with m1: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Sales Comps</div></div>', unsafe_allow_html=True)
         with m2: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Lease Comps</div></div>', unsafe_allow_html=True)
-        with m3: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Avg Sale Price</div></div>', unsafe_allow_html=True)
+        with m3:
+            _empty_m3_lbl = "Avg Sale Price" if view_type == "Sales Comps" else "Avg $/SF/Mo"
+            st.markdown(f'<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">{_empty_m3_lbl}</div></div>', unsafe_allow_html=True)
         with m4: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Avg $/SF</div></div>', unsafe_allow_html=True)
         st.info("No records yet. Upload a file to get started.")
     else:
