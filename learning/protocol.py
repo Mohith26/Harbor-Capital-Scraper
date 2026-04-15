@@ -78,8 +78,8 @@ class LearningStore(Protocol):
         ...
 
     # ---- Brokers ----
-    def upsert_broker(self, name: str, confirmed_by: str) -> int:
-        """Return broker_id. Atomic insert if new, else return existing id."""
+    def upsert_broker(self, name: str, confirmed_by: str) -> Optional[int]:
+        """Return broker_id, or None for no-op stores. Atomic insert if new, else return existing id."""
         ...
 
     def find_broker_by_alias(self, name: str) -> Optional[dict]:

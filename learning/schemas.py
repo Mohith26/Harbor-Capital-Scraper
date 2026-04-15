@@ -1,18 +1,10 @@
 """SQLAlchemy models for the learning store tables."""
 from __future__ import annotations
-import os
 from sqlalchemy import Column, Integer, String, Float, Text, Boolean, DateTime, UniqueConstraint, Index, func
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import JSON as GenericJSON
 from sqlalchemy.orm import declarative_base
 
 LearningBase = declarative_base()
-
-def _json_col():
-    db_url = os.environ.get("SUPABASE_DB_URL", "")
-    return JSONB if db_url.startswith("postgresql") else GenericJSON
-
-_JSON = _json_col()
 
 
 class TemplateFingerprint(LearningBase):
@@ -21,8 +13,8 @@ class TemplateFingerprint(LearningBase):
     raw_hash = Column(String, unique=True, nullable=False, index=True)
     broker_id = Column(Integer, nullable=True, index=True)
     file_type = Column(String, nullable=False, index=True)
-    normalized_headers = Column(_JSON, nullable=False, default=list)
-    mappings = Column(_JSON, nullable=False, default=dict)
+    normalized_headers = Column(GenericJSON,nullable=False, default=list)
+    mappings = Column(GenericJSON,nullable=False, default=dict)
     confidence = Column(Float, nullable=False, default=0.5)
     hit_count = Column(Integer, nullable=False, default=1)
     confirmed_by = Column(String, nullable=False, default="seed")
@@ -69,7 +61,7 @@ class Broker(LearningBase):
     __tablename__ = "brokers"
     id = Column(Integer, primary_key=True)
     canonical_name = Column(String, unique=True, nullable=False, index=True)
-    aliases = Column(_JSON, nullable=False, default=list)
+    aliases = Column(GenericJSON,nullable=False, default=list)
     confirmed_by = Column(String, nullable=False, default="llm_auto")
     created_at = Column(DateTime, server_default=func.now())
 

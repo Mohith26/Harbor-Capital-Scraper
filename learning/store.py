@@ -103,11 +103,12 @@ class SqliteLearningStore:
                 confirmed_by=confirmed_by,
                 broker_id=broker_id,
             )
-            # On conflict: increment hit_count and merge mappings
+            # On conflict: increment hit_count and replace mappings with latest
             stmt = stmt.on_conflict_do_update(
                 index_elements=["raw_hash"],
                 set_={
                     "hit_count": TemplateFingerprint.hit_count + 1,
+                    "mappings": dict(mappings),
                     "confirmed_by": confirmed_by,
                 },
             )
@@ -239,31 +240,18 @@ class SqliteLearningStore:
 
     def upsert_broker(self, name: str, confirmed_by: str) -> int:
         with self._session() as s:
-            existing = s.execute(
-                select(Broker).where(
-                    text("lower(canonical_name) = lower(:name)")
-                ).params(name=name)
-            ).scalar_one_or_none()
-            if existing is not None:
-                return existing.id
             stmt = sqlite_insert(Broker).values(
                 canonical_name=name,
                 aliases=[],
                 confirmed_by=confirmed_by,
-            )
-            stmt = stmt.on_conflict_do_update(
+            ).on_conflict_do_update(
                 index_elements=["canonical_name"],
                 set_={"confirmed_by": confirmed_by},
-            )
+            ).returning(Broker.id)
             result = s.execute(stmt)
+            broker_id = result.scalar_one()
             s.commit()
-            # Re-fetch to get the id
-            row = s.execute(
-                select(Broker).where(
-                    text("lower(canonical_name) = lower(:name)")
-                ).params(name=name)
-            ).scalar_one()
-            return row.id
+            return broker_id
 
     def find_broker_by_alias(self, name: str) -> Optional[dict]:
         with self._session() as s:

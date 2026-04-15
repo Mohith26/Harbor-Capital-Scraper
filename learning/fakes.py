@@ -4,16 +4,9 @@ from typing import Optional
 from engine.types import Fingerprint
 
 
-_next_id = 0
-
-def _new_id() -> int:
-    global _next_id
-    _next_id += 1
-    return _next_id
-
-
 class FakeLearningStore:
     def __init__(self):
+        self._id_counter = 0
         self._fingerprints: dict[str, dict] = {}  # raw_hash -> record
         self._corrections: dict[tuple, int] = {}   # (file_type, raw_header, target_column) -> hit_count
         self._geocode_aliases: dict[str, dict] = {}  # raw_text -> record
@@ -22,6 +15,10 @@ class FakeLearningStore:
         self._broker_names: dict[str, int] = {}     # canonical_name.lower() -> id
         self._broker_aliases: dict[str, int] = {}   # alias.lower() -> broker_id
         self._pdf_corrections: list[dict] = []
+
+    def _new_id(self) -> int:
+        self._id_counter += 1
+        return self._id_counter
 
     # ---- Fingerprints ----
     def get_fingerprint_by_hash(self, fp_hash: str) -> Optional[dict]:
@@ -114,7 +111,7 @@ class FakeLearningStore:
         key = name.lower()
         if key in self._broker_names:
             return self._broker_names[key]
-        bid = _new_id()
+        bid = self._new_id()
         self._brokers[bid] = {"id": bid, "canonical_name": name, "aliases": [],
                               "confirmed_by": confirmed_by}
         self._broker_names[key] = bid
@@ -168,7 +165,7 @@ class EmptyLearningStore:
     def insert_geocode_alias(self, raw_text, canonical_address, lat, lng): pass
     def bump_hit_count(self, raw_text): pass
     def record_geocode_override(self, raw_text, override_address, lat, lng, confirmed_by): pass
-    def upsert_broker(self, name, confirmed_by): return 0
+    def upsert_broker(self, name, confirmed_by): return None
     def find_broker_by_alias(self, name): return None
     def find_all_brokers(self): return []
     def record_broker_correction(self, alias, canonical_name, confirmed_by): pass

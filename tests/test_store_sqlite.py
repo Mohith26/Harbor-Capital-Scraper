@@ -63,3 +63,17 @@ def test_find_all_brokers(store):
     store.upsert_broker("CBRE", confirmed_by="u")
     names = {b["canonical_name"] for b in store.find_all_brokers()}
     assert "JLL" in names and "CBRE" in names
+
+
+def test_record_accepted_mapping_updates_mappings_on_conflict(store):
+    """Regression test for Issue 1: mappings must be updated on re-upload, not silently dropped."""
+    fp = _fp("h_conflict", ["Property", "Rent PSF", "Size"])
+    store.record_accepted_mapping(fp, {"Property": "property_name"}, confirmed_by="u")
+    # Second call with additional/changed mapping for same fingerprint hash
+    store.record_accepted_mapping(fp, {"Property": "property_name", "Rent PSF": "rent_psf"}, confirmed_by="u")
+    got = store.get_fingerprint_by_hash("h_conflict")
+    assert got is not None
+    assert got["hit_count"] == 2
+    assert got["mappings"].get("Rent PSF") == "rent_psf", (
+        "mappings were not updated on conflict — they were silently dropped"
+    )

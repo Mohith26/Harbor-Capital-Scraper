@@ -17,17 +17,22 @@ def _to_jsonable(obj: Any) -> Any:
 
 
 def dump_store_to_seed(store, seed_dir: str) -> None:
+    if not hasattr(store, "_fingerprints"):
+        raise TypeError(
+            "dump_store_to_seed only works with FakeLearningStore. "
+            "To export from a SQL store, query the tables directly."
+        )
     path = Path(seed_dir)
     path.mkdir(parents=True, exist_ok=True)
 
-    fingerprints = list(getattr(store, "_fingerprints", {}).values())
+    fingerprints = list(store._fingerprints.values())
     corrections = [
         {"file_type": ft, "raw_header": rh, "target_column": tc, "hit_count": cnt}
-        for (ft, rh, tc), cnt in getattr(store, "_corrections", {}).items()
+        for (ft, rh, tc), cnt in store._corrections.items()
     ]
-    aliases = list(getattr(store, "_geocode_aliases", {}).values())
-    overrides = list(getattr(store, "_geocode_overrides", {}).values())
-    brokers = list(getattr(store, "_brokers", {}).values())
+    aliases = list(store._geocode_aliases.values())
+    overrides = list(store._geocode_overrides.values())
+    brokers = list(store._brokers.values())
 
     (path / "seed_fingerprints.json").write_text(json.dumps(_to_jsonable(fingerprints), indent=2))
     (path / "seed_corrections.json").write_text(json.dumps(_to_jsonable(corrections), indent=2))
