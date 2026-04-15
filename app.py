@@ -185,8 +185,9 @@ section[data-testid="stSidebar"] {display: none;}
     gap: 4px;
     transition: color 0.15s, background 0.15s;
 }
-.hc-nav-item:hover {color: #fff; background: rgba(255,255,255,0.06);}
-.hc-nav-item.active {color: #F5A623; border-left: 2px solid #F5A623;}
+a.hc-nav-item, a.hc-nav-item:link, a.hc-nav-item:visited {color: #aaa; text-decoration: none;}
+.hc-nav-item:hover, a.hc-nav-item:hover {color: #fff; background: rgba(255,255,255,0.06);}
+.hc-nav-item.active, a.hc-nav-item.active, a.hc-nav-item.active:visited {color: #F5A623; border-left: 2px solid #F5A623;}
 .hc-nav-item svg {width: 18px; height: 18px; fill: currentColor;}
 .hc-nav-spacer {flex: 1;}
 .hc-nav-user {
@@ -243,10 +244,12 @@ section[data-testid="stSidebar"] {display: none;}
     white-space: nowrap;
 }
 .hc-export-btn {
+    display: inline-block;
     background: #F5A623;
-    color: #fff;
+    color: #fff !important;
     border: none;
     border-radius: 6px;
+    text-decoration: none;
     padding: 6px 14px;
     font-size: 12px;
     font-weight: 700;
@@ -1299,7 +1302,7 @@ elif page == "Database View":
     if st.session_state.get("filter_loc_center"):
         filter_chips_html += _db_chip_html(f"Near: {st.session_state['filter_loc_center'][:20]}", "filter_loc_center")
 
-    right_html = '<button class="hc-export-btn" onclick="window.location.href=window.location.href.split(\'?\')[0]+\'?export_menu=1\'">Export ▾</button>'
+    right_html = '<a href="?export_menu=1" class="hc-export-btn">Export &#9662;</a>'
 
     # Handle export menu toggle via query param from topbar button
     if st.query_params.get("export_menu") == "1":
