@@ -40,6 +40,64 @@ def clean_text_val(value):
         return None
     return str(value).strip()
 
+def build_preview_col_config(ftype):
+    """Return column_config dict for numeric formatting in preview tables."""
+    cfg = {}
+    # Sales numerics
+    cfg["sale_price"] = st.column_config.NumberColumn("Sale Price", format="$%,.0f")
+    cfg["price_per_sf"] = st.column_config.NumberColumn("$/SF", format="$%.2f")
+    cfg["building_size"] = st.column_config.NumberColumn("Size (SF)", format="%,.0f")
+    cfg["cap_rate"] = st.column_config.NumberColumn("Cap Rate", format="%.2f")
+    cfg["year_built"] = st.column_config.NumberColumn("Year Built", format="%d")
+    # Lease numerics
+    cfg["rate_monthly"] = st.column_config.NumberColumn("$/SF/Mo", format="$%.2f")
+    cfg["rate_annually"] = st.column_config.NumberColumn("$/SF/Yr", format="$%.2f")
+    cfg["leased_sf"] = st.column_config.NumberColumn("Leased SF", format="%,.0f")
+    cfg["ti_allowance"] = st.column_config.NumberColumn("TI", format="$%.2f")
+    cfg["term_months"] = st.column_config.NumberColumn("Term (mo)", format="%d")
+    cfg["clear_height"] = st.column_config.NumberColumn("Clear Height", format="%.1f")
+    cfg["latitude"] = st.column_config.NumberColumn("Lat", format="%.4f")
+    cfg["longitude"] = st.column_config.NumberColumn("Lng", format="%.4f")
+    return cfg
+
+
+def merge_duplicate_rows(df, addr_col='address'):
+    """Merge rows with same normalized address. Later row wins for non-null fields.
+    Returns (merged_df, merge_count)."""
+    if df.empty or addr_col not in df.columns:
+        return df, 0
+    df = df.copy().reset_index(drop=True)
+    norm = df[addr_col].astype(str).str.lower().str.strip().replace('nan', '')
+    df['_norm_addr'] = norm
+    # Only merge non-empty addrs
+    mask_has_addr = df['_norm_addr'].astype(bool) & (df['_norm_addr'] != '')
+    with_addr = df[mask_has_addr]
+    without_addr = df[~mask_has_addr]
+
+    merged_groups = []
+    merge_count = 0
+    for _, group in with_addr.groupby('_norm_addr', sort=False):
+        if len(group) == 1:
+            merged_groups.append(group.iloc[0])
+            continue
+        merge_count += len(group) - 1
+        # Combine: newest (last) row wins for non-null, older fills gaps
+        combined = group.iloc[0].copy()
+        for _, row in group.iloc[1:].iterrows():
+            for col in group.columns:
+                val = row[col]
+                if pd.notna(val) and str(val).strip() not in ('', 'None', 'nan'):
+                    combined[col] = val
+        merged_groups.append(combined)
+
+    if merged_groups:
+        merged_df = pd.DataFrame(merged_groups)
+    else:
+        merged_df = pd.DataFrame(columns=df.columns)
+    merged_df = pd.concat([merged_df, without_addr], ignore_index=True)
+    merged_df = merged_df.drop(columns=['_norm_addr'], errors='ignore')
+    return merged_df, merge_count
+
 def generate_kml(df):
     kml = ['<?xml version="1.0" encoding="UTF-8"?>']
     kml.append('<kml xmlns="http://www.opengis.net/kml/2.2">')
@@ -686,7 +744,7 @@ if page == "Upload & Process":
                     else:
                         cols_to_show = [c for c in cols_to_show if c not in hide_cols]
 
-                    st.dataframe(sheet_df[cols_to_show], use_container_width=True, hide_index=True, height=250)
+                    st.dataframe(sheet_df[cols_to_show], use_container_width=True, hide_index=True, height=250, column_config=build_preview_col_config(ftype))
 
             # --- GEOCODING (runs on combined df) ---
             df = st.session_state.clean_df
@@ -728,30 +786,55 @@ if page == "Upload & Process":
             else:
                 st.success("All addresses have been geocoded!")
 
-            # --- FINAL PREVIEW & SAVE ---
+            # --- FINAL PREVIEW & SAVE (per-sheet tabs when multi) ---
             section_header("Save to Database", f"{len(df)} total records ready")
             types_in_file = df['source_type'].unique().tolist()
             has_leases = any(t in ('LEASE', 'BOTH') for t in types_in_file)
             has_sales = any(t in ('SALE', 'BOTH') for t in types_in_file)
             stype = types_in_file[0] if len(types_in_file) == 1 else "MIXED"
 
-            cols_to_show = list(df.columns)
-            hide_cols = ['source_file', 'rate_basis']
-            if stype == "MIXED":
-                hide_cols_mixed = ['source_file', 'rate_basis']
-                cols_to_show = [c for c in cols_to_show if c not in hide_cols_mixed]
-            elif stype == "LEASE" and 'rate_monthly' in cols_to_show:
-                hide_cols.append('source_type')
-                priority = ['address', 'rate_monthly', 'rate_annually', 'rate_basis']
-                cols_to_show = priority + [c for c in cols_to_show if c not in priority and c not in hide_cols]
-            elif stype == "SALE":
-                hide_cols.append('source_type')
-                cols_to_show = [c for c in cols_to_show if c not in ['rate_monthly', 'rate_annually', 'rate_basis'] and c not in hide_cols]
-            else:
-                hide_cols.append('source_type')
-                cols_to_show = [c for c in cols_to_show if c not in hide_cols]
+            def _select_cols(src_df, ftype_local):
+                c2s = list(src_df.columns)
+                hc = ['source_file', 'rate_basis']
+                if ftype_local in ("LEASE", "BOTH") and 'rate_monthly' in c2s:
+                    hc.append('source_type')
+                    pr = ['address', 'rate_monthly', 'rate_annually', 'rate_basis']
+                    return pr + [c for c in c2s if c not in pr and c not in hc]
+                if ftype_local == "SALE":
+                    hc.append('source_type')
+                    return [c for c in c2s if c not in ['rate_monthly', 'rate_annually', 'rate_basis'] and c not in hc]
+                return [c for c in c2s if c not in hc]
 
-            edited_df = st.data_editor(st.session_state.clean_df[cols_to_show], num_rows="dynamic")
+            edited_frames = {}  # sheet_name -> edited sub-df
+            if len(sheet_names) > 1:
+                save_tabs = st.tabs([f"{sn} ({len(sheet_data[sn]['clean_df'])})" for sn in sheet_names])
+                for save_tab, sn in zip(save_tabs, sheet_names):
+                    with save_tab:
+                        sd_local = sheet_data[sn]
+                        ftype_local = sd_local['file_type']
+                        # Slice combined df by source_sheet to pick up geocoded values
+                        sub_df = df[df['source_sheet'] == sn].copy() if 'source_sheet' in df.columns else sd_local['clean_df'].copy()
+                        if sub_df.empty:
+                            sub_df = sd_local['clean_df'].copy()
+                        cols_show = _select_cols(sub_df, ftype_local)
+                        edited_frames[sn] = st.data_editor(
+                            sub_df[cols_show],
+                            num_rows="dynamic",
+                            column_config=build_preview_col_config(ftype_local),
+                            key=f"final_editor_{sn}",
+                            use_container_width=True,
+                        )
+                # Recombine for save
+                edited_df = pd.concat(list(edited_frames.values()), ignore_index=True)
+            else:
+                cols_show = _select_cols(df, stype)
+                edited_df = st.data_editor(
+                    df[cols_show],
+                    num_rows="dynamic",
+                    column_config=build_preview_col_config(stype),
+                    key="final_editor_single",
+                    use_container_width=True,
+                )
 
             if st.button("Save to Database", type="primary", use_container_width=True):
                 # Upload original file to Supabase Storage
@@ -773,6 +856,11 @@ if page == "Upload & Process":
                 except Exception:
                     pass
                 session_dup.close()
+
+                # Merge intra-upload duplicates (same address within upload) — newest non-null wins
+                edited_df, intra_merged = merge_duplicate_rows(edited_df, addr_col='address')
+                if intra_merged > 0:
+                    st.info(f"Combined {intra_merged} duplicate row(s) within this upload (same address).")
 
                 session = Session()
                 records = []
