@@ -42,7 +42,15 @@ Explicitly out of scope for v1:
 - Post-save record edits in DB View (Phase 2 / future)
 - Record deletions (weak and noisy)
 
-## Architecture — Approach 2 (Staged Pipeline with Learning Injection Points)
+## Architecture — Staged Pipeline with Learning Injection Points
+
+Three approaches were considered during brainstorming:
+
+1. **Additive wrapper** — keep current `comp_engine.py` as-is, wrap with pre/post hooks. Fast to ship but learning is grafted on, not native.
+2. **Staged pipeline with learning injection points** — selected. Split engine into typed stages, each with explicit contracts and learning lookups at stage boundaries.
+3. **LLM-orchestrated agent** — replace rules with GPT-4o as orchestrator. Max accuracy ceiling but expensive, non-deterministic, harder to debug.
+
+Approach 2 is adopted throughout this document.
 
 ### Module Layout
 
@@ -50,6 +58,7 @@ Explicitly out of scope for v1:
 comp_engine.py          (thin facade, preserves public API for app.py)
 engine/
   __init__.py
+  types.py              # dataclasses: LoadedSegment, Fingerprint, FingerprintMatch, MappingResult, CleanedRows, GeocodedRows, SegmentResult, PipelineResult
   loaders.py            # xlsx/csv/pdf loaders → LoadedSegment[]
   vision_pdf.py         # GPT-4o vision PDF extractor
   fingerprint.py        # header-set hashing, broker extraction, tier lookup
@@ -120,14 +129,15 @@ class FingerprintMatch:
     tier: int                        # 1=exact, 2=fuzzy, 3=broker, 4=none
     blueprint: dict[str, str] | None # {target_field: input_header}
     confidence: float                # 0.0-1.0
-    source_id: int | None
+    source_id: int | None            # template_fingerprints.id if DB hit (used for sample_count writeback)
 
 @dataclass
 class MappingResult:
     mappings: dict[str, str]         # target_field → input_header
     confidence: dict[str, float]     # per-field 0.0-1.0
     source: str                      # "fingerprint_exact" | "fingerprint_fuzzy" | "fingerprint_broker" | "corrections_weighted" | "embedding_fallback" | "vision_identity"
-    file_type: str
+    # file_type is NOT duplicated here — it lives on Fingerprint as the single source of truth.
+    # Consumers access it via seg.fingerprint.file_type.
 
 @dataclass
 class CleanedRows:
@@ -144,13 +154,14 @@ class GeocodedRows:
 @dataclass
 class SegmentResult:
     segment: LoadedSegment
-    fingerprint: Fingerprint
+    fingerprint: Fingerprint         # fingerprint.broker holds the LLM guess (nullable)
     fingerprint_match: FingerprintMatch
     mapping: MappingResult
     cleaned: CleanedRows
     geocoded: GeocodedRows
-    broker_llm_guess: str | None
-    loader: str
+    # Stable identifier for joining with edited UI state on save.
+    # Format: "<sheet_name>::<segment_index>" (sheet_name may be None → "root")
+    segment_key: str
 
 @dataclass
 class PipelineResult:
@@ -178,6 +189,80 @@ Orchestrator:
 ```python
 def run_pipeline(path: str, filename: str, store: LearningStore, google_api_key: str) -> PipelineResult
 ```
+
+## LearningStore Protocol
+
+`LearningStore` is a `typing.Protocol` (structural typing), not a base class. Three conforming implementations ship with the redesign:
+
+| Implementation | Backend | Used by |
+|---|---|---|
+| `SupabaseLearningStore` | Live Supabase + seed JSON fallback on cold lookup | Production / local dev |
+| `SqliteLearningStore` | Local `comps.db` (existing SQLite fallback) | Railway deployments without Supabase credentials |
+| `FakeLearningStore` | In-memory dicts | Unit tests |
+| `EmptyLearningStore` | No-op (all reads return None, all writes silently discard) | `seed_from_samples.py` baseline run |
+
+Required methods (any conforming class must implement):
+
+```python
+class LearningStore(Protocol):
+    # Fingerprints / templates
+    def get_fingerprint_by_hash(self, fp_hash: str) -> dict | None: ...
+    def find_fuzzy_fingerprints(self, file_type: str, header_set: list[str], min_jaccard: float) -> list[tuple[dict, float]]: ...
+    def find_broker_fingerprints(self, broker: str, header_set: list[str], min_jaccard: float) -> list[tuple[dict, float]]: ...
+    def record_accepted_mapping(self, fp: Fingerprint, final_mapping: dict[str, str], user: str) -> None: ...
+
+    # Correction votes
+    def get_corrections_for_context(self, file_type: str, broker: str | None) -> list[dict]: ...
+    def upsert_correction(self, clean_header: str, target: str, file_type: str, broker: str | None, user: str) -> None: ...
+
+    # Geocoding
+    def get_geocode_override(self, key: str) -> dict | None: ...
+    def get_geocode_alias(self, key: str) -> dict | None: ...
+    def insert_geocode_alias(self, key: str, raw_text: str, answer: dict, source: str) -> None: ...
+    def bump_hit_count(self, key: str) -> None: ...
+    def record_geocode_override(self, raw_text: str, corrected_addr: str, lat: float, lng: float, city: str, zip_code: str, user: str) -> None: ...
+
+    # Brokers
+    def upsert_broker(self, canonical_name: str, user: str, alias: str | None = None) -> None: ...
+    def find_broker_by_alias(self, candidate: str) -> dict | None: ...
+    def record_broker_correction(self, fingerprint_hash: str, llm_guess: str | None, confirmed: str, user: str) -> None: ...
+
+    # PDF corrections
+    def get_pdf_corrections(self, pdf_hash: str) -> list[dict]: ...
+    def record_pdf_correction(self, pdf_hash: str, page_num: int, row_index: int, field: str, original: str, corrected: str, user: str) -> None: ...
+
+    # Seed bootstrap
+    def load_seed(self, seed_dir: str) -> None: ...
+```
+
+### Concurrency Semantics
+
+All write operations use Postgres `INSERT ... ON CONFLICT ... DO UPDATE` with atomic counter increments. Concrete rules:
+
+- `template_fingerprints`: `ON CONFLICT (fingerprint_hash) DO UPDATE SET sample_count = template_fingerprints.sample_count + 1, confidence = LEAST(1.0, template_fingerprints.confidence + 0.05), last_seen_at = NOW(), mapping_blueprint = EXCLUDED.mapping_blueprint`
+- `column_mapping_corrections`: `ON CONFLICT (clean_header, target_field, file_type, broker) DO UPDATE SET vote_count = column_mapping_corrections.vote_count + 1, last_confirmed = NOW()`
+- `geocode_aliases`: `ON CONFLICT (raw_text_hash) DO UPDATE SET hit_count = geocode_aliases.hit_count + 1` (and only if new `source` has higher priority than existing)
+- `geocode_overrides`: `ON CONFLICT (raw_text_hash) DO UPDATE SET corrected_addr = EXCLUDED.corrected_addr, ...` (overrides always win, no vote accumulation)
+- `brokers`: `ON CONFLICT (canonical_name) DO UPDATE SET upload_count = brokers.upload_count + 1, aliases = ...` (aliases merged via jsonb concatenation)
+- `pdf_extraction_corrections`: no unique constraint; insert-only, most recent wins by timestamp
+
+Two analysts saving the same template simultaneously results in one `sample_count = 2` after both commit — never a PK violation.
+
+### OpenAI / External API Failure Policy
+
+All external calls use exponential backoff (1s, 2s, 4s, 8s) with max 3 retries. On final failure:
+
+| Call site | Fallback behavior |
+|---|---|
+| Embeddings (mapping) | Mark segment mapping as degraded; use override dicts + Tier 1/2/3 only; if those miss, return partial mapping with `confidence=0.0` per field and a warning |
+| Vision PDF extraction | Raise and mark segment failed in `PipelineResult.warnings`; segment produces zero rows |
+| Broker LLM detection | Return `broker=None, broker_llm_guess=None`; pipeline continues, Tier 3 no-ops |
+| LLM address cleanup | Route to geocode `miss` state; row flagged in `geocoded.warnings` |
+| Google geocoding | Same as current code — return raw_text with `lat=lng=None` |
+
+### Supabase Schema Migration
+
+Phase 1 uses `Base.metadata.create_all(engine)` on first boot (matches existing `database.py` pattern). This creates the new learning tables if they don't exist but does NOT migrate column changes on existing tables. For any later column additions or type changes, the implementation plan must include a manual SQL migration step via the Supabase dashboard, documented in a `migrations/` directory committed to the repo. Alembic remains out of scope.
 
 ## Learning Store Schema
 
@@ -276,6 +361,8 @@ corrected_at    TIMESTAMPTZ
 
 Column mapping lookup runs in strict tier order. First hit wins.
 
+**Threshold tunability:** the Jaccard thresholds below (0.80, 0.60) and the correction bonus (+0.30) are initial values, not load-bearing constants. They are tunable via the accuracy regression test — if tuning is needed, update the constants in `engine/fingerprint.py` and `engine/mapping.py` and re-run the regression suite.
+
 ### Tier 1 — Exact hash match
 
 ```sql
@@ -296,7 +383,9 @@ If a broker was extracted and tiers 1/2 missed, pull all fingerprints `WHERE bro
 
 ### Tier 4 — Correction-weighted embedding fallback
 
-No blueprint match. Fall through to the existing embedding + Hungarian algorithm, but pull all `column_mapping_corrections` for this `(file_type, broker)` context. For any input column whose `clean_header` matches a prior correction, add a **+0.30 score bonus** to the mapping matrix cell for that target field. This is how the engine learns from individual header votes even when no full template matches.
+No blueprint match. Fall through to the existing embedding + Hungarian algorithm, but pull all `column_mapping_corrections` for this `(file_type, broker)` context. For any input column whose `clean_header` matches a prior correction, add a **+0.30 bonus** on the **semantic score scale only** (0.0–1.0 range — NOT on the override-dict score scale of 80–110). After the bonus is applied, clamp the cell to ≤ 1.0 so it never dominates a legitimate override-dict hit. Example: semantic similarity 0.55 + correction bonus 0.30 = 0.85 → treated as high-confidence match, but still loses to an override-dict exact match scored at 100+.
+
+This is how the engine learns from individual header votes even when no full template matches. A header that N analysts have all mapped to the same target field becomes a strong prior without needing a full template blueprint.
 
 ### Blueprint Reuse Rules
 
@@ -352,6 +441,8 @@ If LLM guesses JLL but Tier 3 lookup for broker=JLL returns < 0.10 Jaccard overl
 ### Broker-Optional Pipeline
 
 The entire pipeline works with `broker = NULL`. Tiers 1, 2, and 4 all run normally. Tier 3 simply doesn't fire. Harbor-internal sheets and unknown-broker files process fine; they just don't get broker-scoped learning boosts.
+
+**First-boot behavior:** on the very first upload ever (empty `brokers` table, empty `template_fingerprints`), the LLM returns "JLL" (or whatever), `upsert_broker("JLL", ...)` creates the row with `upload_count=1`, tier 3 lookup against an empty broker-scoped fingerprint set returns no match, and the pipeline falls through to tier 4. No special-case handling required — the empty state is the base case.
 
 ## Geocoding Pipeline
 
@@ -495,13 +586,27 @@ Vision output already uses target schema field names. Pipeline flags segment as 
 
 ### PDF Fingerprinting
 
-Hash = `sha256(filename_stem + page_count + first_200_chars_of_page_1_text)`. Same PDF layout re-uploaded → cache hit via `template_fingerprints` → skip vision call, reuse prior extraction stored in `pdf_extraction_corrections`.
+Hash = `sha256(page_count + first_400_chars_of_page_1_text + first_400_chars_of_page_2_text_if_present)`. Content-only — filename is deliberately excluded because users rename downloaded files (`"JLL_Q2 (1).pdf"` vs `"JLL_Q2.pdf"`) but the content is identical. Same PDF layout re-uploaded → cache hit via `template_fingerprints` → skip vision call, reuse prior extraction stored in `pdf_extraction_corrections`.
 
 ### Cost Controls
 
 - Max 20 pages per PDF by default (configurable). Pages beyond warn user.
 - Config: `VISION_MODEL=gpt-4o-mini` (cheap) vs `gpt-4o` (accurate).
 - Cached extractions never re-call vision.
+
+### Cost Ceilings (Rough Estimates)
+
+Per-upload cost ceilings, intended to catch runaway spend:
+
+| Call | Tokens | Est $ per upload | Per-month ceiling (50 uploads) |
+|---|---|---|---|
+| Embeddings (xlsx mapping) | ~500 in | $0.0001 | $0.005 |
+| Broker LLM detection | ~300 in, 50 out | $0.002 | $0.10 |
+| LLM address cleanup (5% of rows, ~200 rows) | ~150 per miss × 10 | $0.003 | $0.15 |
+| Vision PDF (gpt-4o, 5 pages avg) | ~1500 per page × 5 | $0.15 | $7.50 |
+| Vision PDF (gpt-4o-mini, 5 pages avg) | ~1500 per page × 5 | $0.015 | $0.75 |
+
+Total expected monthly cost for the engine: **$10–$20/month at 50 uploads/month**, dominated by vision PDF extraction. The `xlsx`-only path is effectively free. Alarm threshold: if monthly OpenAI spend exceeds **$50** from the comp pipeline, investigate for cache misses or runaway retries.
 
 ### PDF Correction Learning
 
@@ -533,11 +638,12 @@ This is where the learning loop actually closes. The UI is being redesigned in a
 
 ### Required UI Signals
 
-The writeback function needs three things from the UI at save time, regardless of widget structure:
+The writeback function needs four things from the UI at save time, regardless of widget structure:
 
-1. **Final mapping per segment** — `dict[target_field, input_header]` reflecting any user edits
-2. **Per-row geocode overrides** — list of rows where address/city/zip/lat/lng were edited, with the original `raw_address_data` and the corrected values
-3. **Confirmed broker** — the final broker selection (possibly a newly-typed name)
+1. **Final mapping per segment** — `dict[segment_key, dict[target_field, input_header]]`. Keyed by `SegmentResult.segment_key` so multi-segment files (different sheets, mini-tables) can each have their own edited mapping. Input headers must exist in the *currently saved* data; renamed columns get re-derived below before writeback.
+2. **Edited DataFrame** — the full reviewed rows as `pd.DataFrame`, with an `_geocode_overridden` boolean column flagging rows where address/city/zip/lat/lng were edited from the geocoder output.
+3. **Confirmed broker** — the final broker string (existing canonical name, newly-typed name, "INTERNAL", "UNKNOWN", or `None`).
+4. **Segment key column** — the edited DataFrame must carry a `_segment_key` column so rows can be attributed back to their originating segment for PDF correction tracking.
 
 ### `persist_with_learning` Function
 
@@ -547,37 +653,48 @@ New function in `learning/corrections.py`, called from `app.py`'s save handler:
 def persist_with_learning(
     pipeline_result: PipelineResult,
     edited_df: pd.DataFrame,
-    user_email: str,
+    final_mappings: dict[str, dict[str, str]],  # segment_key → {target: input_header}
     broker_confirmed: str | None,
+    user_email: str,
     store: LearningStore,
-):
-    # 1. Save the actual comp records (existing save_records_to_db logic)
-    saved_ids = save_records_to_db(edited_df)
+    db_saver: Callable[[pd.DataFrame], list[int]],  # injected from app.py
+) -> None:
+    # 1. Save the actual comp records via injected callable
+    #    (db_saver is app.py's existing save function — kept in app.py, not pulled into learning/)
+    saved_ids = db_saver(edited_df)
 
     # 2. Broker — confirm or correct
-    if broker_confirmed and broker_confirmed != pipeline_result.segments[0].broker_llm_guess:
+    guessed = pipeline_result.segments[0].fingerprint.broker if pipeline_result.segments else None
+    if broker_confirmed and broker_confirmed != guessed:
         store.record_broker_correction(
             fingerprint_hash=pipeline_result.segments[0].fingerprint.hash,
-            llm_guess=pipeline_result.segments[0].broker_llm_guess,
+            llm_guess=guessed,
             confirmed=broker_confirmed,
             user=user_email,
         )
-    if broker_confirmed:
-        store.upsert_broker(broker_confirmed, user_email)
+    if broker_confirmed and broker_confirmed not in ("UNKNOWN", "INTERNAL"):
+        store.upsert_broker(broker_confirmed, user=user_email)
 
-    # 3. Template fingerprint + mapping blueprint
+    # 3. Template fingerprint + mapping blueprint (one per segment)
     for seg in pipeline_result.segments:
-        final_mapping = extract_final_mapping(edited_df, seg)
+        edited_mapping = final_mappings.get(seg.segment_key, seg.mapping.mappings)
+
+        # Staleness guard: drop any blueprint entry whose input_header is no
+        # longer present in the edited DataFrame (user renamed or removed it).
+        valid_headers = set(seg.segment.raw_headers)
+        clean_mapping = {t: h for t, h in edited_mapping.items() if h in valid_headers}
+
         store.record_accepted_mapping(
             fp=seg.fingerprint,
-            final_mapping=final_mapping,
+            final_mapping=clean_mapping,
             user=user_email,
         )
-        # Also upserts column_mapping_corrections votes per header
+        # record_accepted_mapping internally upserts column_mapping_corrections
+        # votes for each (clean_header(h), target, file_type, broker) tuple.
 
     # 4. Geocode overrides for edited rows
-    for _, row in edited_df.iterrows():
-        if row.get('_geocode_overridden'):
+    if '_geocode_overridden' in edited_df.columns:
+        for _, row in edited_df[edited_df['_geocode_overridden'] == True].iterrows():
             store.record_geocode_override(
                 raw_text=row['raw_address_data'],
                 corrected_addr=row['address'],
@@ -588,9 +705,26 @@ def persist_with_learning(
 
     # 5. PDF row corrections for vision-loaded segments
     for seg in pipeline_result.segments:
-        if seg.loader == "pdf_vision":
-            store.record_pdf_corrections(seg, edited_df, user_email)
+        if seg.segment.loader != "pdf_vision":
+            continue
+        seg_rows = edited_df[edited_df['_segment_key'] == seg.segment_key]
+        for _, row in seg_rows.iterrows():
+            for field in PDF_TRACKED_FIELDS:
+                original = row.get(f'_original_{field}')
+                current = row.get(field)
+                if original is not None and current != original:
+                    store.record_pdf_correction(
+                        pdf_hash=seg.fingerprint.hash,
+                        page_num=int(row.get('_page_num', 0)),
+                        row_index=int(row.get('_row_index', 0)),
+                        field=field,
+                        original=str(original),
+                        corrected=str(current),
+                        user=user_email,
+                    )
 ```
+
+`db_saver` is injected rather than imported so the learning module doesn't depend on `app.py`'s persistence functions. `app.py`'s existing save helper is passed in at the call site.
 
 ### Implicit vs Explicit Correction Semantics
 
@@ -640,19 +774,20 @@ def main():
             write_json(labeled, f"{output_dir}/{slug(filename)}__{seg.segment.segment_index}.json")
 ```
 
-### Seed Review UI
+### Seed Review Workflow (Minimal)
 
-New Streamlit page `"🎓 Seed Review"`, admin-only:
+To keep scope contained, seed review does NOT ship a new Streamlit page. Instead:
 
-- Lists all `learning_data/labeled_samples/*.json` with status badges
-- Pending review → opens an interactive editor showing raw sample rows, auto-detected mapping with confidence bars, broker dropdown
-- User confirms broker, fixes low-confidence mappings, fixes rate units
-- On Approve: JSON updates to `status: approved`, fingerprint + blueprint inserted into live learning store, corrections fire into `column_mapping_corrections`
-- Approved samples also write to `learning_data/seed_fingerprints.json`, `seed_corrections.json`, `seed_brokers.json` — the committed baseline files
+1. `tools/seed_from_samples.py` writes one JSON file per segment to `learning_data/labeled_samples/`, pre-marked with `status: "pending_review"`. Fields with auto-confidence ≥ 0.90 are pre-marked `auto_approved: true`.
+2. User reviews each file manually (text editor — these are simple JSON). For each low-confidence field, user sets the correct value and flips `status: "approved"`.
+3. `tools/rebuild_learning_from_seed.py` scans `learning_data/labeled_samples/*.json`, filters to `status: "approved"`, and inserts into the live learning store via `store.record_accepted_mapping(...)` and related calls.
+4. The same tool writes aggregated `learning_data/seed_fingerprints.json`, `seed_corrections.json`, `seed_brokers.json` (committed baseline). These aggregates replay deterministically.
+
+If a richer Seed Review UI is wanted later, it can be added as a separate follow-on project. For v1, text-editor review is sufficient for 16 files.
 
 ### Hybrid Automation
 
-Any field the auto-pipeline labels with confidence ≥ 0.90 is pre-marked "approved" in the JSON. User only reviews sub-0.90 fields. Realistic estimate for 16 samples: ~40% of fields need human eye, ~60% auto-approved. Total review time: 15–20 minutes.
+Any field the auto-pipeline labels with confidence ≥ 0.90 is pre-marked `auto_approved: true` in the JSON. Review effort concentrates on sub-0.90 fields. Rough estimate for 16 samples: majority of fields auto-approved, review time ~15–30 minutes total (not load-bearing — actual ratio depends on how well templates match on first run).
 
 ### Replay Guarantee
 
@@ -742,8 +877,12 @@ Marked `@pytest.mark.integration`. Runs only when explicitly requested. Becomes 
 
 ### Phase 2 — Extract Existing Logic Into Stages
 - Move current functions into `engine/` modules without behavior change
-- `comp_engine.py` becomes a facade re-exporting from new locations
-- Golden-file tests: current engine vs new-split engine on all 16 samples must be byte-identical
+- `comp_engine.py` becomes a facade re-exporting from new locations so `app.py` imports remain valid
+- **Equivalence test strategy** (byte-identical is not achievable because `openai.embeddings.create` is non-deterministic across runs and model versions):
+  - Build a one-time "embedding fixture" by running the current engine against all 16 sample files, capturing every call to `get_embeddings()` and caching the returned np arrays in `tests/fixtures/embeddings_cache.pkl`
+  - Both the current engine and the new-split engine run tests with `get_embeddings()` monkeypatched to read from the fixture cache
+  - With deterministic inputs, assert: identical `mappings` dicts, `confidence` within `abs tol 1e-9`, identical cleaned numeric values, identical `rate_basis` strings
+  - Fixture is committed; can be regenerated via `tools/rebuild_embedding_fixture.py` if schema or sample files change
 
 ### Phase 3 — Fingerprinting + Tiered Lookup
 - Build `fingerprint.py` + `match_fingerprint()`
@@ -775,10 +914,11 @@ Marked `@pytest.mark.integration`. Runs only when explicitly requested. Becomes 
 - Mocked vision tests
 
 ### Phase 8 — Seed the Store
-- Run `tools/seed_from_samples.py` locally
-- Approve in Seed Review UI
-- Commit `learning_data/*.json`
-- Verify with `tools/rebuild_learning_from_seed.py` against local SQLite
+- Run `tools/seed_from_samples.py` locally against `sample comp files/`
+- Manually review and approve the generated JSON files in `learning_data/labeled_samples/`
+- Run `tools/rebuild_learning_from_seed.py` → writes aggregated seed JSONs
+- Commit `learning_data/*.json` (labeled samples + aggregates)
+- Verify accuracy regression test passes against SQLite learning store loaded from seed
 
 ### Phase 9 — Regression Gate + Cleanup
 - Enable accuracy regression test in CI (manual trigger)
