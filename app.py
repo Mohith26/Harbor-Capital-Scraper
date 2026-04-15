@@ -1594,19 +1594,23 @@ elif page == "Database View":
 # PAGE 3: ANALYTICS
 # =====================================================================
 elif page == "Analytics":
-    section_header("Analytics Dashboard")
-
     a_sale_count, a_lease_count = get_record_counts()
 
-    # Type selector with counts
-    analytics_type = st.radio(
-        "Analyze",
-        [f"Sales Comps ({a_sale_count})", f"Lease Comps ({a_lease_count})"],
-        horizontal=True, key="analytics_type"
-    )
+    # ── Topbar ──
+    render_topbar("Analytics", right_html="")
+
+    # ── Type toggle ──
+    _an_c1, _an_c2, _an_c3 = st.columns([2, 2, 3])
+    with _an_c1:
+        analytics_type = st.radio(
+            "Analyze",
+            [f"Sales ({a_sale_count})", f"Leases ({a_lease_count})"],
+            horizontal=True,
+            key="analytics_type",
+            label_visibility="collapsed",
+        )
     analytics_type = "Sales Comps" if "Sales" in analytics_type else "Lease Comps"
 
-    # Only load the selected type
     if analytics_type == "Sales Comps":
         sales_df = load_data("SaleComp").copy()
         leases_df = pd.DataFrame()
@@ -1614,17 +1618,26 @@ elif page == "Analytics":
         leases_df = load_data("LeaseComp").copy()
         sales_df = pd.DataFrame()
 
-    # Sidebar filters
-    st.sidebar.markdown("---")
+    # ── Inline filter panel ──
+    with _an_c2:
+        if st.button("+ Filter", key="an_filter_btn"):
+            st.session_state.show_filter_panel = not st.session_state.get("show_filter_panel", False)
 
-    if analytics_type == "Sales Comps" and not sales_df.empty:
-        analytics_mask = apply_sidebar_filters(sales_df, "Sales Comps")
-        filtered_sales = sales_df[analytics_mask]
-        filtered_leases = pd.DataFrame()
-    elif analytics_type == "Lease Comps" and not leases_df.empty:
-        analytics_mask = apply_sidebar_filters(leases_df, "Lease Comps")
-        filtered_leases = leases_df[analytics_mask]
-        filtered_sales = pd.DataFrame()
+    if st.session_state.get("show_filter_panel"):
+        with st.container():
+            st.markdown("---")
+            if analytics_type == "Sales Comps" and not sales_df.empty:
+                analytics_mask = apply_sidebar_filters(sales_df, "Sales Comps")
+                filtered_sales = sales_df[analytics_mask]
+                filtered_leases = pd.DataFrame()
+            elif analytics_type == "Lease Comps" and not leases_df.empty:
+                analytics_mask = apply_sidebar_filters(leases_df, "Lease Comps")
+                filtered_leases = leases_df[analytics_mask]
+                filtered_sales = pd.DataFrame()
+            else:
+                filtered_sales = sales_df
+                filtered_leases = leases_df
+            st.markdown("---")
     else:
         filtered_sales = sales_df
         filtered_leases = leases_df
@@ -1668,7 +1681,7 @@ elif page == "Analytics":
 
     # --- CHARTS ---
     if analytics_type == "Sales Comps":
-        tab1, tab2, tab3, tab4 = st.tabs(["Distributions", "Price vs Size", "Trends", "By Zip Code"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Distributions", "Price vs Size", "Trends", "By Zip Code", "Map", "Compare"])
 
         with tab1:
             if not filtered_sales.empty:
@@ -1759,8 +1772,44 @@ elif page == "Analytics":
             else:
                 st.info("No zip code data available.")
 
+        with tab5:
+            heat_df = filtered_sales
+            if heat_df.empty:
+                st.info("No data matching current filters.")
+            else:
+                geo_data = heat_df.dropna(subset=['latitude', 'longitude'])
+                value_col = 'price_per_sf'
+                geo_data = geo_data.dropna(subset=[value_col])
+                if not geo_data.empty:
+                    fig = px.density_mapbox(geo_data, lat='latitude', lon='longitude', z=value_col,
+                                            radius=20, zoom=9, mapbox_style='open-street-map',
+                                            hover_data=['address'],
+                                            title="Price/SF Heat Map")
+                    fig.update_layout(height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Not enough geocoded data for heat map.")
+
+        with tab6:
+            if sales_df.empty:
+                st.info("No data available for comparison.")
+            else:
+                options = sales_df.apply(
+                    lambda r: f"{r['id']}: {r.get('address', 'N/A')} - ${r.get('sale_price', 0):,.0f}", axis=1
+                ).tolist()
+                selected = st.multiselect("Select properties to compare (2-5)", options, max_selections=5)
+                if len(selected) >= 2:
+                    ids = [int(s.split(":")[0]) for s in selected]
+                    compare_raw = sales_df[sales_df['id'].isin(ids)].copy()
+                    display_fields = ['address', 'sale_price', 'price_per_sf', 'building_size',
+                                     'year_built', 'cap_rate', 'closing_date', 'buyer', 'seller', 'city', 'zip_code']
+                    available = [f for f in display_fields if f in compare_raw.columns]
+                    compare_df = compare_raw[available].set_index('address').T
+                    compare_df.index = compare_df.index.map(lambda x: x.replace('_', ' ').title())
+                    st.dataframe(compare_df, use_container_width=True)
+
     else:  # Lease Comps analytics
-        tab1, tab2, tab3, tab4 = st.tabs(["Distributions", "Rate vs Size", "Trends", "By Zip Code"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Distributions", "Rate vs Size", "Trends", "By Zip Code", "Map", "Compare"])
 
         with tab1:
             if not filtered_leases.empty:
@@ -1845,62 +1894,42 @@ elif page == "Analytics":
             else:
                 st.info("No zip code data available.")
 
-    # --- HEAT MAP ---
-    section_header("Geographic Heat Map")
-    heat_df = df_a if not df_a.empty else pd.DataFrame()
-    if not heat_df.empty:
-        geo_data = heat_df.dropna(subset=['latitude', 'longitude'])
-        if analytics_type == "Sales Comps":
-            value_col = 'price_per_sf'
-        else:
-            value_col = 'rate_monthly'
-        geo_data = geo_data.dropna(subset=[value_col])
-        if not geo_data.empty:
-            fig = px.density_mapbox(geo_data, lat='latitude', lon='longitude', z=value_col,
-                                    radius=20, zoom=9, mapbox_style='open-street-map',
-                                    hover_data=['address'],
-                                    title=f"{value_col.replace('_', ' ').title()} Heat Map")
-            fig.update_layout(height=500)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Not enough geocoded data for heat map.")
-    else:
-        st.info("No data for heat map.")
+        with tab5:
+            heat_df = filtered_leases
+            if heat_df.empty:
+                st.info("No data matching current filters.")
+            else:
+                geo_data = heat_df.dropna(subset=['latitude', 'longitude'])
+                value_col = 'rate_monthly'
+                geo_data = geo_data.dropna(subset=[value_col])
+                if not geo_data.empty:
+                    fig = px.density_mapbox(geo_data, lat='latitude', lon='longitude', z=value_col,
+                                            radius=20, zoom=9, mapbox_style='open-street-map',
+                                            hover_data=['address'],
+                                            title="Rate/SF/Mo Heat Map")
+                    fig.update_layout(height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Not enough geocoded data for heat map.")
 
-    # --- PROPERTY COMPARISON ---
-    section_header("Property Comparison")
-
-    if analytics_type == "Sales Comps" and not sales_df.empty:
-        options = sales_df.apply(
-            lambda r: f"{r['id']}: {r.get('address', 'N/A')} - ${r.get('sale_price', 0):,.0f}", axis=1
-        ).tolist()
-        selected = st.multiselect("Select properties to compare (2-5)", options, max_selections=5)
-        if len(selected) >= 2:
-            ids = [int(s.split(":")[0]) for s in selected]
-            compare_raw = sales_df[sales_df['id'].isin(ids)].copy()
-            display_fields = ['address', 'sale_price', 'price_per_sf', 'building_size',
-                             'year_built', 'cap_rate', 'closing_date', 'buyer', 'seller', 'city', 'zip_code']
-            available = [f for f in display_fields if f in compare_raw.columns]
-            compare_df = compare_raw[available].set_index('address').T
-            compare_df.index = compare_df.index.map(lambda x: x.replace('_', ' ').title())
-            st.dataframe(compare_df, use_container_width=True)
-    elif analytics_type == "Lease Comps" and not leases_df.empty:
-        options = leases_df.apply(
-            lambda r: f"{r['id']}: {r.get('address', 'N/A')} - {r.get('tenant_name', 'N/A')}", axis=1
-        ).tolist()
-        selected = st.multiselect("Select properties to compare (2-5)", options, max_selections=5)
-        if len(selected) >= 2:
-            ids = [int(s.split(":")[0]) for s in selected]
-            compare_raw = leases_df[leases_df['id'].isin(ids)].copy()
-            display_fields = ['address', 'rate_monthly', 'rate_annually', 'leased_sf',
-                             'tenant_name', 'term_months', 'ti_allowance', 'lease_type',
-                             'building_type', 'commencement_date', 'city', 'zip_code']
-            available = [f for f in display_fields if f in compare_raw.columns]
-            compare_df = compare_raw[available].set_index('address').T
-            compare_df.index = compare_df.index.map(lambda x: x.replace('_', ' ').title())
-            st.dataframe(compare_df, use_container_width=True)
-    else:
-        st.info("Add data to use the comparison tool.")
+        with tab6:
+            if leases_df.empty:
+                st.info("No data available for comparison.")
+            else:
+                options = leases_df.apply(
+                    lambda r: f"{r['id']}: {r.get('address', 'N/A')} - {r.get('tenant_name', 'N/A')}", axis=1
+                ).tolist()
+                selected = st.multiselect("Select properties to compare (2-5)", options, max_selections=5)
+                if len(selected) >= 2:
+                    ids = [int(s.split(":")[0]) for s in selected]
+                    compare_raw = leases_df[leases_df['id'].isin(ids)].copy()
+                    display_fields = ['address', 'rate_monthly', 'rate_annually', 'leased_sf',
+                                     'tenant_name', 'term_months', 'ti_allowance', 'lease_type',
+                                     'building_type', 'commencement_date', 'city', 'zip_code']
+                    available = [f for f in display_fields if f in compare_raw.columns]
+                    compare_df = compare_raw[available].set_index('address').T
+                    compare_df.index = compare_df.index.map(lambda x: x.replace('_', ' ').title())
+                    st.dataframe(compare_df, use_container_width=True)
 
 # =====================================================================
 # PAGE 4: COMP FINDER
