@@ -14,6 +14,7 @@ def _get_db_url():
         return os.environ.get("SUPABASE_DB_URL", "sqlite:///comps.db")
 
 Base = declarative_base()
+from learning.schemas import LearningBase
 
 class SaleComp(Base):
     __tablename__ = 'sale_comps'
@@ -83,6 +84,7 @@ def ensure_tables():
     if not _tables_created:
         try:
             Base.metadata.create_all(engine)
+            LearningBase.metadata.create_all(engine)
             _tables_created = True
         except Exception as e:
             print(f"Warning: Could not create tables: {e}")
