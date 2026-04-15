@@ -568,6 +568,7 @@ if page == "Upload & Process":
                     st.session_state.current_filename = uploaded_file.name
                     st.session_state.geocoding_done = False
                     st.session_state.sheet_data = sheet_data
+                    st.session_state.pop("broker_resolution", None)  # reset on new file
                     st.success(f"Parsed {len(combined)} records from {len(sheet_data)} sheet(s)!")
                 else:
                     st.error("Could not read any sheets. Check the file format.")
@@ -576,6 +577,27 @@ if page == "Upload & Process":
             df = st.session_state.clean_df
             sheet_data = st.session_state.sheet_data
             sheet_names = list(sheet_data.keys())
+
+            # Detect broker once per file upload (runs silently; UI tab picks up from session state)
+            if "broker_resolution" not in st.session_state:
+                try:
+                    from engine.pipeline import detect_broker_stage
+                    from learning.store import SqliteLearningStore
+                    _broker_store = SqliteLearningStore()
+                    _sample_cols = " | ".join(
+                        " ".join(str(c) for c in sd["input_columns"])
+                        for sd in list(sheet_data.values())[:3]
+                    )
+                    _sample_text = f"File: {st.session_state.get('current_filename', '')} | Columns: {_sample_cols}"
+                    st.session_state["broker_resolution"] = detect_broker_stage(
+                        sample_text=_sample_text,
+                        filename=st.session_state.get("current_filename", ""),
+                        store=_broker_store,
+                    )
+                except Exception as _be:
+                    import logging
+                    logging.getLogger(__name__).warning("Broker detection failed: %s", _be)
+                    st.session_state["broker_resolution"] = None
 
             # --- PER-SHEET TABS: Mapping + Preview ---
             if len(sheet_names) > 1:

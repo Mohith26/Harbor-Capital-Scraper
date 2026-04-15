@@ -157,3 +157,11 @@ def run_geocoding_stage(
     out["geocode_source"] = sources
     out["canonical_address"] = canonicals
     return out
+
+
+def detect_broker_stage(sample_text: str, filename: str, store) -> "BrokerResolution":
+    """Extract broker from file metadata then resolve against the learning store."""
+    from engine.brokers import resolve_broker, BrokerResolution
+    from engine.openai_client import extract_broker
+    extracted = extract_broker(sample_text=sample_text, filename=filename)
+    return resolve_broker(extracted.get("broker"), store)

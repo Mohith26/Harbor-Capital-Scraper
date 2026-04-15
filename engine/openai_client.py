@@ -22,6 +22,37 @@ def _client():
     return _openai_client
 
 
+def extract_broker(sample_text: str, filename: str) -> dict:
+    """One-shot LLM call: return {"broker": str|None, "confidence": float}.
+
+    Texts provided: filename + first 2000 chars of sample_text.
+    Low confidence (<0.5) returns None as the broker name.
+    """
+    import json
+    prompt = (
+        "You are given a commercial real estate comp file. Identify which brokerage "
+        "firm produced it (e.g., JLL, CBRE, Colliers, Newmark, Cushman & Wakefield). "
+        'Return a JSON object: {"broker": "<name>" or null, "confidence": 0.0-1.0}. '
+        "If you're not reasonably sure, return null.\n\n"
+        f"Filename: {filename}\n\n"
+        f"Sample:\n{sample_text[:2000]}"
+    )
+    try:
+        resp = _client().chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0,
+            max_tokens=100,
+        )
+        parsed = json.loads(resp.choices[0].message.content)
+        if parsed.get("confidence", 0) < 0.5:
+            return {"broker": None, "confidence": parsed.get("confidence", 0)}
+        return parsed
+    except Exception:
+        return {"broker": None, "confidence": 0.0}
+
+
 def normalize(raw_text: str) -> str:
     """Ask GPT to clean up a messy address into a Google-Maps-friendly form.
 
