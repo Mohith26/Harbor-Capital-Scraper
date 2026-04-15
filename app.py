@@ -1280,7 +1280,8 @@ elif page == "Database View":
 
     # ── Build filter chips HTML from active session state ──
     def _db_chip_html(label, rm_key):
-        return f'<span class="hc-chip" id="chip-{rm_key}">{label} &nbsp;<span style="color:#F5A623;font-weight:900;">x</span></span>'
+        import html as _html
+        return f'<span class="hc-chip" id="chip-{_html.escape(rm_key)}">{_html.escape(str(label))} &nbsp;<span style="color:#F5A623;font-weight:900;">x</span></span>'
 
     filter_chips_html = ""
     if st.session_state.get("filter_cat_city"):
@@ -1298,7 +1299,14 @@ elif page == "Database View":
     if st.session_state.get("filter_loc_center"):
         filter_chips_html += _db_chip_html(f"Near: {st.session_state['filter_loc_center'][:20]}", "filter_loc_center")
 
-    right_html = '<button class="hc-export-btn" onclick="document.getElementById(\'db_export_toggle\').click()">Export ▾</button>'
+    right_html = '<button class="hc-export-btn" onclick="window.location.href=window.location.href.split(\'?\')[0]+\'?export_menu=1\'">Export ▾</button>'
+
+    # Handle export menu toggle via query param from topbar button
+    if st.query_params.get("export_menu") == "1":
+        st.session_state.show_export_menu = True
+        st.query_params.clear()
+        st.rerun()
+
     render_topbar("Database View", filter_chips_html, right_html)
 
     # ── Filter chip remove buttons ──
@@ -1406,11 +1414,11 @@ elif page == "Database View":
             _search = st.text_input("Search", placeholder="Address, buyer/seller, notes...",
                                     key="db_search_text", label_visibility="collapsed")
         if _search:
-            _addr_match = df_filtered.get('address', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False)
-            _buyer_match = df_filtered.get('buyer', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False)
-            _seller_match = df_filtered.get('seller', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False)
-            _tenant_match = df_filtered.get('tenant_name', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False)
-            _notes_match = df_filtered.get('notes', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False)
+            _addr_match = df_filtered.get('address', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False, regex=False)
+            _buyer_match = df_filtered.get('buyer', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False, regex=False)
+            _seller_match = df_filtered.get('seller', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False, regex=False)
+            _tenant_match = df_filtered.get('tenant_name', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False, regex=False)
+            _notes_match = df_filtered.get('notes', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False, regex=False)
             df_filtered = df_filtered[_addr_match | _buyer_match | _seller_match | _tenant_match | _notes_match]
         with _tc3:
             st.markdown(f'<div class="hc-record-count" style="padding-top:8px;"><b>{len(df_filtered)}</b> of {len(df)}</div>', unsafe_allow_html=True)
