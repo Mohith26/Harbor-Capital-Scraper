@@ -121,6 +121,7 @@ pillow>=10.0.0
 pytest>=8.0.0
 pytest-mock>=3.12.0
 responses>=0.25.0
+rapidfuzz>=3.0.0
 ```
 
 - [ ] **Step 2:** Run `pip install -r requirements.txt` in the local venv to verify installs resolve cleanly.
@@ -245,26 +246,42 @@ class LoadedSegment:
 
 @dataclass
 class Fingerprint:
-    hash: str
-    broker: Optional[str]
-    file_type: str  # LEASE | SALE | BOTH | UNKNOWN
-    clean_headers: list[str]
+    """Content-addressable identifier for a (file_type, header-layout) pair.
+
+    - raw_hash: order-sensitive hash, used for Tier 1 exact match.
+    - header_set_hash: order-agnostic hash for debugging / inspection.
+    - headers: original raw headers as strings, preserved for UI display.
+    - normalized_headers: clean_header()-processed form, used for Jaccard.
+    """
+    raw_hash: str
+    header_set_hash: str
+    headers: list[str]
+    normalized_headers: list[str]
+    file_type: str  # "lease" | "sale"
+    filename: str
+    sheet_name: Optional[str]
 
 
 @dataclass
 class FingerprintMatch:
-    tier: int  # 1=exact, 2=fuzzy, 3=broker, 4=none
-    blueprint: Optional[dict[str, str]]
+    """Result of a tiered lookup against a LearningStore."""
+    source: str  # "exact" | "fuzzy" | "broker"
+    similarity: float  # 1.0 for exact, Jaccard score otherwise
+    fingerprint: Fingerprint
+    mappings: dict[str, str]
     confidence: float
-    source_id: Optional[int]
+    hit_count: int
 
 
 @dataclass
 class MappingResult:
-    mappings: dict[str, str]
-    confidence: dict[str, float]
-    source: str
-    # file_type lives on Fingerprint — access via seg.fingerprint.file_type
+    """Output of the mapping stage for one segment."""
+    fingerprint: Fingerprint
+    mappings: dict[str, str]  # raw_header -> target_column
+    confidence: dict[str, float]  # raw_header -> similarity score
+    source: str  # "exact" | "fuzzy" | "broker" | "embedding" | "embedding+corrections" | "vision_pdf"
+    similarity: float  # Jaccard score when source in {fuzzy, broker}, else 0
+    cleaned_df: pd.DataFrame
 
 
 @dataclass
@@ -283,13 +300,11 @@ class GeocodedRows:
 
 @dataclass
 class SegmentResult:
-    segment: LoadedSegment
+    """One processed segment. segment_key format: '<sheet_name_or_root>::<segment_index>'."""
+    segment_key: str
     fingerprint: Fingerprint
-    fingerprint_match: FingerprintMatch
-    mapping: MappingResult
-    cleaned: CleanedRows
-    geocoded: GeocodedRows
-    segment_key: str  # "<sheet_name_or_root>::<segment_index>"
+    mapping_result: MappingResult
+    cleaned_df: pd.DataFrame
 
 
 @dataclass
@@ -376,6 +391,31 @@ Builds `learning/` module: Protocol, SQLAlchemy models, concrete Supabase/Sqlite
 
 Zero user impact — store is built but nothing queries it yet.
 
+> **⚠️ REVIEWER FIXES APPLIED — IMPORTANT FOR IMPLEMENTER:**
+>
+> The Protocol in Task 1.1 below is the source of truth. It was corrected during review to match the kwargs used by Chunks 3-9. Some code samples in Tasks 1.4 (FakeLearningStore) and 1.6 (SqliteLearningStore) were written before this correction and still use older parameter names. When you implement them, **match the Protocol signatures exactly**. Specifically, translate as you copy:
+>
+> | Old (in sample code below) | New (match this) |
+> |----------------------------|------------------|
+> | `record_accepted_mapping(fp, final_mapping, user)` | `record_accepted_mapping(fingerprint, mappings, confirmed_by, broker_id=None)` |
+> | `find_fuzzy_fingerprints(file_type, header_set, min_jaccard)` → `list[tuple]` | `find_fuzzy_fingerprints(file_type)` → `list[dict]` (caller computes Jaccard) |
+> | `find_broker_fingerprints(broker, header_set, min_jaccard)` | `find_broker_fingerprints(broker_name, file_type)` |
+> | `get_corrections_for_context(file_type, broker)` → `list[dict]` | `get_corrections_for_context(file_type, raw_header)` → `dict[str, int]` |
+> | `upsert_correction(clean_header, target, file_type, broker, user)` | `upsert_correction(file_type, raw_header, target_column, confirmed_by)` |
+> | `insert_geocode_alias(key, raw_text, answer, source)` | `insert_geocode_alias(raw_text, canonical_address, lat, lng)` |
+> | `record_geocode_override(raw_text, corrected_addr, lat, lng, city, zip_code, user)` | `record_geocode_override(raw_text, override_address, lat, lng, confirmed_by)` |
+> | `upsert_broker(canonical_name, user, alias=None)` → `None` | `upsert_broker(name, confirmed_by)` → `int` (broker_id) |
+> | `record_broker_correction(fingerprint_hash, llm_guess, confirmed, user)` | `record_broker_correction(alias, canonical_name, confirmed_by)` |
+> | `fp.hash` / `fp.clean_headers` / `fp.broker` | `fp.raw_hash` / `fp.normalized_headers` / (broker is a separate kwarg) |
+>
+> Also: the SQLAlchemy models in Task 1.2 use `fingerprint_hash` as the column name — rename the column to `raw_hash` (matching Fingerprint.raw_hash) and keep a SQLAlchemy index on it. All queries that filter by `TemplateFingerprint.fingerprint_hash` become `.raw_hash`.
+>
+> `Task 1.6 record_broker_correction` in the earlier draft was a `pass` stub. Implement it properly: find-or-create the canonical broker, append the alias to its aliases JSON column, commit.
+>
+> The `ColumnMappingCorrection` table's `broker` column should be dropped entirely — the corrected Protocol does not pass broker into `upsert_correction`. Unique constraint becomes `(file_type, raw_header, target_column)` — this is NOT NULL safe and SQLite/Postgres handle it identically.
+>
+> Use atomic upserts via `sqlalchemy.dialects.sqlite.insert(...).on_conflict_do_update(...)` (and the `postgresql` variant for production). A SELECT-then-INSERT is NOT safe under concurrent Streamlit sessions.
+
 ### Task 1.1: Define LearningStore Protocol
 
 **Files:**
@@ -385,7 +425,12 @@ Zero user impact — store is built but nothing queries it yet.
 - [ ] **Step 1:** Write the Protocol:
 
 ```python
-"""LearningStore protocol — structural type all implementations must conform to."""
+"""LearningStore protocol — structural type all implementations must conform to.
+
+All concrete stores (Supabase, SQLite, Fake, Empty) must implement every method
+with EXACTLY the signatures below. Downstream engine code (Chunks 3-9) calls
+these methods with these exact keyword arguments — do not deviate.
+"""
 from __future__ import annotations
 from typing import Protocol, Optional
 from engine.types import Fingerprint
@@ -393,63 +438,111 @@ from engine.types import Fingerprint
 
 class LearningStore(Protocol):
     # ---- Fingerprints / templates ----
-    def get_fingerprint_by_hash(self, fp_hash: str) -> Optional[dict]: ...
-    def find_fuzzy_fingerprints(
-        self, file_type: str, header_set: list[str], min_jaccard: float
-    ) -> list[tuple[dict, float]]: ...
-    def find_broker_fingerprints(
-        self, broker: str, header_set: list[str], min_jaccard: float
-    ) -> list[tuple[dict, float]]: ...
+    def get_fingerprint_by_hash(self, fp_hash: str) -> Optional[dict]:
+        """Return {"mappings": dict, "confidence": float, "hit_count": int,
+        "normalized_headers": list[str], "broker_id": Optional[int]} or None."""
+        ...
+
+    def find_fuzzy_fingerprints(self, file_type: str) -> list[dict]:
+        """Return all stored fingerprint records for a given file_type. Caller
+        computes Jaccard against their own target set. Each dict has
+        normalized_headers, mappings, confidence, hit_count."""
+        ...
+
+    def find_broker_fingerprints(self, broker_name: str, file_type: str) -> list[dict]:
+        """Return fingerprint records for a given broker_name + file_type.
+        Same shape as find_fuzzy_fingerprints."""
+        ...
+
     def record_accepted_mapping(
-        self, fp: Fingerprint, final_mapping: dict[str, str], user: str
-    ) -> None: ...
+        self,
+        fingerprint: Fingerprint,
+        mappings: dict[str, str],
+        confirmed_by: str,
+        broker_id: Optional[int] = None,
+    ) -> None:
+        """Upsert the fingerprint. Atomic: INSERT ... ON CONFLICT (raw_hash)
+        DO UPDATE SET mappings = ..., hit_count = hit_count + 1."""
+        ...
 
     # ---- Correction votes ----
     def get_corrections_for_context(
-        self, file_type: str, broker: Optional[str]
-    ) -> list[dict]: ...
+        self, file_type: str, raw_header: str
+    ) -> dict[str, int]:
+        """Return {target_column: hit_count} for all corrections recorded
+        against (file_type, normalized raw_header). Empty dict when none."""
+        ...
+
     def upsert_correction(
         self,
-        clean_header: str,
-        target: str,
         file_type: str,
-        broker: Optional[str],
-        user: str,
-    ) -> None: ...
+        raw_header: str,
+        target_column: str,
+        confirmed_by: str,
+    ) -> None:
+        """Atomic upsert: increment hit_count on (file_type, raw_header, target_column)
+        composite key. raw_header is already clean_header()-normalized by caller."""
+        ...
 
     # ---- Geocoding ----
-    def get_geocode_override(self, key: str) -> Optional[dict]: ...
-    def get_geocode_alias(self, key: str) -> Optional[dict]: ...
+    def get_geocode_override(self, raw_text: str) -> Optional[dict]:
+        """Return {"formatted_address": str, "latitude": float, "longitude": float}
+        or None. Matches on normalized raw_text (lowercased, stripped, ', TX' bias applied)."""
+        ...
+
+    def get_geocode_alias(self, raw_text: str) -> Optional[dict]:
+        """Return cached geocode result or None. Same normalization as override."""
+        ...
+
     def insert_geocode_alias(
-        self, key: str, raw_text: str, answer: dict, source: str
-    ) -> None: ...
-    def bump_hit_count(self, key: str) -> None: ...
+        self,
+        raw_text: str,
+        canonical_address: str,
+        lat: float,
+        lng: float,
+    ) -> None:
+        """Atomic upsert: on conflict (raw_text) update canonical/lat/lng and bump hit_count."""
+        ...
+
+    def bump_hit_count(self, raw_text: str) -> None:
+        """Increment hit counter on an existing alias row."""
+        ...
+
     def record_geocode_override(
         self,
         raw_text: str,
-        corrected_addr: str,
+        override_address: str,
         lat: float,
         lng: float,
-        city: str,
-        zip_code: str,
-        user: str,
-    ) -> None: ...
+        confirmed_by: str,
+    ) -> None:
+        """Write a user-confirmed override that shadows the alias cache forever."""
+        ...
 
     # ---- Brokers ----
     def upsert_broker(
-        self, canonical_name: str, user: str, alias: Optional[str] = None
-    ) -> None: ...
-    def find_broker_by_alias(self, candidate: str) -> Optional[dict]: ...
+        self, name: str, confirmed_by: str
+    ) -> int:
+        """Return broker_id. Atomic: insert if name is new, else return existing id."""
+        ...
+
+    def find_broker_by_alias(self, name: str) -> Optional[dict]:
+        """Return {"id": int, "canonical_name": str, "aliases": list[str]} or None.
+        Matches case-insensitively on canonical name OR any stored alias."""
+        ...
+
     def record_broker_correction(
-        self,
-        fingerprint_hash: str,
-        llm_guess: Optional[str],
-        confirmed: str,
-        user: str,
-    ) -> None: ...
+        self, alias: str, canonical_name: str, confirmed_by: str
+    ) -> None:
+        """Record that `alias` should resolve to `canonical_name`. Creates the
+        canonical broker if missing, then appends `alias` to its alias list."""
+        ...
 
     # ---- PDF corrections ----
-    def get_pdf_corrections(self, pdf_hash: str) -> list[dict]: ...
+    def get_pdf_corrections(self, pdf_hash: str) -> list[dict]:
+        """Return list of {page_num, row_index, field, corrected_value} for a PDF content hash."""
+        ...
+
     def record_pdf_correction(
         self,
         pdf_hash: str,
@@ -458,11 +551,13 @@ class LearningStore(Protocol):
         field: str,
         original: str,
         corrected: str,
-        user: str,
+        confirmed_by: str,
     ) -> None: ...
 
     # ---- Seed bootstrap ----
-    def load_seed(self, seed_dir: str) -> None: ...
+    def load_seed(self, seed_dir: str) -> None:
+        """Load JSON seed files from seed_dir into the store. Idempotent."""
+        ...
 ```
 
 - [ ] **Step 2:** Write a minimal import test at `tests/test_learning_protocol.py`:
@@ -1785,9 +1880,9 @@ def test_generate_standardized_df_returns_mapping(monkeypatch):
 
 - [ ] **Step 2:** Run — expect ImportError.
 
-- [ ] **Step 3:** Create `engine/mapping.py` by copying verbatim:
-- `_get_openai_client` (line 22) — move to `engine/openai_client.py` instead (Task 2.3a below handles this; for now copy it inline here and Task 7 will refactor)
-- `get_embeddings` (line 32)
+- [ ] **Step 3:** Create `engine/mapping.py` by copying verbatim. ALSO create `engine/openai_client.py` now (not later) with the `_get_openai_client` helper so `get_embeddings` and the future broker extractor share one client. Copy:
+- `_get_openai_client` (line 22) → put in `engine/openai_client.py` as module-level `_client()` function
+- `get_embeddings` (line 32) → put in `engine/mapping.py`, updating its internal call to `from engine.openai_client import _client` then `_client().embeddings.create(...)`
 - `BASE_OVERRIDES`, `LEASE_OVERRIDES`, `SALE_OVERRIDES` module-level dicts — copy entire dict literals
 - `LEASE_SCHEMA`, `SALE_SCHEMA` module-level dicts — copy entire dict literals
 - `classify_file_type` (line 418)
@@ -2225,20 +2320,29 @@ import pandas as pd
 from engine.cleaning import apply_rate_logic
 from engine.mapping import classify_file_type, generate_standardized_df, LEASE_SCHEMA, SALE_SCHEMA
 
+# -------------------------------------------------------------------------
+# IMPLEMENTER: paste the exact bodies of these three functions from the
+# PRE-REWRITE comp_engine.py below. Do NOT write `...` — paste real code.
+# Line ranges in the pre-rewrite file:
+#   process_file_to_clean_output : lines 893-926
+#   process_all_sheets           : lines 927-974
+#   apply_manual_mapping         : lines 975-1023
+# Before deleting the old file, copy these three function bodies verbatim
+# into the stubs below. The equivalence test in Step 5 will fail loudly if
+# you forget.
+# -------------------------------------------------------------------------
+
 
 def process_file_to_clean_output(df, filename, sheet_name=None):
-    # ...verbatim copy of comp_engine.py:893-926 pre-rewrite...
-    ...
+    raise NotImplementedError("paste body from pre-rewrite comp_engine.py:893-926")
 
 
 def process_all_sheets(file_path, filename, selected_sheets=None):
-    # ...verbatim copy of comp_engine.py:927-974 pre-rewrite...
-    ...
+    raise NotImplementedError("paste body from pre-rewrite comp_engine.py:927-974")
 
 
 def apply_manual_mapping(input_df, mapping_dict, schema_dict, file_type, filename):
-    # ...verbatim copy of comp_engine.py:975-1023 pre-rewrite...
-    ...
+    raise NotImplementedError("paste body from pre-rewrite comp_engine.py:975-1023")
 
 
 __all__ = [
@@ -2397,6 +2501,41 @@ def test_tier2_fuzzy_lookup_hits_on_80_percent_overlap():
     assert hit is not None
     assert hit.source == "fuzzy"
     assert hit.similarity >= 0.80
+
+
+def test_tier3_broker_lookup_hits_on_60_percent_overlap():
+    from engine.fingerprint import tier3_broker_lookup
+
+    store = FakeLearningStore()
+    broker_id = store.upsert_broker(name="JLL", confirmed_by="u@test")
+    trained = compute_fingerprint(
+        ["Property", "Rent PSF", "Tenant", "SF", "Date"],
+        "jll_file.xlsx", None, "lease"
+    )
+    store.record_accepted_mapping(
+        fingerprint=trained,
+        mappings={"Property": "property_name", "Rent PSF": "rent_psf",
+                  "Tenant": "tenant", "SF": "sf", "Date": "lease_date"},
+        confirmed_by="u@test",
+        broker_id=broker_id,
+    )
+
+    # Different JLL template with ~3/6 = 0.50 overlap — below threshold, miss
+    far_fp = compute_fingerprint(
+        ["Property", "Rent PSF", "Tenant", "Expiration", "Suite", "Floor"],
+        "jll_other.xlsx", None, "lease"
+    )
+    assert tier3_broker_lookup(store, far_fp, broker_name="JLL", threshold=0.60) is None
+
+    # Close JLL template with 4/6 = 0.67 overlap — hit
+    close_fp = compute_fingerprint(
+        ["Property", "Rent PSF", "Tenant", "SF", "Term", "Concessions"],
+        "jll_close.xlsx", None, "lease"
+    )
+    hit = tier3_broker_lookup(store, close_fp, broker_name="JLL", threshold=0.60)
+    assert hit is not None
+    assert hit.source == "broker"
+    assert hit.similarity >= 0.60
 ```
 
 - [ ] **Step 2:** Run — expect ImportError.
@@ -2542,7 +2681,7 @@ def tier3_broker_lookup(
 pytest tests/test_fingerprint.py -v
 ```
 
-Expected: 7 passed.
+Expected: 8 passed.
 
 - [ ] **Step 5:** Extend `FakeLearningStore` if tests reveal missing stubs. The methods `find_fuzzy_fingerprints` and `find_broker_fingerprints` must return a list of dicts with `normalized_headers`, `mappings`, `confidence`, and `hit_count` keys. If you implemented them correctly in Chunk 2, this step is a no-op verification.
 
@@ -2668,18 +2807,52 @@ def generate_standardized_df_with_hints(
             mappings[raw_headers[i]] = schema_cols[j]
             confidence[raw_headers[i]] = float(score)
 
-    # Apply hard overrides on top (same logic as generate_standardized_df).
-    # Copy the override block verbatim from the existing function.
-    # ...
+    # Apply hard overrides on top — the existing generate_standardized_df has
+    # a block that walks BASE_OVERRIDES / LEASE_OVERRIDES / SALE_OVERRIDES via
+    # _find_override(). Rather than duplicating that logic, refactor it into a
+    # shared helper first:
+    _apply_hard_overrides(
+        raw_headers=raw_headers,
+        normalized=normalized,
+        file_type=file_type,
+        schema_cols=schema_cols,
+        mappings=mappings,
+        confidence=confidence,
+    )
 
     out_df = pd.DataFrame()
     for raw, target in mappings.items():
         out_df[target] = df[raw]
 
     return out_df, mappings, confidence
+
+
+def _apply_hard_overrides(raw_headers, normalized, file_type, schema_cols, mappings, confidence):
+    """Shared override logic, also called by generate_standardized_df.
+
+    REFACTOR NOTE: In the same edit pass, extract the existing override block
+    from generate_standardized_df (currently inline at the end of that function)
+    into this helper, then call _apply_hard_overrides from BOTH
+    generate_standardized_df and generate_standardized_df_with_hints. Do not
+    duplicate the logic — a single helper keeps both code paths in sync.
+
+    The override block does:
+      1. Pick the right override dict: BASE_OVERRIDES + (LEASE_OVERRIDES if lease else SALE_OVERRIDES).
+      2. For each normalized header, call _find_override(cleaned_header, overrides, target_col).
+      3. If it matches and the target_col is in schema_cols, set mappings[raw_header] = target_col with confidence 1.0.
+    """
+    overrides = dict(BASE_OVERRIDES)
+    overrides.update(LEASE_OVERRIDES if file_type == "lease" else SALE_OVERRIDES)
+    for i, raw in enumerate(raw_headers):
+        cleaned = normalized[i]
+        for target_col in schema_cols:
+            if _find_override(cleaned, overrides, target_col):
+                mappings[raw] = target_col
+                confidence[raw] = 1.0
+                break
 ```
 
-**Note:** The `FakeLearningStore.get_corrections_for_context(file_type, raw_header)` must return a dict of `{target_column: hit_count}`. Verify your Chunk 2 implementation matches this shape; if it returns a different structure, update either the fake or this function so they agree.
+**Note:** The `FakeLearningStore.get_corrections_for_context(file_type, raw_header)` must return a dict of `{target_column: hit_count}` per the corrected Protocol in Chunk 2. Verify your implementation matches this shape.
 
 - [ ] **Step 4:** Run test.
 
@@ -3085,6 +3258,44 @@ def test_rederives_fingerprint_from_edited_headers():
     assert store.get_fingerprint_by_hash(new_fp.raw_hash) is not None
     # Original (stale) hash was NOT stored
     assert store.get_fingerprint_by_hash(seg.fingerprint.raw_hash) is None
+
+
+def test_persist_links_broker_id_to_rederived_fingerprint():
+    """When a broker is confirmed, the fingerprint stored under the RE-DERIVED
+    edited header hash must carry the broker_id. Broker writes must not use
+    the stale pre-edit fingerprint."""
+    store = FakeLearningStore()
+
+    def fake_saver(df):
+        return [1]
+
+    seg = _make_segment(
+        "Sheet1::0",
+        headers=["prop", "rate"],
+        mappings={"prop": "property_name", "rate": "rent_psf"},
+    )
+    edited_df = pd.DataFrame({"Property Name": ["x"], "Rent PSF": [1.0]})
+
+    persist_with_learning(
+        segments=[seg],
+        final_mappings={"Sheet1::0": {"Property Name": "property_name", "Rent PSF": "rent_psf"}},
+        edited_dfs={"Sheet1::0": edited_df},
+        confirmed_broker="JLL",
+        geocode_overrides={},
+        store=store,
+        db_saver=fake_saver,
+        user="u@test",
+    )
+
+    from engine.fingerprint import compute_fingerprint
+    new_fp = compute_fingerprint(
+        ["Property Name", "Rent PSF"], "f.xlsx", "Sheet1", "lease"
+    )
+    record = store.get_fingerprint_by_hash(new_fp.raw_hash)
+    assert record is not None
+    assert record.get("broker_id") is not None
+    # No stale record under the pre-edit hash
+    assert store.get_fingerprint_by_hash(seg.fingerprint.raw_hash) is None
 ```
 
 - [ ] **Step 2:** Run — expect ImportError.
@@ -3144,15 +3355,19 @@ def persist_with_learning(
     inserted_ids = db_saver(concat)  # may raise; intentionally propagates
 
     # --- Now learn. All failures below are logged and swallowed. ---
-    try:
-        _record_mapping_learning(segments, final_mappings, edited_dfs, user, store)
-    except Exception:
-        log.exception("mapping learning writeback failed")
+    broker_id = None
+    if confirmed_broker:
+        try:
+            broker_id = store.upsert_broker(name=confirmed_broker, confirmed_by=user)
+        except Exception:
+            log.exception("broker upsert failed")
 
     try:
-        _record_broker_learning(segments, confirmed_broker, user, store)
+        _record_mapping_learning(
+            segments, final_mappings, edited_dfs, user, store, broker_id=broker_id
+        )
     except Exception:
-        log.exception("broker learning writeback failed")
+        log.exception("mapping learning writeback failed")
 
     try:
         _record_geocode_learning(geocode_overrides, user, store)
@@ -3162,7 +3377,13 @@ def persist_with_learning(
     return inserted_ids
 
 
-def _record_mapping_learning(segments, final_mappings, edited_dfs, user, store):
+def _record_mapping_learning(segments, final_mappings, edited_dfs, user, store, broker_id=None):
+    """Re-derive the fingerprint from EDITED headers, then record the mapping
+    (linked to broker_id if present) and diff against the original guess for
+    correction votes. This is the SINGLE path that writes fingerprints — we do
+    NOT have a separate broker-learning pass that would double-write under the
+    stale pre-edit fingerprint.
+    """
     for seg in segments:
         if seg.segment_key not in final_mappings:
             continue
@@ -3171,7 +3392,7 @@ def _record_mapping_learning(segments, final_mappings, edited_dfs, user, store):
         if edited_df is None or edited_df.empty:
             continue
 
-        # Re-derive fingerprint from EDITED headers (see Must-Fix #5 in spec).
+        # Re-derive fingerprint from EDITED headers (Must-Fix #5).
         edited_headers = [str(c) for c in edited_df.columns]
         file_type = seg.fingerprint.file_type
         new_fp = compute_fingerprint(
@@ -3185,6 +3406,7 @@ def _record_mapping_learning(segments, final_mappings, edited_dfs, user, store):
             fingerprint=new_fp,
             mappings=new_mappings,
             confirmed_by=user,
+            broker_id=broker_id,
         )
 
         # Diff against original guesses → corrections.
@@ -3198,20 +3420,6 @@ def _record_mapping_learning(segments, final_mappings, edited_dfs, user, store):
                     target_column=final_target,
                     confirmed_by=user,
                 )
-
-
-def _record_broker_learning(segments, confirmed_broker, user, store):
-    if not confirmed_broker:
-        return
-    broker_id = store.upsert_broker(name=confirmed_broker, confirmed_by=user)
-    # Link fingerprints to broker for Tier 3 lookups.
-    for seg in segments:
-        store.record_accepted_mapping(
-            fingerprint=seg.fingerprint,
-            mappings=seg.mapping_result.mappings,
-            confirmed_by=user,
-            broker_id=broker_id,
-        )
 
 
 def _record_geocode_learning(geocode_overrides, user, store):
@@ -3233,7 +3441,7 @@ def _record_geocode_learning(geocode_overrides, user, store):
 pytest tests/test_corrections.py -v
 ```
 
-Expected: 4 passed. If a failure is about missing `broker_id` kwarg, update the store implementations per the note above, then rerun.
+Expected: 5 passed. If a failure is about missing `broker_id` kwarg, update the store implementations per the Chunk 2 Protocol corrections, then rerun.
 
 - [ ] **Step 5:** Commit.
 
@@ -3383,12 +3591,15 @@ def _ok_response(addr, lat, lng):
 
 def test_override_table_short_circuits_everything():
     store = FakeLearningStore()
+    # Overrides are stored under the Texas-normalized form (matches what
+    # resolve_geocode will look up).
     store.record_geocode_override(
-        raw_text="123 Fake St",
+        raw_text="123 Fake St, TX",
         override_address="123 Fake St, Houston, TX 77002",
         lat=29.7, lng=-95.3,
         confirmed_by="user",
     )
+    # Caller passes any form; resolve_geocode normalizes before lookup.
     result = resolve_geocode("123 Fake St", api_key="k", store=store, openai_client=None)
     assert result["latitude"] == 29.7
     assert result["source"] == "override"
@@ -3397,7 +3608,7 @@ def test_override_table_short_circuits_everything():
 def test_alias_cache_returns_before_calling_google():
     store = FakeLearningStore()
     store.insert_geocode_alias(
-        raw_text="456 Main",
+        raw_text="456 Main, TX",
         canonical_address="456 Main, Austin, TX 78701",
         lat=30.2, lng=-97.7,
     )
@@ -3424,7 +3635,8 @@ def test_miss_calls_google_and_writes_alias():
 
 
 @responses.activate
-def test_llm_normalization_used_when_google_fails_first_time(monkeypatch):
+def test_llm_normalization_used_when_google_fails_first_time():
+    from types import SimpleNamespace
     # First call: Google returns ZERO_RESULTS for the raw string
     # Second call: after LLM cleans up the address, Google succeeds
     responses.add(responses.GET, GOOGLE_URL, json={"status": "ZERO_RESULTS", "results": []})
@@ -3433,8 +3645,7 @@ def test_llm_normalization_used_when_google_fails_first_time(monkeypatch):
         json=_ok_response("Cleaned Address, Houston, TX", 29.7, -95.3),
     )
 
-    fake_llm = type("LLM", (), {})()
-    fake_llm.normalize = lambda raw: "Cleaned Address, Houston, TX"
+    fake_llm = SimpleNamespace(normalize=lambda raw: "Cleaned Address, Houston, TX")
 
     store = FakeLearningStore()
     result = resolve_geocode(
@@ -3466,22 +3677,25 @@ def resolve_geocode(
        3. Google direct call.
        4. On ZERO_RESULTS, LLM normalizes the raw text → retry Google.
     Every successful resolution gets written back to the alias cache.
+
+    All lookups use the Texas-biased normalized form as the cache key so an
+    entry inserted as "456 Main, TX" hits on a subsequent query of "456 Main".
     """
-    override = store.get_geocode_override(raw_text)
+    normalized = _normalize_raw(raw_text)
+
+    override = store.get_geocode_override(normalized)
     if override is not None:
         return {**override, "source": "override"}
 
-    alias = store.get_geocode_alias(raw_text)
+    alias = store.get_geocode_alias(normalized)
     if alias is not None:
-        store.bump_hit_count(raw_text)
+        store.bump_hit_count(normalized)
         return {**alias, "source": "alias_cache"}
 
-    # Texas is guaranteed — force bias.
-    biased = raw_text if ", TX" in raw_text.upper() else f"{raw_text}, TX"
-    result = fetch_google_data(biased, api_key=api_key)
+    result = fetch_google_data(normalized, api_key=api_key)
     if result and result.get("status") != "ZERO_RESULTS" and result.get("latitude"):
         store.insert_geocode_alias(
-            raw_text=raw_text,
+            raw_text=normalized,
             canonical_address=result["formatted_address"],
             lat=result["latitude"],
             lng=result["longitude"],
@@ -3495,10 +3709,11 @@ def resolve_geocode(
         except Exception:
             cleaned = None
         if cleaned:
-            retry = fetch_google_data(cleaned, api_key=api_key)
+            cleaned_biased = _normalize_raw(cleaned)
+            retry = fetch_google_data(cleaned_biased, api_key=api_key)
             if retry and retry.get("latitude"):
                 store.insert_geocode_alias(
-                    raw_text=raw_text,
+                    raw_text=normalized,  # key by ORIGINAL normalized, not cleaned
                     canonical_address=retry["formatted_address"],
                     lat=retry["latitude"],
                     lng=retry["longitude"],
@@ -3506,6 +3721,16 @@ def resolve_geocode(
                 return {**retry, "source": "google+llm"}
 
     return {"source": "failed", "raw_text": raw_text, "latitude": None, "longitude": None}
+
+
+def _normalize_raw(raw_text: str) -> str:
+    """Texas bias + whitespace trim. Single source of truth for cache keys."""
+    s = (raw_text or "").strip()
+    if not s:
+        return s
+    if ", TX" in s.upper() or " TX " in f" {s.upper()} " or s.upper().endswith(" TX"):
+        return s
+    return f"{s}, TX"
 ```
 
 **Note:** `fetch_google_data` currently returns its result dict — verify it includes a `status` key or adjust the check to use `result.get("latitude") is None` as the miss signal.
@@ -3616,7 +3841,7 @@ from learning.fakes import FakeLearningStore
 def test_stage_uses_override_for_every_row(monkeypatch):
     store = FakeLearningStore()
     store.record_geocode_override(
-        raw_text="123 A St",
+        raw_text="123 A St, TX",  # Texas-normalized key
         override_address="123 A St, Houston, TX",
         lat=29.7, lng=-95.3,
         confirmed_by="u",
@@ -3778,12 +4003,32 @@ def test_alias_match_merges_variant():
     assert result.status == "alias"
 
 
-def test_no_match_surfaces_as_ambiguous():
+def test_high_similarity_auto_merges():
+    """Levenshtein ratio >= 0.85 to an existing canonical name → auto-merge."""
+    store = FakeLearningStore()
+    store.upsert_broker(name="Cushman & Wakefield", confirmed_by="u")
+    result = resolve_broker("Cushman and Wakefield", store)
+    assert result.status == "alias"
+    assert result.broker_name == "Cushman & Wakefield"
+
+
+def test_medium_similarity_surfaces_ambiguous():
+    """Ratio in [0.60, 0.85) → surface for user confirmation."""
+    store = FakeLearningStore()
+    store.upsert_broker(name="Colliers International", confirmed_by="u")
+    result = resolve_broker("Colliers Retail", store)
+    assert result.status == "ambiguous"
+    # candidate_name carries the best existing match for UI display
+    assert result.candidate_name == "Colliers International"
+    assert result.broker_name == "Colliers Retail"
+
+
+def test_low_similarity_returns_new():
     store = FakeLearningStore()
     store.upsert_broker(name="CBRE", confirmed_by="u")
-    result = resolve_broker("Colliers", store)
+    result = resolve_broker("Marcus & Millichap", store)
     assert result.status == "new"
-    assert result.broker_name == "Colliers"
+    assert result.broker_name == "Marcus & Millichap"
 
 
 def test_none_input_returns_missing():
@@ -3800,39 +4045,84 @@ def test_none_input_returns_missing():
 from dataclasses import dataclass
 from typing import Optional, Literal
 
+from rapidfuzz import fuzz
+
 from learning.protocol import LearningStore
+
+
+AUTO_MERGE_THRESHOLD = 85  # rapidfuzz.ratio 0-100
+AMBIGUOUS_THRESHOLD = 60
 
 
 @dataclass
 class BrokerResolution:
-    status: Literal["matched", "alias", "new", "missing"]
-    broker_name: Optional[str]
+    status: Literal["matched", "alias", "ambiguous", "new", "missing"]
+    broker_name: Optional[str]  # the name to use for downstream linking
     broker_id: Optional[int]
+    candidate_name: Optional[str] = None  # best match when ambiguous, for UI
 
 
 def resolve_broker(extracted_name: Optional[str], store: LearningStore) -> BrokerResolution:
-    if not extracted_name:
+    if not extracted_name or not extracted_name.strip():
         return BrokerResolution(status="missing", broker_name=None, broker_id=None)
 
-    record = store.find_broker_by_alias(extracted_name)
-    if record is None:
-        return BrokerResolution(
-            status="new", broker_name=extracted_name.strip(), broker_id=None
-        )
+    candidate = extracted_name.strip()
 
-    if record["canonical_name"].lower() == extracted_name.strip().lower():
+    # 1) Exact/alias lookup via store.
+    record = store.find_broker_by_alias(candidate)
+    if record is not None:
+        if record["canonical_name"].lower() == candidate.lower():
+            return BrokerResolution(
+                status="matched",
+                broker_name=record["canonical_name"],
+                broker_id=record["id"],
+            )
         return BrokerResolution(
-            status="matched",
+            status="alias",
             broker_name=record["canonical_name"],
             broker_id=record["id"],
         )
 
-    return BrokerResolution(
-        status="alias",
-        broker_name=record["canonical_name"],
-        broker_id=record["id"],
-    )
+    # 2) Similarity scan over all known brokers.
+    best = None
+    best_score = 0
+    for known in store.find_all_brokers():
+        score = fuzz.ratio(candidate.lower(), known["canonical_name"].lower())
+        if score > best_score:
+            best_score = score
+            best = known
+
+    if best is not None and best_score >= AUTO_MERGE_THRESHOLD:
+        # Auto-merge: record the alias and return matched.
+        return BrokerResolution(
+            status="alias",
+            broker_name=best["canonical_name"],
+            broker_id=best["id"],
+            candidate_name=best["canonical_name"],
+        )
+
+    if best is not None and best_score >= AMBIGUOUS_THRESHOLD:
+        return BrokerResolution(
+            status="ambiguous",
+            broker_name=candidate,
+            broker_id=None,
+            candidate_name=best["canonical_name"],
+        )
+
+    return BrokerResolution(status="new", broker_name=candidate, broker_id=None)
 ```
+
+**Note:** `find_all_brokers()` is a new Protocol method — add it to `learning/protocol.py`:
+
+```python
+def find_all_brokers(self) -> list[dict]:
+    """Return all brokers as [{id, canonical_name, aliases}]. Used for fuzzy scans."""
+    ...
+```
+
+Implement in `FakeLearningStore` and `SqliteLearningStore` (trivial: iterate `_brokers` / `SELECT *`).
+
+Add `rapidfuzz>=3.0.0` to `requirements.txt` in Task 0.1 — go back and append it to the pip install list now.
 
 - [ ] **Step 3:** If `find_broker_by_alias` isn't implemented on the store backends from Chunk 2, add it now:
 
@@ -3919,7 +4209,7 @@ from engine.pipeline import detect_broker_stage
 
 if "broker_resolution" not in st.session_state:
     sample_text = "\n".join(
-        " ".join(str(c) for c in segment.columns) for segment in segments[:3]
+        " ".join(str(c) for c in segment.cleaned_df.columns) for segment in segments[:3]
     )
     st.session_state["broker_resolution"] = detect_broker_stage(
         sample_text=sample_text,
@@ -4030,7 +4320,6 @@ import pandas as pd
 from pdf2image import convert_from_path
 
 from engine.openai_client import _client
-from engine.mapping import LEASE_SCHEMA, SALE_SCHEMA
 
 
 VISION_PROMPT = (
@@ -4148,6 +4437,9 @@ def run_vision_pdf_stage(pdf_path: str, filename: str) -> SegmentResult:
     # Identity mapping: every column is already schema-shaped, so raw=target.
     mappings = {c: c for c in df.columns}
 
+    # PDFs don't share header templates the way Excel files do — each PDF is
+    # unique, so raw_hash and header_set_hash both collapse to the content hash.
+    # This intentionally prevents Tier 2 fuzzy matching on PDFs.
     fp = Fingerprint(
         raw_hash=pdf_hash,
         header_set_hash=pdf_hash,
