@@ -143,9 +143,10 @@ st.markdown("""
 <style>
 /* ── Hide Streamlit chrome ── */
 #MainMenu {visibility: hidden;}
-header {visibility: hidden;}
+header {display: none !important;}
 footer {visibility: hidden;}
 .block-container {padding-top: 0 !important; padding-left: 74px !important;}
+section[data-testid="stMain"] > div:first-child {padding-top: 0 !important;}
 section[data-testid="stSidebar"] {display: none;}
 
 /* ── Custom icon sidebar ── */
