@@ -1007,7 +1007,7 @@ if page == "Upload & Process":
                     _mapped_fields = {tf: current_maps.get(tf) for tf in mapping_schema if current_maps.get(tf)}
                     _unmapped_required = [f for f in REQUIRED_FIELDS if f not in _mapped_fields]
                     _status_html = '<div class="hc-status-bar">'
-                    for tf, src in _mapped_fields.items():
+                    for tf in _mapped_fields:
                         _status_html += f'<span class="hc-tag-mapped">+ {tf.replace("_"," ").title()}</span>'
                     for tf in _unmapped_required:
                         _status_html += f'<span class="hc-tag-unmapped">! {tf.replace("_"," ").title()} required</span>'
