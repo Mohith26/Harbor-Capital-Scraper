@@ -123,3 +123,37 @@ def _has_any_corrections(store, file_type: str, headers: list[str]) -> bool:
         if store.get_corrections_for_context(file_type=file_type, raw_header=clean_header(h)):
             return True
     return False
+
+
+def run_geocoding_stage(
+    df: pd.DataFrame,
+    address_column: str,
+    api_key: str,
+    store,
+) -> pd.DataFrame:
+    """Geocode each row using the learned resolve_geocode pipeline.
+
+    Writes latitude, longitude, geocode_source, and canonical_address columns.
+    Uses the openai_client module as the LLM fallback (provides .normalize()).
+    """
+    from engine.geocoding import resolve_geocode
+    from engine import openai_client
+
+    out = df.copy()
+    lats, lngs, sources, canonicals = [], [], [], []
+    for raw in out[address_column].astype(str):
+        result = resolve_geocode(
+            raw_text=raw,
+            api_key=api_key,
+            store=store,
+            openai_client=openai_client,
+        )
+        lats.append(result.get("latitude"))
+        lngs.append(result.get("longitude"))
+        sources.append(result.get("source"))
+        canonicals.append(result.get("formatted_address"))
+    out["latitude"] = lats
+    out["longitude"] = lngs
+    out["geocode_source"] = sources
+    out["canonical_address"] = canonicals
+    return out
