@@ -311,3 +311,101 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.55):
         out['raw_address_data'] = out.get('address', "")
 
     return out, confidence, mappings
+
+
+# ---- Correction-weighted variant ----
+
+HINT_BIAS = 0.10  # cost reduction per confirmed correction (capped at 5 hits)
+
+
+def _apply_hard_overrides(raw_headers, normalized, file_type, schema_cols, mappings, confidence):
+    """Apply BASE_OVERRIDES + file-type overrides on top of existing mappings.
+
+    Walks every (raw_header, schema_col) pair; when _find_override returns a
+    positive score it forces mappings[raw_header] = schema_col at confidence 1.0.
+    """
+    overrides = dict(BASE_OVERRIDES)
+    overrides.update(LEASE_OVERRIDES if file_type in ("LEASE", "lease") else SALE_OVERRIDES)
+    for i, raw in enumerate(raw_headers):
+        cleaned = normalized[i]
+        for target_col in schema_cols:
+            if _find_override(cleaned, overrides, target_col):
+                mappings[raw] = target_col
+                confidence[raw] = 1.0
+                break
+
+
+def generate_standardized_df_with_hints(
+    df: "pd.DataFrame",
+    schema_dict: dict,
+    file_type: str,
+    store=None,
+    threshold: float = 0.55,
+):
+    """Same as generate_standardized_df but applies correction hints to the cost matrix.
+
+    Returns (out_df, mappings, confidence) where:
+        mappings    = {raw_header: target_schema_col}
+        confidence  = {raw_header: float}
+
+    If store is None or has no corrections, behaviour matches the standard
+    embedding pipeline (modulo type bonuses — this variant omits them to keep
+    the cost matrix well-conditioned when hints are applied).
+    """
+    raw_headers = [str(c) for c in df.columns]
+    normalized = [clean_header(h) or "unknown column" for h in raw_headers]
+
+    schema_cols = list(schema_dict.keys())
+
+    header_embeds = get_embeddings(normalized)
+    schema_embeds = _get_schema_embeddings(schema_dict)
+
+    header_arr = np.array(header_embeds)
+    schema_arr = np.array(schema_embeds)
+
+    # cosine similarity → cost (1 - sim)
+    norms_h = np.linalg.norm(header_arr, axis=1, keepdims=True) + 1e-12
+    norms_s = np.linalg.norm(schema_arr, axis=1, keepdims=True) + 1e-12
+    sim = (header_arr / norms_h) @ (schema_arr / norms_s).T   # shape (n_headers, n_schema)
+    cost = 1.0 - sim
+
+    # Apply hint bias — reduce cost for correction-confirmed assignments
+    if store is not None:
+        for i, norm_h in enumerate(normalized):
+            corrections = store.get_corrections_for_context(
+                file_type=file_type, raw_header=norm_h
+            )
+            for target_col, weight in corrections.items():
+                if target_col in schema_cols:
+                    j = schema_cols.index(target_col)
+                    cost[i, j] -= HINT_BIAS * min(weight, 5) / 5.0
+
+    n_h, n_s = cost.shape
+    max_dim = max(n_h, n_s)
+    padded = np.full((max_dim, max_dim), 1.0)  # default cost = 1 (no match)
+    padded[:n_h, :n_s] = cost
+
+    row_ind, col_ind = linear_sum_assignment(padded)
+
+    mappings: dict[str, str] = {}
+    confidence: dict[str, float] = {}
+    for i, j in zip(row_ind, col_ind):
+        if i >= n_h or j >= n_s:
+            continue
+        score = sim[i, j]
+        if score >= threshold:
+            mappings[raw_headers[i]] = schema_cols[j]
+            confidence[raw_headers[i]] = float(round(score, 3))
+
+    # Hard overrides take precedence over embedding assignment
+    _apply_hard_overrides(raw_headers, normalized, file_type, schema_cols, mappings, confidence)
+
+    # Build output DataFrame
+    out = pd.DataFrame()
+    for raw, target in mappings.items():
+        col_data = df[raw]
+        if isinstance(col_data, pd.DataFrame):
+            col_data = col_data.iloc[:, 0]
+        out[target] = col_data.values
+
+    return out, mappings, confidence
