@@ -103,3 +103,72 @@ def fetch_google_data(raw_text, api_key):
 
     except Exception:
         return None
+
+
+# ---- Learned geocoding wrapper ----
+
+def _normalize_raw(raw_text: str) -> str:
+    """Texas bias + whitespace trim. Single source of truth for cache keys."""
+    s = (raw_text or "").strip()
+    if not s:
+        return s
+    s_upper = s.upper()
+    if ", TX" in s_upper or s_upper.endswith(" TX") or " TX " in f" {s_upper} ":
+        return s
+    return f"{s}, TX"
+
+
+def resolve_geocode(
+    raw_text: str,
+    api_key: str,
+    store,
+    openai_client,
+) -> dict:
+    """Learned geocoding flow:
+       1. Override table — highest precedence (user-confirmed fixed mapping).
+       2. Alias cache — raw_text → canonical address already resolved.
+       3. Google direct call.
+       4. On miss, LLM normalizes raw text → retry Google.
+    Every successful resolution is written back to the alias cache.
+    All lookups use the Texas-biased normalized form as the cache key.
+    """
+    normalized = _normalize_raw(raw_text)
+
+    override = store.get_geocode_override(normalized)
+    if override is not None:
+        return {**override, "source": "override"}
+
+    alias = store.get_geocode_alias(normalized)
+    if alias is not None:
+        store.bump_hit_count(normalized)
+        return {**alias, "source": "alias_cache"}
+
+    result = fetch_google_data(normalized, api_key=api_key)
+    if result is not None and result.get("latitude") is not None:
+        store.insert_geocode_alias(
+            raw_text=normalized,
+            canonical_address=result["formatted_address"],
+            lat=result["latitude"],
+            lng=result["longitude"],
+        )
+        return {**result, "source": "google"}
+
+    # LLM fallback
+    if openai_client is not None:
+        try:
+            cleaned = openai_client.normalize(raw_text)
+        except Exception:
+            cleaned = None
+        if cleaned:
+            cleaned_biased = _normalize_raw(cleaned)
+            retry = fetch_google_data(cleaned_biased, api_key=api_key)
+            if retry is not None and retry.get("latitude") is not None:
+                store.insert_geocode_alias(
+                    raw_text=normalized,  # key by ORIGINAL normalized, not cleaned
+                    canonical_address=retry["formatted_address"],
+                    lat=retry["latitude"],
+                    lng=retry["longitude"],
+                )
+                return {**retry, "source": "google+llm"}
+
+    return {"source": "failed", "raw_text": raw_text, "latitude": None, "longitude": None}
