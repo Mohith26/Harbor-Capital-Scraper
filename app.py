@@ -483,14 +483,6 @@ def section_header(title, subtitle=None):
     if subtitle:
         st.markdown(f'<div class="section-subtitle">{subtitle}</div>', unsafe_allow_html=True)
 
-def render_step(number, title, status="active"):
-    css_circle = {"active": "step-active", "done": "step-done", "pending": "step-pending"}[status]
-    css_label = {"active": "step-label-active", "done": "step-label-done", "pending": "step-label-pending"}[status]
-    icon = "&#10003;" if status == "done" else str(number)
-    st.markdown(f'''<div class="step-row">
-        <div class="step-circle {css_circle}">{icon}</div>
-        <span class="step-label {css_label}">{title}</span>
-    </div>''', unsafe_allow_html=True)
 
 def render_metric_card(label, value):
     st.markdown(f'''<div class="metric-card">
