@@ -391,6 +391,42 @@ section[data-testid="stSidebar"] {display: none;}
 /* ── General layout ── */
 .hc-main {background: #f4f5f7; min-height: 100vh;}
 .hc-content {padding: 0 16px 24px 16px;}
+
+/* ── Legacy helpers (section_header, render_metric_card) ── */
+.section-header {
+    color: #333333;
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin: 1.2rem 0 0.3rem 0;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid #F5A623;
+}
+.section-subtitle {
+    color: #666;
+    font-size: 0.82rem;
+    margin-top: -0.2rem;
+    margin-bottom: 0.8rem;
+}
+.metric-card {
+    background: #ffffff;
+    border-radius: 9px;
+    padding: 1rem 1.2rem;
+    border-left: 4px solid #F5A623;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    margin-bottom: 0.5rem;
+}
+.metric-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #333333;
+    line-height: 1.2;
+}
+.metric-label {
+    font-size: 0.78rem;
+    color: #777;
+    margin-top: 0.2rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
 </style>
 """, unsafe_allow_html=True)
 
