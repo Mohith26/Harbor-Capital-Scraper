@@ -134,111 +134,263 @@ def _load_image_b64(path):
     except Exception:
         return None
 
-_logo_b64 = _load_image_b64("HC-Logo-Stacked-Left-Charcoal@2000w.png")
-_icon_b64 = _load_image_b64("Slate@512w.png")
+_logo_b64 = _load_image_b64("Logo Masters/Stacked Left/@300w/HC-Logo-Stacked-Left-Charcoal@300w.png")
+_icon_b64 = _load_image_b64("Logo Masters/Dry Dock/@300w/HC-Logo-Icon-White@300w.png")
 
 # --- GLOBAL CSS ---
 st.markdown("""
 <style>
-    .section-header {
-        color: #333333;
-        font-size: 1.3rem;
-        font-weight: 700;
-        margin: 1.2rem 0 0.3rem 0;
-        padding-bottom: 0.4rem;
-        border-bottom: 2px solid #F5A623;
-    }
-    .section-subtitle {
-        color: #666;
-        font-size: 0.85rem;
-        margin-top: -0.2rem;
-        margin-bottom: 0.8rem;
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #333333 0%, #4a4a4a 100%);
-        border-radius: 10px;
-        padding: 1rem 1.2rem;
-        color: white;
-        text-align: center;
-        margin-bottom: 0.5rem;
-        border-left: 4px solid #F5A623;
-    }
-    .metric-card .metric-value {
-        font-size: 1.6rem;
-        font-weight: 700;
-        line-height: 1.2;
-        color: #F5A623;
-    }
-    .metric-card .metric-label {
-        font-size: 0.8rem;
-        opacity: 0.85;
-        margin-top: 0.2rem;
-    }
-    .step-row {
-        display: flex;
-        align-items: center;
-        gap: 0.6rem;
-        margin: 0.6rem 0;
-    }
-    .step-circle {
-        width: 30px;
-        height: 30px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 700;
-        font-size: 0.85rem;
-        flex-shrink: 0;
-    }
-    .step-active {
-        background-color: #F5A623;
-        color: #333333;
-    }
-    .step-done {
-        background-color: #333333;
-        color: #F5A623;
-    }
-    .step-pending {
-        background-color: #e0e0e0;
-        color: #999;
-    }
-    .step-label {
-        font-weight: 600;
-        font-size: 1.05rem;
-    }
-    .step-label-active { color: #F5A623; }
-    .step-label-done { color: #333333; }
-    .step-label-pending { color: #999; }
-    .badge-filter {
-        display: inline-block;
-        padding: 0.25em 0.7em;
-        border-radius: 12px;
-        font-size: 0.78rem;
-        font-weight: 600;
-        background-color: #FFF3DC;
-        color: #333333;
-        border: 1px solid #F5A623;
-    }
-    .record-count {
-        color: #555;
-        font-size: 0.95rem;
-        margin-bottom: 0.5rem;
-    }
-    .record-count b {
-        color: #333333;
-        font-size: 1.1rem;
-    }
-    /* Sidebar logo styling */
-    .sidebar-logo {
-        padding: 0.5rem 0 1rem 0;
-        border-bottom: 2px solid #F5A623;
-        margin-bottom: 1rem;
-    }
-    /* Plotly chart accent override */
-    .js-plotly-plot .plotly .modebar-btn path {
-        fill: #333333 !important;
-    }
+/* ── Hide Streamlit chrome ── */
+#MainMenu {visibility: hidden;}
+header {visibility: hidden;}
+footer {visibility: hidden;}
+.block-container {padding-top: 0 !important; padding-left: 74px !important;}
+section[data-testid="stSidebar"] {display: none;}
+
+/* ── Custom icon sidebar ── */
+.hc-sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    width: 58px;
+    height: 100vh;
+    background: #333333;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 0;
+    z-index: 200;
+    gap: 0;
+}
+.hc-sidebar-logo {
+    width: 36px;
+    height: 36px;
+    margin-bottom: 20px;
+    object-fit: contain;
+}
+.hc-nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 10px 0;
+    cursor: pointer;
+    text-decoration: none;
+    color: #aaa;
+    font-size: 9px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    gap: 4px;
+    transition: color 0.15s, background 0.15s;
+}
+.hc-nav-item:hover {color: #fff; background: rgba(255,255,255,0.06);}
+.hc-nav-item.active {color: #F5A623; border-left: 2px solid #F5A623;}
+.hc-nav-item svg {width: 18px; height: 18px; fill: currentColor;}
+.hc-nav-spacer {flex: 1;}
+.hc-nav-user {
+    font-size: 9px;
+    color: #888;
+    text-align: center;
+    padding: 6px 4px;
+    word-break: break-all;
+    line-height: 1.3;
+}
+.hc-nav-logout {
+    font-size: 9px;
+    color: #aaa;
+    padding: 8px 0;
+    cursor: pointer;
+    text-decoration: none;
+    text-align: center;
+    width: 100%;
+    display: block;
+}
+.hc-nav-logout:hover {color: #F5A623;}
+
+/* ── Page topbar ── */
+.hc-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: #ffffff;
+    border-bottom: 1px solid #e8e8e8;
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin-bottom: 1rem;
+}
+.hc-topbar-logo {height: 28px; object-fit: contain;}
+.hc-topbar-divider {width: 1px; height: 24px; background: #e0e0e0; flex-shrink: 0;}
+.hc-topbar-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #333333;
+    white-space: nowrap;
+    letter-spacing: 0.3px;
+}
+.hc-topbar-right {margin-left: auto; display: flex; align-items: center; gap: 8px;}
+.hc-selection-badge {
+    background: #333333;
+    color: #fff;
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.hc-export-btn {
+    background: #F5A623;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+    letter-spacing: 0.3px;
+}
+.hc-export-btn:hover {background: #D4910E;}
+.hc-export-menu {
+    position: relative;
+    display: inline-block;
+}
+.hc-export-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    z-index: 300;
+    min-width: 140px;
+    padding: 4px 0;
+}
+
+/* ── Filter chips ── */
+.hc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px 3px 10px;
+    background: #FFF3DC;
+    border: 1px solid #F5A623;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #333333;
+    white-space: nowrap;
+}
+.hc-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0 8px;
+}
+
+/* ── Metric cards ── */
+.hc-metric-card {
+    background: #ffffff;
+    border-radius: 9px;
+    padding: 1rem 1.2rem;
+    border-left: 4px solid #F5A623;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    margin-bottom: 0.5rem;
+}
+.hc-metric-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #333333;
+    line-height: 1.2;
+}
+.hc-metric-label {
+    font-size: 0.78rem;
+    color: #777;
+    margin-top: 0.2rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* ── Table controls bar ── */
+.hc-table-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 0 2px;
+}
+.hc-record-count {
+    font-size: 12px;
+    color: #777;
+    white-space: nowrap;
+}
+.hc-record-count b {color: #333; font-weight: 700;}
+
+/* ── Mapping status bar ── */
+.hc-status-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    padding: 8px 12px;
+    background: #f8f8f8;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    border: 1px solid #e8e8e8;
+}
+.hc-tag-mapped {
+    background: #E8F5E9;
+    color: #2E7D32;
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+.hc-tag-unmapped {
+    background: #FFEBEE;
+    color: #C62828;
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* ── Comp finder result card ── */
+.cf-card {
+    background: #fff;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    border: 1px solid #eee;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.cf-rank-badge {
+    display: inline-block;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 22px;
+    font-size: 11px;
+    font-weight: 700;
+    margin-right: 6px;
+}
+.cf-rank-top {background: #F5A623; color: #fff;}
+.cf-rank-rest {background: #e0e0e0; color: #555;}
+.cf-match-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(to right, #F5A623, #FFC75F);
+    margin-top: 4px;
+}
+
+/* ── General layout ── */
+.hc-main {background: #f4f5f7; min-height: 100vh;}
+.hc-content {padding: 0 16px 24px 16px;}
 </style>
 """, unsafe_allow_html=True)
 
