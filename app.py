@@ -495,7 +495,7 @@ if page == "Upload & Process":
     render_step(3, "Preview & Save", step3_status)
 
     st.markdown("")
-    uploaded_file = st.file_uploader("Upload Excel/CSV", type=['csv', 'xlsx', 'xls'])
+    uploaded_file = st.file_uploader("Upload Excel/CSV/PDF", type=['csv', 'xlsx', 'xls', 'pdf'])
 
     if uploaded_file:
         # Save to temp file
@@ -505,21 +505,53 @@ if page == "Upload & Process":
         tmp.close()
         path = tmp.name
 
-        # Detect sheets for multi-sheet Excel files
-        sheets = get_sheet_names(path)
-        selected_sheets = sheets  # default: all sheets
-        if len(sheets) > 1:
-            selected_sheets = st.multiselect(
-                f"This file has {len(sheets)} sheets. Select which to process:",
-                sheets,
-                default=sheets,
-                key="sheet_selector",
-            )
-            if not selected_sheets:
-                st.warning("Select at least one sheet to process.")
+        # PDF path: vision extraction bypasses sheet detection
+        if uploaded_file.name.lower().endswith(".pdf"):
+            if st.session_state.current_filename != uploaded_file.name:
+                with st.spinner("Extracting data from PDF via AI vision..."):
+                    try:
+                        from engine.pipeline import run_vision_pdf_stage
+                        seg_result = run_vision_pdf_stage(path, uploaded_file.name)
+                        pdf_df = seg_result.cleaned_df
+                        pdf_df['source_type'] = seg_result.fingerprint.file_type.upper()
+                        pdf_df['source_file'] = uploaded_file.name
+                        pdf_df['source_sheet'] = f"{uploaded_file.name}::pdf"
+                        pdf_sheet_key = f"{uploaded_file.name}::pdf"
+                        sheet_data = {
+                            pdf_sheet_key: {
+                                'raw_df': pdf_df,
+                                'clean_df': pdf_df,
+                                'mappings': seg_result.mapping_result.mappings,
+                                'confidence': seg_result.mapping_result.confidence,
+                                'file_type': seg_result.fingerprint.file_type.upper(),
+                                'input_columns': list(pdf_df.columns),
+                            }
+                        }
+                        st.session_state.clean_df = pdf_df
+                        st.session_state.mapping_confidence = None
+                        st.session_state.current_filename = uploaded_file.name
+                        st.session_state.geocoding_done = False
+                        st.session_state.sheet_data = sheet_data
+                        st.session_state.pop("broker_resolution", None)
+                        st.success(f"Extracted {len(pdf_df)} records from PDF!")
+                    except Exception as _pe:
+                        st.error(f"PDF extraction failed: {_pe}")
+        else:
+            # Detect sheets for multi-sheet Excel files
+            sheets = get_sheet_names(path)
+            selected_sheets = sheets  # default: all sheets
+            if len(sheets) > 1:
+                selected_sheets = st.multiselect(
+                    f"This file has {len(sheets)} sheets. Select which to process:",
+                    sheets,
+                    default=sheets,
+                    key="sheet_selector",
+                )
+                if not selected_sheets:
+                    st.warning("Select at least one sheet to process.")
 
-        if st.session_state.current_filename != uploaded_file.name and selected_sheets:
-            with st.spinner('AI is analyzing columns...'):
+            if st.session_state.current_filename != uploaded_file.name and selected_sheets:
+              with st.spinner('AI is analyzing columns...'):
                 sheet_data = {}
                 for sheet in selected_sheets:
                     base_label = sheet or "Sheet1"

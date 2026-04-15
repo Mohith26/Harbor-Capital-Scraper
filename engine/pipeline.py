@@ -159,6 +159,42 @@ def run_geocoding_stage(
     return out
 
 
+def run_vision_pdf_stage(pdf_path: str, filename: str) -> "SegmentResult":
+    """Extract rows from a PDF via GPT-4o vision and return as a SegmentResult.
+
+    Uses identity mapping (every column = schema column, no fingerprinting tier).
+    """
+    from engine.vision_pdf import extract_pdf_to_rows, _pdf_content_hash
+    from engine.types import SegmentResult, Fingerprint, MappingResult
+
+    df, file_type = extract_pdf_to_rows(pdf_path)
+    pdf_hash = _pdf_content_hash(pdf_path)
+    mappings = {c: c for c in df.columns}
+
+    fp = Fingerprint(
+        raw_hash=pdf_hash,
+        header_set_hash=pdf_hash,
+        headers=list(df.columns),
+        normalized_headers=list(df.columns),
+        file_type=file_type,
+        filename=filename,
+        sheet_name=None,
+    )
+    return SegmentResult(
+        segment_key=f"{filename}::pdf",
+        fingerprint=fp,
+        mapping_result=MappingResult(
+            fingerprint=fp,
+            mappings=mappings,
+            confidence={c: 1.0 for c in mappings},
+            source="vision_pdf",
+            similarity=1.0,
+            cleaned_df=df,
+        ),
+        cleaned_df=df,
+    )
+
+
 def detect_broker_stage(sample_text: str, filename: str, store) -> "BrokerResolution":
     """Extract broker from file metadata then resolve against the learning store."""
     from engine.brokers import resolve_broker, BrokerResolution
