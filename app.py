@@ -427,6 +427,49 @@ section[data-testid="stSidebar"] {display: none;}
     margin-top: 0.2rem;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
+.step-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.6rem 0;
+}
+.step-circle {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+.step-active { background-color: #F5A623; color: #333333; }
+.step-done { background-color: #333333; color: #F5A623; }
+.step-pending { background-color: #e0e0e0; color: #999; }
+.step-label { font-weight: 600; font-size: 1.05rem; }
+.step-label-active { color: #F5A623; }
+.step-label-done { color: #333333; }
+.step-label-pending { color: #999; }
+.badge-filter {
+    display: inline-block;
+    padding: 0.25em 0.7em;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    background-color: #FFF3DC;
+    color: #333333;
+    border: 1px solid #F5A623;
+}
+.record-count {
+    color: #555;
+    font-size: 0.95rem;
+    margin-bottom: 0.5rem;
+}
+.record-count b {
+    color: #333333;
+    font-size: 1.1rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
