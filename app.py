@@ -942,6 +942,33 @@ if page == "Upload & Process":
                 load_data.clear()
                 get_record_counts.clear()
 
+                # --- Teach the learning store from this confirmed save ---
+                try:
+                    from learning.store import SqliteLearningStore
+                    from engine.fingerprint import compute_fingerprint
+                    _learning_store = SqliteLearningStore()
+                    _user = st.session_state.get("user_email") or st.session_state.get("username") or "unknown"
+                    for _seg_label, _sd in st.session_state.sheet_data.items():
+                        _raw_df = _sd.get('raw_df')
+                        _seg_mappings = _sd.get('mappings') or {}
+                        _ftype = _sd.get('file_type', 'LEASE')
+                        if _raw_df is None or _raw_df.empty:
+                            continue
+                        _headers = [str(c) for c in _raw_df.columns]
+                        # mappings in session state: {target_col: raw_header} — invert
+                        _inverted = {v: k for k, v in _seg_mappings.items() if v}
+                        if not _inverted:
+                            continue
+                        _fp = compute_fingerprint(_headers, uploaded_file.name, _seg_label, _ftype)
+                        _learning_store.record_accepted_mapping(
+                            fingerprint=_fp,
+                            mappings=_inverted,
+                            confirmed_by=_user,
+                        )
+                except Exception as _le:
+                    import logging
+                    logging.getLogger(__name__).warning("Learning store writeback failed: %s", _le)
+
                 msg_parts = []
                 new_count = len(records)
                 if new_count:
