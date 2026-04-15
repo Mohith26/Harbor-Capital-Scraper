@@ -497,6 +497,58 @@ def render_metric_card(label, value):
         <div class="metric-label">{label}</div>
     </div>''', unsafe_allow_html=True)
 
+def render_sidebar(current_page, username, user_role):
+    """Render fixed HTML icon sidebar. Query-param routing: each icon links to ?page=<slug>."""
+    icon_b64_src = f'data:image/png;base64,{_icon_b64}' if _icon_b64 else ''
+    logo_img = f'<img class="hc-sidebar-logo" src="{icon_b64_src}" alt="HC">' if icon_b64_src else '<div style="width:36px;height:36px;background:#F5A623;border-radius:4px;margin-bottom:20px;"></div>'
+
+    def nav_item(slug, label, svg_path, page_name):
+        active_cls = ' active' if current_page == page_name else ''
+        return f'''<a class="hc-nav-item{active_cls}" href="?page={slug}">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="{svg_path}"/></svg>
+            {label}
+        </a>'''
+
+    # SVG icon paths (simple 24x24 Material-style)
+    SVG_DB    = "M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"
+    SVG_UP    = "M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"
+    SVG_AN    = "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"
+    SVG_CF    = "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"
+
+    initials = (username or "U")[0].upper()
+    short_role = user_role[:5].upper() if user_role else ""
+
+    html = f'''
+    <div class="hc-sidebar">
+        {logo_img}
+        {nav_item("database", "DB", SVG_DB, "Database View")}
+        {nav_item("upload", "UPLOAD", SVG_UP, "Upload & Process")}
+        {nav_item("analytics", "STATS", SVG_AN, "Analytics")}
+        {nav_item("finder", "FINDER", SVG_CF, "Comp Finder")}
+        <div class="hc-nav-spacer"></div>
+        <div class="hc-nav-user">{initials}<br>{short_role}</div>
+        <a class="hc-nav-logout" href="?action=logout">OUT</a>
+    </div>
+    '''
+    st.markdown(html, unsafe_allow_html=True)
+
+def render_topbar(page_title, filter_chips_html="", right_html=""):
+    """Render sticky page topbar with logo, title, optional filter chips, and right-side controls."""
+    logo_src = f'data:image/png;base64,{_logo_b64}' if _logo_b64 else ''
+    logo_img = f'<img class="hc-topbar-logo" src="{logo_src}" alt="Harbor Capital">' if logo_src else '<span style="font-weight:800;font-size:13px;color:#333;">HARBOR CAPITAL</span>'
+
+    chips_section = f'<div class="hc-filter-bar">{filter_chips_html}</div>' if filter_chips_html else ''
+
+    st.markdown(f'''
+    <div class="hc-topbar">
+        {logo_img}
+        <div class="hc-topbar-divider"></div>
+        <div class="hc-topbar-title">{page_title}</div>
+        {chips_section}
+        <div class="hc-topbar-right">{right_html}</div>
+    </div>
+    ''', unsafe_allow_html=True)
+
 # --- DATA CACHING ---
 @st.cache_data(ttl=30)
 def load_data(model_name):
@@ -558,14 +610,12 @@ user_role = auth_config['credentials']['usernames'].get(
     st.session_state.get("username", ""), {}
 ).get('role', 'analyst')
 
-if _logo_b64:
-    st.markdown(f'<img src="data:image/png;base64,{_logo_b64}" width="320" style="margin-bottom:0.5rem;">', unsafe_allow_html=True)
-
-# Sidebar: logo + user info + logout
-if _icon_b64:
-    st.sidebar.markdown(f'<img src="data:image/png;base64,{_icon_b64}" width="60" style="margin-bottom:0.5rem;">', unsafe_allow_html=True)
-st.sidebar.markdown(f"**{st.session_state.get('name', '')}** &nbsp;|&nbsp; {user_role}")
-authenticator.logout("Logout", "sidebar")
+# Handle logout via query param (?action=logout from the HTML sidebar "OUT" link)
+if st.query_params.get("action") == "logout":
+    for k in ["authentication_status", "name", "username", "logout"]:
+        st.session_state.pop(k, None)
+    st.query_params.clear()
+    st.rerun()
 
 # --- SESSION STATE ---
 if 'clean_df' not in st.session_state:
@@ -580,6 +630,14 @@ if 'geocoding_done' not in st.session_state:
     st.session_state.geocoding_done = False
 if 'sheet_data' not in st.session_state:
     st.session_state.sheet_data = {}  # {sheet_name: {raw_df, clean_df, mappings, confidence, file_type, input_columns}}
+if 'show_filter_panel' not in st.session_state:
+    st.session_state.show_filter_panel = False
+if 'show_export_menu' not in st.session_state:
+    st.session_state.show_export_menu = False
+if 'show_cf_export_menu' not in st.session_state:
+    st.session_state.show_cf_export_menu = False
+if 'db_search_text' not in st.session_state:
+    st.session_state.db_search_text = ""
 
 # Reset Filter Logic
 def reset_callback():
@@ -695,19 +753,29 @@ def apply_sidebar_filters(df, view_type, include_proximity=False):
 
     return mask
 
-# --- NAVIGATION ---
-page = st.sidebar.radio("Navigate", ["Upload & Process", "Database View", "Analytics", "Comp Finder"])
+# --- NAVIGATION: query-param routing ---
+_PAGE_MAP = {
+    "database": "Database View",
+    "upload": "Upload & Process",
+    "analytics": "Analytics",
+    "finder": "Comp Finder",
+}
+_qp = st.query_params.get("page")
+if _qp and _qp in _PAGE_MAP:
+    target = _PAGE_MAP[_qp]
+    if st.session_state.get("page") != target:
+        st.session_state["page"] = target
+    st.query_params.clear()
+    st.rerun()
 
-# Global filter indicator
-active_filter_count = sum(1 for k, v in st.session_state.items()
-                          if "filter_" in k and v is not None and v != [] and v != "" and v != ()
-                          and not k.endswith("_radius"))
-if active_filter_count > 0:
-    st.sidebar.markdown(
-        f'<div class="badge-filter" style="margin-top:0.5rem;">{active_filter_count} filter(s) active</div>',
-        unsafe_allow_html=True
-    )
-    st.sidebar.button("Clear All Filters", on_click=reset_callback, use_container_width=True)
+if "page" not in st.session_state:
+    st.session_state["page"] = "Database View"
+
+page = st.session_state["page"]
+username = st.session_state.get("username", "")
+
+# Render custom icon sidebar on every page
+render_sidebar(page, username, user_role)
 
 # =====================================================================
 # PAGE 1: UPLOAD & PROCESS
