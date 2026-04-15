@@ -535,15 +535,15 @@ def render_topbar(page_title, filter_chips_html="", right_html=""):
 
     chips_section = f'<div class="hc-filter-bar">{filter_chips_html}</div>' if filter_chips_html else ''
 
-    st.markdown(f'''
-    <div class="hc-topbar">
-        {logo_img}
-        <div class="hc-topbar-divider"></div>
-        <div class="hc-topbar-title">{_html.escape(page_title)}</div>
-        {chips_section}
-        <div class="hc-topbar-right">{right_html}</div>
-    </div>
-    ''', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="hc-topbar">{logo_img}'
+        f'<div class="hc-topbar-divider"></div>'
+        f'<div class="hc-topbar-title">{_html.escape(page_title)}</div>'
+        f'{chips_section}'
+        f'<div class="hc-topbar-right">{right_html}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 # --- DATA CACHING ---
 @st.cache_data(ttl=30)
