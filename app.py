@@ -6,6 +6,7 @@ import math
 import base64
 import tempfile
 import yaml
+import html as _html
 import streamlit_authenticator as stauth
 import folium
 from streamlit_folium import st_folium
@@ -515,8 +516,8 @@ def render_sidebar(current_page, username, user_role):
     SVG_AN    = "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"
     SVG_CF    = "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"
 
-    initials = (username or "U")[0].upper()
-    short_role = user_role[:5].upper() if user_role else ""
+    initials = _html.escape((username or "U")[0].upper())
+    short_role = _html.escape(user_role[:5].upper() if user_role else "")
 
     html = f'''
     <div class="hc-sidebar">
@@ -543,7 +544,7 @@ def render_topbar(page_title, filter_chips_html="", right_html=""):
     <div class="hc-topbar">
         {logo_img}
         <div class="hc-topbar-divider"></div>
-        <div class="hc-topbar-title">{page_title}</div>
+        <div class="hc-topbar-title">{_html.escape(page_title)}</div>
         {chips_section}
         <div class="hc-topbar-right">{right_html}</div>
     </div>
@@ -612,9 +613,8 @@ user_role = auth_config['credentials']['usernames'].get(
 
 # Handle logout via query param (?action=logout from the HTML sidebar "OUT" link)
 if st.query_params.get("action") == "logout":
-    for k in ["authentication_status", "name", "username", "logout"]:
-        st.session_state.pop(k, None)
     st.query_params.clear()
+    authenticator.logout(location='unrendered')
     st.rerun()
 
 # --- SESSION STATE ---
@@ -765,8 +765,10 @@ if _qp and _qp in _PAGE_MAP:
     target = _PAGE_MAP[_qp]
     if st.session_state.get("page") != target:
         st.session_state["page"] = target
-    st.query_params.clear()
-    st.rerun()
+        st.query_params.clear()
+        st.rerun()
+    else:
+        st.query_params.clear()  # clean URL without triggering rerun
 
 if "page" not in st.session_state:
     st.session_state["page"] = "Database View"
