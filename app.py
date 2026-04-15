@@ -783,20 +783,16 @@ render_sidebar(page, username, user_role)
 # PAGE 1: UPLOAD & PROCESS
 # =====================================================================
 if page == "Upload & Process":
-    # Determine step states
-    has_data = st.session_state.clean_df is not None
-    geocoded = has_data and st.session_state.clean_df['latitude'].notna().any()
+    render_topbar("Upload & Process")
 
-    step1_status = "done" if has_data else "active"
-    step2_status = "done" if geocoded else ("active" if has_data else "pending")
-    step3_status = "active" if geocoded else "pending"
-
-    render_step(1, "Upload & Parse", step1_status)
-    render_step(2, "Geocode Addresses", step2_status)
-    render_step(3, "Preview & Save", step3_status)
-
-    st.markdown("")
-    uploaded_file = st.file_uploader("Upload Excel/CSV", type=['csv', 'xlsx', 'xls'])
+    # ── Drop zone ──
+    st.markdown("""
+    <div style="border:2px dashed #ccc;border-radius:9px;padding:24px 20px;text-align:center;background:#fff;margin-bottom:1rem;">
+        <div style="font-size:14px;font-weight:600;color:#555;">Drop Excel or CSV here, or click to browse</div>
+        <div style="font-size:11px;color:#999;margin-top:4px;">.xlsx &nbsp; .xls &nbsp; .csv &nbsp;&#8212;&nbsp; max 500 rows per sheet</div>
+    </div>
+    """, unsafe_allow_html=True)
+    uploaded_file = st.file_uploader("Upload file", type=['csv', 'xlsx', 'xls'], label_visibility="collapsed")
 
     if uploaded_file:
         # Save to temp file
@@ -1003,11 +999,23 @@ if page == "Upload & Process":
                                     selectbox_options,
                                     index=default_idx,
                                     key=f"mapping_sel_{sheet_name}_{target_field}",
-                                    label_visibility="collapsed",
+                                    label_visibility="visible",
                                 )
 
+                    # ── Mapping status bar ──
+                    REQUIRED_FIELDS = ['address']
+                    _mapped_fields = {tf: current_maps.get(tf) for tf in mapping_schema if current_maps.get(tf)}
+                    _unmapped_required = [f for f in REQUIRED_FIELDS if f not in _mapped_fields]
+                    _status_html = '<div class="hc-status-bar">'
+                    for tf, src in _mapped_fields.items():
+                        _status_html += f'<span class="hc-tag-mapped">+ {tf.replace("_"," ").title()}</span>'
+                    for tf in _unmapped_required:
+                        _status_html += f'<span class="hc-tag-unmapped">! {tf.replace("_"," ").title()} required</span>'
+                    _status_html += '</div>'
+                    st.markdown(_status_html, unsafe_allow_html=True)
+
                     st.markdown("")
-                    if st.button("Re-Map Columns", type="primary", use_container_width=True, key=f"remap_btn_{sheet_name}"):
+                    if st.button("Apply Mapping", type="primary", use_container_width=True, key=f"remap_btn_{sheet_name}"):
                         user_mappings = {}
                         for target_field in mapping_schema:
                             sel = st.session_state.get(f"mapping_sel_{sheet_name}_{target_field}", skip_option)
@@ -1029,7 +1037,7 @@ if page == "Upload & Process":
                             all_clean.append(cdf)
                         st.session_state.clean_df = pd.concat(all_clean, ignore_index=True)
                         st.session_state.geocoding_done = False
-                        st.toast(f"Mapping updated for {sheet_name}!", icon="\u2705")
+                        st.toast(f"Mapping updated for {sheet_name}!")
                         st.rerun()
 
                     # --- MAPPED OUTPUT PREVIEW ---
@@ -1137,7 +1145,7 @@ if page == "Upload & Process":
                     use_container_width=True,
                 )
 
-            if st.button("Save to Database", type="primary", use_container_width=True):
+            if st.button("Geocode & Save to Database", type="primary", use_container_width=True):
                 # Upload original file to Supabase Storage
                 file_url = None
                 try:
