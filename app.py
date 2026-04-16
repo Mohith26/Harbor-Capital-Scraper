@@ -6,6 +6,7 @@ import math
 import base64
 import tempfile
 import yaml
+import html as _html
 import streamlit_authenticator as stauth
 import folium
 from streamlit_folium import st_folium
@@ -134,111 +135,350 @@ def _load_image_b64(path):
     except Exception:
         return None
 
-_logo_b64 = _load_image_b64("HC-Logo-Stacked-Left-Charcoal@2000w.png")
-_icon_b64 = _load_image_b64("Slate@512w.png")
+_logo_b64 = _load_image_b64("Logo Masters/Stacked Left/@300w/HC-Logo-Stacked-Left-Charcoal@300w.png")
+_icon_b64 = _load_image_b64("Logo Masters/Dry Dock/@300w/HC-Logo-Icon-White@300w.png")
 
 # --- GLOBAL CSS ---
 st.markdown("""
 <style>
-    .section-header {
-        color: #333333;
-        font-size: 1.3rem;
-        font-weight: 700;
-        margin: 1.2rem 0 0.3rem 0;
-        padding-bottom: 0.4rem;
-        border-bottom: 2px solid #F5A623;
-    }
-    .section-subtitle {
-        color: #666;
-        font-size: 0.85rem;
-        margin-top: -0.2rem;
-        margin-bottom: 0.8rem;
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #333333 0%, #4a4a4a 100%);
-        border-radius: 10px;
-        padding: 1rem 1.2rem;
-        color: white;
-        text-align: center;
-        margin-bottom: 0.5rem;
-        border-left: 4px solid #F5A623;
-    }
-    .metric-card .metric-value {
-        font-size: 1.6rem;
-        font-weight: 700;
-        line-height: 1.2;
-        color: #F5A623;
-    }
-    .metric-card .metric-label {
-        font-size: 0.8rem;
-        opacity: 0.85;
-        margin-top: 0.2rem;
-    }
-    .step-row {
-        display: flex;
-        align-items: center;
-        gap: 0.6rem;
-        margin: 0.6rem 0;
-    }
-    .step-circle {
-        width: 30px;
-        height: 30px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 700;
-        font-size: 0.85rem;
-        flex-shrink: 0;
-    }
-    .step-active {
-        background-color: #F5A623;
-        color: #333333;
-    }
-    .step-done {
-        background-color: #333333;
-        color: #F5A623;
-    }
-    .step-pending {
-        background-color: #e0e0e0;
-        color: #999;
-    }
-    .step-label {
-        font-weight: 600;
-        font-size: 1.05rem;
-    }
-    .step-label-active { color: #F5A623; }
-    .step-label-done { color: #333333; }
-    .step-label-pending { color: #999; }
-    .badge-filter {
-        display: inline-block;
-        padding: 0.25em 0.7em;
-        border-radius: 12px;
-        font-size: 0.78rem;
-        font-weight: 600;
-        background-color: #FFF3DC;
-        color: #333333;
-        border: 1px solid #F5A623;
-    }
-    .record-count {
-        color: #555;
-        font-size: 0.95rem;
-        margin-bottom: 0.5rem;
-    }
-    .record-count b {
-        color: #333333;
-        font-size: 1.1rem;
-    }
-    /* Sidebar logo styling */
-    .sidebar-logo {
-        padding: 0.5rem 0 1rem 0;
-        border-bottom: 2px solid #F5A623;
-        margin-bottom: 1rem;
-    }
-    /* Plotly chart accent override */
-    .js-plotly-plot .plotly .modebar-btn path {
-        fill: #333333 !important;
-    }
+/* ── Hide Streamlit chrome ── */
+#MainMenu {visibility: hidden;}
+header, div[data-testid="stHeader"], div[data-testid="stDecoration"],
+div[data-testid="stToolbar"], div[data-testid="stStatusWidget"] {display: none !important;}
+footer {visibility: hidden;}
+.block-container {padding-top: 0 !important; padding-left: 74px !important;}
+section[data-testid="stMain"] {padding-top: 0 !important;}
+section[data-testid="stMain"] > div:first-child {padding-top: 0 !important;}
+section[data-testid="stSidebar"] {display: none;}
+
+/* ── Custom icon sidebar ── */
+.hc-sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    width: 58px;
+    height: 100vh;
+    background: #333333;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 0;
+    z-index: 200;
+    gap: 0;
+}
+.hc-sidebar-logo {
+    width: 36px;
+    height: 36px;
+    margin-bottom: 20px;
+    object-fit: contain;
+}
+.hc-nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 10px 0;
+    cursor: pointer;
+    text-decoration: none;
+    color: #aaa;
+    font-size: 9px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    gap: 4px;
+    transition: color 0.15s, background 0.15s;
+}
+a.hc-nav-item, a.hc-nav-item:link, a.hc-nav-item:visited {color: #aaa; text-decoration: none;}
+.hc-nav-item:hover, a.hc-nav-item:hover {color: #fff; background: rgba(255,255,255,0.06);}
+.hc-nav-item.active, a.hc-nav-item.active, a.hc-nav-item.active:visited {color: #F5A623; border-left: 2px solid #F5A623;}
+.hc-nav-item svg {width: 18px; height: 18px; fill: currentColor;}
+.hc-nav-spacer {flex: 1;}
+.hc-nav-user {
+    font-size: 9px;
+    color: #888;
+    text-align: center;
+    padding: 6px 4px;
+    word-break: break-all;
+    line-height: 1.3;
+}
+.hc-nav-logout {
+    font-size: 9px;
+    color: #aaa;
+    padding: 8px 0;
+    cursor: pointer;
+    text-decoration: none;
+    text-align: center;
+    width: 100%;
+    display: block;
+}
+.hc-nav-logout:hover {color: #F5A623;}
+
+/* ── Page topbar ── */
+.hc-topbar {
+    position: fixed;
+    top: 0;
+    left: 58px;
+    right: 0;
+    z-index: 100;
+    background: #ffffff;
+    border-bottom: 1px solid #e8e8e8;
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.hc-topbar-spacer {height: 57px;}
+.hc-topbar-logo {height: 28px; object-fit: contain;}
+.hc-topbar-divider {width: 1px; height: 24px; background: #e0e0e0; flex-shrink: 0;}
+.hc-topbar-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #333333;
+    white-space: nowrap;
+    letter-spacing: 0.3px;
+}
+.hc-topbar-right {margin-left: auto; display: flex; align-items: center; gap: 8px;}
+.hc-selection-badge {
+    background: #333333;
+    color: #fff;
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.hc-export-btn {
+    display: inline-block;
+    background: #F5A623;
+    color: #fff !important;
+    border: none;
+    border-radius: 6px;
+    text-decoration: none;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+    letter-spacing: 0.3px;
+}
+.hc-export-btn:hover {background: #D4910E;}
+.hc-export-menu {
+    position: relative;
+    display: inline-block;
+}
+.hc-export-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    z-index: 300;
+    min-width: 140px;
+    padding: 4px 0;
+}
+
+/* ── Filter chips ── */
+.hc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px 3px 10px;
+    background: #FFF3DC;
+    border: 1px solid #F5A623;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #333333;
+    white-space: nowrap;
+}
+.hc-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0 8px;
+}
+
+/* ── Metric cards ── */
+.hc-metric-card {
+    background: #ffffff;
+    border-radius: 9px;
+    padding: 1rem 1.2rem;
+    border-left: 4px solid #F5A623;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    margin-bottom: 0.5rem;
+}
+.hc-metric-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #333333;
+    line-height: 1.2;
+}
+.hc-metric-label {
+    font-size: 0.78rem;
+    color: #777;
+    margin-top: 0.2rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* ── Table controls bar ── */
+.hc-table-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 0 2px;
+}
+.hc-record-count {
+    font-size: 12px;
+    color: #777;
+    white-space: nowrap;
+}
+.hc-record-count b {color: #333; font-weight: 700;}
+
+/* ── Mapping status bar ── */
+.hc-status-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    padding: 8px 12px;
+    background: #f8f8f8;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    border: 1px solid #e8e8e8;
+}
+.hc-tag-mapped {
+    background: #E8F5E9;
+    color: #2E7D32;
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+.hc-tag-unmapped {
+    background: #FFEBEE;
+    color: #C62828;
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* ── Comp finder result card ── */
+.cf-card {
+    background: #fff;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    border: 1px solid #eee;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.cf-rank-badge {
+    display: inline-block;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 22px;
+    font-size: 11px;
+    font-weight: 700;
+    margin-right: 6px;
+}
+.cf-rank-top {background: #F5A623; color: #fff;}
+.cf-rank-rest {background: #e0e0e0; color: #555;}
+.cf-match-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(to right, #F5A623, #FFC75F);
+    margin-top: 4px;
+}
+
+/* ── General layout ── */
+.hc-main {background: #f4f5f7; min-height: 100vh;}
+.hc-content {padding: 0 16px 24px 16px;}
+
+/* ── Legacy helpers (section_header, render_metric_card) ── */
+.section-header {
+    color: #333333;
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin: 1.2rem 0 0.3rem 0;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid #F5A623;
+}
+.section-subtitle {
+    color: #666;
+    font-size: 0.82rem;
+    margin-top: -0.2rem;
+    margin-bottom: 0.8rem;
+}
+.metric-card {
+    background: #ffffff;
+    border-radius: 9px;
+    padding: 1rem 1.2rem;
+    border-left: 4px solid #F5A623;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    margin-bottom: 0.5rem;
+}
+.metric-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #333333;
+    line-height: 1.2;
+}
+.metric-label {
+    font-size: 0.78rem;
+    color: #777;
+    margin-top: 0.2rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.step-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.6rem 0;
+}
+.step-circle {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+.step-active { background-color: #F5A623; color: #333333; }
+.step-done { background-color: #333333; color: #F5A623; }
+.step-pending { background-color: #e0e0e0; color: #999; }
+.step-label { font-weight: 600; font-size: 1.05rem; }
+.step-label-active { color: #F5A623; }
+.step-label-done { color: #333333; }
+.step-label-pending { color: #999; }
+.badge-filter {
+    display: inline-block;
+    padding: 0.25em 0.7em;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    background-color: #FFF3DC;
+    color: #333333;
+    border: 1px solid #F5A623;
+}
+.record-count {
+    color: #555;
+    font-size: 0.95rem;
+    margin-bottom: 0.5rem;
+}
+.record-count b {
+    color: #333333;
+    font-size: 1.1rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -251,20 +491,64 @@ def section_header(title, subtitle=None):
     if subtitle:
         st.markdown(f'<div class="section-subtitle">{subtitle}</div>', unsafe_allow_html=True)
 
-def render_step(number, title, status="active"):
-    css_circle = {"active": "step-active", "done": "step-done", "pending": "step-pending"}[status]
-    css_label = {"active": "step-label-active", "done": "step-label-done", "pending": "step-label-pending"}[status]
-    icon = "&#10003;" if status == "done" else str(number)
-    st.markdown(f'''<div class="step-row">
-        <div class="step-circle {css_circle}">{icon}</div>
-        <span class="step-label {css_label}">{title}</span>
-    </div>''', unsafe_allow_html=True)
 
 def render_metric_card(label, value):
     st.markdown(f'''<div class="metric-card">
         <div class="metric-value">{value}</div>
         <div class="metric-label">{label}</div>
     </div>''', unsafe_allow_html=True)
+
+def render_sidebar(current_page, username, user_role):
+    """Render fixed HTML icon sidebar. Query-param routing: each icon links to ?page=<slug>."""
+    icon_b64_src = f'data:image/png;base64,{_icon_b64}' if _icon_b64 else ''
+    logo_img = f'<img class="hc-sidebar-logo" src="{icon_b64_src}" alt="HC">' if icon_b64_src else '<div style="width:36px;height:36px;background:#F5A623;border-radius:4px;margin-bottom:20px;"></div>'
+
+    def nav_item(slug, label, svg_path, page_name):
+        active_cls = ' active' if current_page == page_name else ''
+        return f'''<a class="hc-nav-item{active_cls}" href="?page={slug}">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="{svg_path}"/></svg>
+            {label}
+        </a>'''
+
+    # SVG icon paths (simple 24x24 Material-style)
+    SVG_DB    = "M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"
+    SVG_UP    = "M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"
+    SVG_AN    = "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"
+    SVG_CF    = "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"
+
+    initials = _html.escape((username or "U")[0].upper())
+    short_role = _html.escape(user_role[:5].upper() if user_role else "")
+
+    html = f'''
+    <div class="hc-sidebar">
+        {logo_img}
+        {nav_item("database", "DB", SVG_DB, "Database View")}
+        {nav_item("upload", "UPLOAD", SVG_UP, "Upload & Process")}
+        {nav_item("analytics", "STATS", SVG_AN, "Analytics")}
+        {nav_item("finder", "FINDER", SVG_CF, "Comp Finder")}
+        <div class="hc-nav-spacer"></div>
+        <div class="hc-nav-user">{initials}<br>{short_role}</div>
+        <a class="hc-nav-logout" href="?action=logout">OUT</a>
+    </div>
+    '''
+    st.markdown(html, unsafe_allow_html=True)
+
+def render_topbar(page_title, filter_chips_html="", right_html=""):
+    """Render sticky page topbar with logo, title, optional filter chips, and right-side controls."""
+    logo_src = f'data:image/png;base64,{_logo_b64}' if _logo_b64 else ''
+    logo_img = f'<img class="hc-topbar-logo" src="{logo_src}" alt="Harbor Capital">' if logo_src else '<span style="font-weight:800;font-size:13px;color:#333;">HARBOR CAPITAL</span>'
+
+    chips_section = f'<div class="hc-filter-bar">{filter_chips_html}</div>' if filter_chips_html else ''
+
+    st.markdown(
+        f'<div class="hc-topbar">{logo_img}'
+        f'<div class="hc-topbar-divider"></div>'
+        f'<div class="hc-topbar-title">{_html.escape(page_title)}</div>'
+        f'{chips_section}'
+        f'<div class="hc-topbar-right">{right_html}</div>'
+        f'</div><div class="hc-topbar-spacer"></div>',
+        unsafe_allow_html=True,
+    )
 
 # --- DATA CACHING ---
 @st.cache_data(ttl=30)
@@ -327,14 +611,11 @@ user_role = auth_config['credentials']['usernames'].get(
     st.session_state.get("username", ""), {}
 ).get('role', 'analyst')
 
-if _logo_b64:
-    st.markdown(f'<img src="data:image/png;base64,{_logo_b64}" width="320" style="margin-bottom:0.5rem;">', unsafe_allow_html=True)
-
-# Sidebar: logo + user info + logout
-if _icon_b64:
-    st.sidebar.markdown(f'<img src="data:image/png;base64,{_icon_b64}" width="60" style="margin-bottom:0.5rem;">', unsafe_allow_html=True)
-st.sidebar.markdown(f"**{st.session_state.get('name', '')}** &nbsp;|&nbsp; {user_role}")
-authenticator.logout("Logout", "sidebar")
+# Handle logout via query param (?action=logout from the HTML sidebar "OUT" link)
+if st.query_params.get("action") == "logout":
+    st.query_params.clear()
+    authenticator.logout(location='unrendered')
+    st.rerun()
 
 # --- SESSION STATE ---
 if 'clean_df' not in st.session_state:
@@ -349,6 +630,14 @@ if 'geocoding_done' not in st.session_state:
     st.session_state.geocoding_done = False
 if 'sheet_data' not in st.session_state:
     st.session_state.sheet_data = {}  # {sheet_name: {raw_df, clean_df, mappings, confidence, file_type, input_columns}}
+if 'show_filter_panel' not in st.session_state:
+    st.session_state.show_filter_panel = False
+if 'show_export_menu' not in st.session_state:
+    st.session_state.show_export_menu = False
+if 'show_cf_export_menu' not in st.session_state:
+    st.session_state.show_cf_export_menu = False
+if 'db_search_text' not in st.session_state:
+    st.session_state.db_search_text = ""
 
 # Reset Filter Logic
 def reset_callback():
@@ -464,38 +753,46 @@ def apply_sidebar_filters(df, view_type, include_proximity=False):
 
     return mask
 
-# --- NAVIGATION ---
-page = st.sidebar.radio("Navigate", ["Upload & Process", "Database View", "Analytics", "Comp Finder"])
+# --- NAVIGATION: query-param routing ---
+_PAGE_MAP = {
+    "database": "Database View",
+    "upload": "Upload & Process",
+    "analytics": "Analytics",
+    "finder": "Comp Finder",
+}
+_qp = st.query_params.get("page")
+if _qp and _qp in _PAGE_MAP:
+    target = _PAGE_MAP[_qp]
+    if st.session_state.get("page") != target:
+        st.session_state["page"] = target
+        st.query_params.clear()
+        st.rerun()
+    else:
+        st.query_params.clear()  # clean URL without triggering rerun
 
-# Global filter indicator
-active_filter_count = sum(1 for k, v in st.session_state.items()
-                          if "filter_" in k and v is not None and v != [] and v != "" and v != ()
-                          and not k.endswith("_radius"))
-if active_filter_count > 0:
-    st.sidebar.markdown(
-        f'<div class="badge-filter" style="margin-top:0.5rem;">{active_filter_count} filter(s) active</div>',
-        unsafe_allow_html=True
-    )
-    st.sidebar.button("Clear All Filters", on_click=reset_callback, use_container_width=True)
+if "page" not in st.session_state:
+    st.session_state["page"] = "Database View"
+
+page = st.session_state["page"]
+username = st.session_state.get("username", "")
+
+# Render custom icon sidebar on every page
+render_sidebar(page, username, user_role)
 
 # =====================================================================
 # PAGE 1: UPLOAD & PROCESS
 # =====================================================================
 if page == "Upload & Process":
-    # Determine step states
-    has_data = st.session_state.clean_df is not None
-    geocoded = has_data and st.session_state.clean_df['latitude'].notna().any()
+    render_topbar("Upload & Process")
 
-    step1_status = "done" if has_data else "active"
-    step2_status = "done" if geocoded else ("active" if has_data else "pending")
-    step3_status = "active" if geocoded else "pending"
-
-    render_step(1, "Upload & Parse", step1_status)
-    render_step(2, "Geocode Addresses", step2_status)
-    render_step(3, "Preview & Save", step3_status)
-
-    st.markdown("")
-    uploaded_file = st.file_uploader("Upload Excel/CSV/PDF", type=['csv', 'xlsx', 'xls', 'pdf'])
+    # ── Drop zone ──
+    st.markdown("""
+    <div style="border:2px dashed #ccc;border-radius:9px;padding:24px 20px;text-align:center;background:#fff;margin-bottom:1rem;">
+        <div style="font-size:14px;font-weight:600;color:#555;">Drop Excel, CSV, or PDF here, or click to browse</div>
+        <div style="font-size:11px;color:#999;margin-top:4px;">.xlsx &nbsp; .xls &nbsp; .csv &nbsp; .pdf &nbsp;&#8212;&nbsp; max 500 rows per sheet</div>
+    </div>
+    """, unsafe_allow_html=True)
+    uploaded_file = st.file_uploader("Upload file", type=['csv', 'xlsx', 'xls', 'pdf'], label_visibility="collapsed")
 
     if uploaded_file:
         # Save to temp file
@@ -756,11 +1053,23 @@ if page == "Upload & Process":
                                     selectbox_options,
                                     index=default_idx,
                                     key=f"mapping_sel_{sheet_name}_{target_field}",
-                                    label_visibility="collapsed",
+                                    label_visibility="visible",
                                 )
 
+                    # ── Mapping status bar ──
+                    REQUIRED_FIELDS = ['address']
+                    _mapped_fields = {tf: current_maps.get(tf) for tf in mapping_schema if current_maps.get(tf)}
+                    _unmapped_required = [f for f in REQUIRED_FIELDS if f not in _mapped_fields]
+                    _status_html = '<div class="hc-status-bar">'
+                    for tf in _mapped_fields:
+                        _status_html += f'<span class="hc-tag-mapped">+ {tf.replace("_"," ").title()}</span>'
+                    for tf in _unmapped_required:
+                        _status_html += f'<span class="hc-tag-unmapped">! {tf.replace("_"," ").title()} required</span>'
+                    _status_html += '</div>'
+                    st.markdown(_status_html, unsafe_allow_html=True)
+
                     st.markdown("")
-                    if st.button("Re-Map Columns", type="primary", use_container_width=True, key=f"remap_btn_{sheet_name}"):
+                    if st.button("Apply Mapping", type="primary", use_container_width=True, key=f"remap_btn_{sheet_name}"):
                         user_mappings = {}
                         for target_field in mapping_schema:
                             sel = st.session_state.get(f"mapping_sel_{sheet_name}_{target_field}", skip_option)
@@ -782,7 +1091,7 @@ if page == "Upload & Process":
                             all_clean.append(cdf)
                         st.session_state.clean_df = pd.concat(all_clean, ignore_index=True)
                         st.session_state.geocoding_done = False
-                        st.toast(f"Mapping updated for {sheet_name}!", icon="\u2705")
+                        st.toast(f"Mapping updated for {sheet_name}!")
                         st.rerun()
 
                     # --- MAPPED OUTPUT PREVIEW ---
@@ -896,7 +1205,7 @@ if page == "Upload & Process":
                     use_container_width=True,
                 )
 
-            if st.button("Save to Database", type="primary", use_container_width=True):
+            if st.button("Geocode & Save to Database", type="primary", use_container_width=True):
                 # Upload original file to Supabase Storage
                 file_url = None
                 try:
@@ -1067,28 +1376,97 @@ if page == "Upload & Process":
 # PAGE 2: DATABASE VIEW
 # =====================================================================
 elif page == "Database View":
-    section_header("Database Explorer")
 
-    # Record counts for type selector
     sale_count, lease_count = get_record_counts()
-    view_type = st.radio(
-        "Select Data Type",
-        [f"Sales Comps ({sale_count})", f"Lease Comps ({lease_count})"],
-        horizontal=True
-    )
+
+    # ── Build filter chips HTML from active session state ──
+    def _db_chip_html(label, rm_key):
+        import html as _html
+        return f'<span class="hc-chip" id="chip-{_html.escape(rm_key)}">{_html.escape(str(label))} &nbsp;<span style="color:#F5A623;font-weight:900;">x</span></span>'
+
+    filter_chips_html = ""
+    if st.session_state.get("filter_cat_city"):
+        for v in st.session_state["filter_cat_city"]:
+            filter_chips_html += _db_chip_html(f"City: {v}", "filter_cat_city")
+    if st.session_state.get("filter_cat_zip_code"):
+        for v in st.session_state["filter_cat_zip_code"]:
+            filter_chips_html += _db_chip_html(f"Zip: {v}", "filter_cat_zip_code")
+    for _fk in ["filter_min_sale_price", "filter_max_sale_price", "filter_min_price_per_sf",
+                "filter_max_price_per_sf", "filter_min_building_size", "filter_max_building_size",
+                "filter_min_rate_monthly", "filter_max_rate_monthly"]:
+        if st.session_state.get(_fk) is not None:
+            _label = _fk.replace("filter_min_", "Min ").replace("filter_max_", "Max ").replace("_", " ").title()
+            filter_chips_html += _db_chip_html(_label, _fk)
+    if st.session_state.get("filter_loc_center"):
+        filter_chips_html += _db_chip_html(f"Near: {st.session_state['filter_loc_center'][:20]}", "filter_loc_center")
+
+    right_html = '<a href="?export_menu=1" class="hc-export-btn">Export &#9662;</a>'
+
+    # Handle export menu toggle via query param from topbar button
+    if st.query_params.get("export_menu") == "1":
+        st.session_state.show_export_menu = True
+        st.query_params.clear()
+        st.rerun()
+
+    render_topbar("Database View", filter_chips_html, right_html)
+
+    # ── Filter chip remove buttons ──
+    _active_filter_keys = [k for k, v in st.session_state.items()
+                           if k.startswith("filter_") and v not in (None, [], "", ())
+                           and not k.endswith("_radius")]
+    if _active_filter_keys:
+        _rm_cols = st.columns(len(_active_filter_keys) + 1)
+        for _i, _fk in enumerate(_active_filter_keys):
+            with _rm_cols[_i]:
+                if st.button(f"x {_fk.replace('filter_', '').replace('_', ' ')[:12]}", key=f"rm_{_fk}",
+                             help=f"Remove {_fk} filter"):
+                    del st.session_state[_fk]
+                    st.rerun()
+        with _rm_cols[-1]:
+            if st.button("Clear all", key="rm_all_db"):
+                reset_callback()
+                st.rerun()
+
+    # ── View type toggle ──
+    _db_col1, _db_col2 = st.columns([2, 3])
+    with _db_col1:
+        view_type = st.radio(
+            "Type",
+            [f"Sales ({sale_count})", f"Leases ({lease_count})"],
+            horizontal=True,
+            key="db_view_type_radio",
+            label_visibility="collapsed",
+        )
     view_type = "Sales Comps" if "Sales" in view_type else "Lease Comps"
 
     df = load_data("SaleComp" if view_type == "Sales Comps" else "LeaseComp").copy()
     model_cls = SaleComp if view_type == "Sales Comps" else LeaseComp
 
-    if df.empty:
-        st.info("Database is empty. Upload files on the Upload page.")
-    else:
-        # --- SIDEBAR FILTERS ---
-        st.sidebar.markdown("---")
-        mask = apply_sidebar_filters(df, view_type, include_proximity=True)
+    # ── Inline filter panel ──
+    with _db_col2:
+        if st.button("+ Filter", key="db_filter_btn"):
+            st.session_state.show_filter_panel = not st.session_state.get("show_filter_panel", False)
 
-        # Distance calculation for proximity search
+    if st.session_state.get("show_filter_panel"):
+        with st.container():
+            st.markdown("---")
+            mask = apply_sidebar_filters(df, view_type, include_proximity=True)
+            st.markdown("---")
+    else:
+        mask = pd.Series([True] * len(df))
+
+    if df.empty:
+        # ── Metrics row: empty state ──
+        m1, m2, m3, m4 = st.columns(4)
+        with m1: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Sales Comps</div></div>', unsafe_allow_html=True)
+        with m2: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Lease Comps</div></div>', unsafe_allow_html=True)
+        with m3:
+            _empty_m3_lbl = "Avg Sale Price" if view_type == "Sales Comps" else "Avg $/SF/Mo"
+            st.markdown(f'<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">{_empty_m3_lbl}</div></div>', unsafe_allow_html=True)
+        with m4: st.markdown('<div class="hc-metric-card"><div class="hc-metric-value">—</div><div class="hc-metric-label">Avg $/SF</div></div>', unsafe_allow_html=True)
+        st.info("No records yet. Upload a file to get started.")
+    else:
+        # ── Apply proximity filter if set ──
         center_addr = st.session_state.get("filter_loc_center", "")
         radius = st.session_state.get("filter_loc_radius", 5)
         lat_c, lon_c = None, None
@@ -1104,13 +1482,27 @@ elif page == "Database View":
                 else:
                     st.error("Could not find that address.")
 
-        # --- APPLY FILTERS ---
         df_filtered = df[mask].copy()
 
-        st.markdown(
-            f'<div class="record-count">Showing <b>{len(df_filtered)}</b> of {len(df)} records</div>',
-            unsafe_allow_html=True
-        )
+        # ── Metrics row ──
+        _avg_sale = df_filtered['sale_price'].dropna().mean() if 'sale_price' in df_filtered.columns and view_type == "Sales Comps" else None
+        _avg_psf  = df_filtered['price_per_sf'].dropna().mean() if 'price_per_sf' in df_filtered.columns and view_type == "Sales Comps" else None
+        _avg_rate = df_filtered['rate_monthly'].dropna().mean() if 'rate_monthly' in df_filtered.columns and view_type == "Lease Comps" else None
+
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.markdown(f'<div class="hc-metric-card"><div class="hc-metric-value">{sale_count:,}</div><div class="hc-metric-label">Sales Comps</div></div>', unsafe_allow_html=True)
+        with m2:
+            st.markdown(f'<div class="hc-metric-card"><div class="hc-metric-value">{lease_count:,}</div><div class="hc-metric-label">Lease Comps</div></div>', unsafe_allow_html=True)
+        with m3:
+            _val = f"${_avg_sale:,.0f}" if _avg_sale is not None and pd.notna(_avg_sale) else (f"${_avg_rate:.2f}/mo" if _avg_rate is not None and pd.notna(_avg_rate) else "—")
+            _lbl = "Avg Sale Price" if view_type == "Sales Comps" else "Avg $/SF/Mo"
+            st.markdown(f'<div class="hc-metric-card"><div class="hc-metric-value">{_val}</div><div class="hc-metric-label">{_lbl}</div></div>', unsafe_allow_html=True)
+        with m4:
+            _val4 = f"${_avg_psf:.2f}" if _avg_psf is not None and pd.notna(_avg_psf) else "—"
+            st.markdown(f'<div class="hc-metric-card"><div class="hc-metric-value">{_val4}</div><div class="hc-metric-label">Avg $/SF</div></div>', unsafe_allow_html=True)
+
+        st.markdown("")
 
         # Column ordering for leases
         if view_type == "Lease Comps":
@@ -1118,8 +1510,25 @@ elif page == "Database View":
             other_cols = [c for c in df_filtered.columns if c not in priority]
             df_filtered = df_filtered[priority + other_cols]
 
+        # ── Table controls: inline search + record count ──
+        _tc1, _tc2, _tc3 = st.columns([3, 1, 1])
+        with _tc1:
+            _search = st.text_input("Search", placeholder="Address, buyer/seller, notes...",
+                                    key="db_search_text", label_visibility="collapsed")
+        if _search:
+            _addr_match = df_filtered.get('address', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False, regex=False)
+            _buyer_match = df_filtered.get('buyer', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False, regex=False)
+            _seller_match = df_filtered.get('seller', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False, regex=False)
+            _tenant_match = df_filtered.get('tenant_name', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False, regex=False)
+            _notes_match = df_filtered.get('notes', pd.Series(dtype=str)).astype(str).str.contains(_search, case=False, na=False, regex=False)
+            df_filtered = df_filtered[_addr_match | _buyer_match | _seller_match | _tenant_match | _notes_match]
+        with _tc3:
+            st.markdown(f'<div class="hc-record-count" style="padding-top:8px;"><b>{len(df_filtered)}</b> of {len(df)}</div>', unsafe_allow_html=True)
+
+        st.caption("-- shift+click for range select --")
+
         # Column config
-        col_config = {"Select": st.column_config.CheckboxColumn("Select", default=False)}
+        col_config = {}
         if 'source_file_url' in df_filtered.columns:
             col_config["source_file_url"] = st.column_config.LinkColumn("Source File", display_text="View")
         if view_type == "Sales Comps":
@@ -1133,38 +1542,37 @@ elif page == "Database View":
             col_config["leased_sf"] = st.column_config.NumberColumn("Leased SF", format="%,.0f")
             col_config["ti_allowance"] = st.column_config.NumberColumn("TI", format="$%.2f")
 
-        # ---- TABS: Data Table | Map | Export & Actions ----
-        tab_table, tab_map, tab_export = st.tabs(["Data Table", "Map View", "Export & Actions"])
+        # ── Tabs: Data Table | Map View ──
+        tab_table, tab_map = st.tabs(["Data Table", "Map View"])
 
         with tab_table:
-            # Hide internal columns from display
             hide_cols = ['created_at', 'raw_address_data', 'source_file']
             display_df = df_filtered.drop(columns=[c for c in hide_cols if c in df_filtered.columns])
 
             if user_role == "admin":
-                # Admin: editable data_editor with checkbox selection
+                display_df = display_df.copy()
                 display_df.insert(0, "Select", False)
+                admin_col_config = {"Select": st.column_config.CheckboxColumn("Select", default=False)}
+                admin_col_config.update(col_config)
+                if 'source_file_url' in display_df.columns:
+                    admin_col_config["source_file_url"] = st.column_config.LinkColumn("Source File", display_text="View")
                 edited_view = st.data_editor(
-                    display_df,
-                    hide_index=True,
-                    column_config=col_config,
-                    use_container_width=True,
-                    height=600,
+                    display_df, hide_index=True, column_config=admin_col_config,
+                    use_container_width=True, height=600,
                 )
                 selected_rows = edited_view[edited_view["Select"] == True].drop(columns=["Select"], errors="ignore")
             else:
-                # Non-admin: read-only with native row selection
                 event = st.dataframe(
-                    display_df,
-                    hide_index=True,
-                    column_config=col_config,
-                    use_container_width=True,
-                    height=600,
-                    on_select="rerun",
-                    selection_mode="multi-row",
+                    display_df, hide_index=True, column_config=col_config,
+                    use_container_width=True, height=600,
+                    on_select="rerun", selection_mode="multi-row",
                 )
                 sel_indices = event.selection.rows if event.selection else []
                 selected_rows = display_df.iloc[sel_indices] if sel_indices else pd.DataFrame()
+
+            # Selection count badge
+            if not selected_rows.empty:
+                st.markdown(f'<span class="hc-selection-badge">{len(selected_rows)} selected</span>', unsafe_allow_html=True)
 
             # Save edits (admin only)
             if user_role == "admin" and st.button("Save Changes to Database", use_container_width=True):
@@ -1189,8 +1597,29 @@ elif page == "Database View":
                 session.close()
                 load_data.clear()
                 get_record_counts.clear()
-                st.toast(f"Saved changes to {save_count} records", icon="\u2705")
+                st.toast(f"Saved changes to {save_count} records")
                 st.rerun()
+
+            # ── Export dropdown panel ──
+            export_df = selected_rows.drop(columns=["Select"], errors="ignore") if not selected_rows.empty else df_filtered
+            export_label = f"{len(selected_rows)} selected" if not selected_rows.empty else f"All {len(df_filtered)} filtered"
+
+            if st.button(f"Export ({export_label}) ▾", key="db_export_toggle"):
+                st.session_state.show_export_menu = not st.session_state.get("show_export_menu", False)
+
+            if st.session_state.get("show_export_menu"):
+                _ex1, _ex2, _ex3 = st.columns(3)
+                with _ex1:
+                    st.download_button("Excel", to_excel_bytes(export_df),
+                                       "comps.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                       use_container_width=True)
+                with _ex2:
+                    st.download_button("CSV", export_df.to_csv(index=False),
+                                       "comps.csv", "text/csv", use_container_width=True)
+                with _ex3:
+                    st.download_button("KML", generate_kml(export_df),
+                                       "comps.kml", "application/vnd.google-earth.kml+xml",
+                                       use_container_width=True)
 
         with tab_map:
             from folium.plugins import MarkerCluster
@@ -1214,7 +1643,6 @@ elif page == "Database View":
                         icon=folium.Icon(color=color, icon='home', prefix='fa'),
                     ).add_to(cluster)
 
-                # Draw radius circle if searching
                 if center_addr and lat_c and lon_c:
                     folium.Circle(
                         location=[lat_c, lon_c],
@@ -1228,48 +1656,11 @@ elif page == "Database View":
             else:
                 st.info("No geocoded properties to display on map.")
 
-        with tab_export:
-            if not selected_rows.empty:
-                section_header("Export", f"{len(selected_rows)} properties selected")
-                export_df = selected_rows.drop(columns=["Select"], errors="ignore")
-            else:
-                section_header("Export", f"All {len(df_filtered)} filtered properties")
-                export_df = df_filtered
-
-            st.dataframe(
-                export_df,
-                column_config=col_config,
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            exp1, exp2, exp3 = st.columns(3)
-            with exp1:
-                st.download_button(
-                    "KML", generate_kml(export_df),
-                    "comps.kml", "application/vnd.google-earth.kml+xml",
-                    use_container_width=True,
-                )
-            with exp2:
-                st.download_button(
-                    "Excel", to_excel_bytes(export_df),
-                    "comps.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
-            with exp3:
-                st.download_button(
-                    "CSV", export_df.to_csv(index=False),
-                    "comps.csv", "text/csv",
-                    use_container_width=True,
-                )
-
-            # Admin actions
-            if user_role == "admin":
-                st.markdown("")
-                section_header("Admin Actions")
-
+        # ── Admin actions (below tabs) ──
+        if user_role == "admin":
+            with st.expander("Admin Actions"):
                 if not selected_rows.empty and 'id' in selected_rows.columns:
-                    confirm_sel = st.checkbox(f"I confirm deletion of {len(selected_rows)} selected records", key="confirm_delete_selected")
+                    confirm_sel = st.checkbox(f"Confirm deletion of {len(selected_rows)} selected records", key="confirm_delete_selected")
                     if confirm_sel and st.button(f"Delete {len(selected_rows)} Selected Records", type="secondary", use_container_width=True):
                         session = Session()
                         ids_to_delete = selected_rows['id'].dropna().astype(int).tolist()
@@ -1281,7 +1672,7 @@ elif page == "Database View":
                         st.success(f"Deleted {len(ids_to_delete)} records.")
                         st.rerun()
 
-                confirm_delete = st.checkbox("I want to delete ALL data", key="confirm_delete")
+                confirm_delete = st.checkbox("Delete ALL data", key="confirm_delete")
                 if confirm_delete:
                     if st.button("Confirm: Clear All Data", type="secondary"):
                         session = Session()
@@ -1297,19 +1688,23 @@ elif page == "Database View":
 # PAGE 3: ANALYTICS
 # =====================================================================
 elif page == "Analytics":
-    section_header("Analytics Dashboard")
-
     a_sale_count, a_lease_count = get_record_counts()
 
-    # Type selector with counts
-    analytics_type = st.radio(
-        "Analyze",
-        [f"Sales Comps ({a_sale_count})", f"Lease Comps ({a_lease_count})"],
-        horizontal=True, key="analytics_type"
-    )
+    # ── Topbar ──
+    render_topbar("Analytics", right_html="")
+
+    # ── Type toggle ──
+    _an_c1, _an_c2, _an_c3 = st.columns([2, 2, 3])
+    with _an_c1:
+        analytics_type = st.radio(
+            "Analyze",
+            [f"Sales ({a_sale_count})", f"Leases ({a_lease_count})"],
+            horizontal=True,
+            key="analytics_type",
+            label_visibility="collapsed",
+        )
     analytics_type = "Sales Comps" if "Sales" in analytics_type else "Lease Comps"
 
-    # Only load the selected type
     if analytics_type == "Sales Comps":
         sales_df = load_data("SaleComp").copy()
         leases_df = pd.DataFrame()
@@ -1317,17 +1712,26 @@ elif page == "Analytics":
         leases_df = load_data("LeaseComp").copy()
         sales_df = pd.DataFrame()
 
-    # Sidebar filters
-    st.sidebar.markdown("---")
+    # ── Inline filter panel ──
+    with _an_c2:
+        if st.button("+ Filter", key="an_filter_btn"):
+            st.session_state.show_filter_panel = not st.session_state.get("show_filter_panel", False)
 
-    if analytics_type == "Sales Comps" and not sales_df.empty:
-        analytics_mask = apply_sidebar_filters(sales_df, "Sales Comps")
-        filtered_sales = sales_df[analytics_mask]
-        filtered_leases = pd.DataFrame()
-    elif analytics_type == "Lease Comps" and not leases_df.empty:
-        analytics_mask = apply_sidebar_filters(leases_df, "Lease Comps")
-        filtered_leases = leases_df[analytics_mask]
-        filtered_sales = pd.DataFrame()
+    if st.session_state.get("show_filter_panel"):
+        with st.container():
+            st.markdown("---")
+            if analytics_type == "Sales Comps" and not sales_df.empty:
+                analytics_mask = apply_sidebar_filters(sales_df, "Sales Comps")
+                filtered_sales = sales_df[analytics_mask]
+                filtered_leases = pd.DataFrame()
+            elif analytics_type == "Lease Comps" and not leases_df.empty:
+                analytics_mask = apply_sidebar_filters(leases_df, "Lease Comps")
+                filtered_leases = leases_df[analytics_mask]
+                filtered_sales = pd.DataFrame()
+            else:
+                filtered_sales = sales_df
+                filtered_leases = leases_df
+            st.markdown("---")
     else:
         filtered_sales = sales_df
         filtered_leases = leases_df
@@ -1371,7 +1775,7 @@ elif page == "Analytics":
 
     # --- CHARTS ---
     if analytics_type == "Sales Comps":
-        tab1, tab2, tab3, tab4 = st.tabs(["Distributions", "Price vs Size", "Trends", "By Zip Code"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Distributions", "Price vs Size", "Trends", "By Zip Code", "Map", "Compare"])
 
         with tab1:
             if not filtered_sales.empty:
@@ -1462,8 +1866,44 @@ elif page == "Analytics":
             else:
                 st.info("No zip code data available.")
 
+        with tab5:
+            heat_df = filtered_sales
+            if heat_df.empty:
+                st.info("No data matching current filters.")
+            else:
+                geo_data = heat_df.dropna(subset=['latitude', 'longitude'])
+                value_col = 'price_per_sf'
+                geo_data = geo_data.dropna(subset=[value_col])
+                if not geo_data.empty:
+                    fig = px.density_mapbox(geo_data, lat='latitude', lon='longitude', z=value_col,
+                                            radius=20, zoom=9, mapbox_style='open-street-map',
+                                            hover_data=['address'],
+                                            title="Price/SF Heat Map")
+                    fig.update_layout(height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Not enough geocoded data for heat map.")
+
+        with tab6:
+            if sales_df.empty:
+                st.info("No data available for comparison.")
+            else:
+                options = sales_df.apply(
+                    lambda r: f"{r['id']}: {r.get('address', 'N/A')} - ${r.get('sale_price', 0):,.0f}", axis=1
+                ).tolist()
+                selected = st.multiselect("Select properties to compare (2-5)", options, max_selections=5)
+                if len(selected) >= 2:
+                    ids = [int(s.split(":")[0]) for s in selected]
+                    compare_raw = sales_df[sales_df['id'].isin(ids)].copy()
+                    display_fields = ['address', 'sale_price', 'price_per_sf', 'building_size',
+                                     'year_built', 'cap_rate', 'closing_date', 'buyer', 'seller', 'city', 'zip_code']
+                    available = [f for f in display_fields if f in compare_raw.columns]
+                    compare_df = compare_raw[available].set_index('address').T
+                    compare_df.index = compare_df.index.map(lambda x: x.replace('_', ' ').title())
+                    st.dataframe(compare_df, use_container_width=True)
+
     else:  # Lease Comps analytics
-        tab1, tab2, tab3, tab4 = st.tabs(["Distributions", "Rate vs Size", "Trends", "By Zip Code"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Distributions", "Rate vs Size", "Trends", "By Zip Code", "Map", "Compare"])
 
         with tab1:
             if not filtered_leases.empty:
@@ -1548,68 +1988,48 @@ elif page == "Analytics":
             else:
                 st.info("No zip code data available.")
 
-    # --- HEAT MAP ---
-    section_header("Geographic Heat Map")
-    heat_df = df_a if not df_a.empty else pd.DataFrame()
-    if not heat_df.empty:
-        geo_data = heat_df.dropna(subset=['latitude', 'longitude'])
-        if analytics_type == "Sales Comps":
-            value_col = 'price_per_sf'
-        else:
-            value_col = 'rate_monthly'
-        geo_data = geo_data.dropna(subset=[value_col])
-        if not geo_data.empty:
-            fig = px.density_mapbox(geo_data, lat='latitude', lon='longitude', z=value_col,
-                                    radius=20, zoom=9, mapbox_style='open-street-map',
-                                    hover_data=['address'],
-                                    title=f"{value_col.replace('_', ' ').title()} Heat Map")
-            fig.update_layout(height=500)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Not enough geocoded data for heat map.")
-    else:
-        st.info("No data for heat map.")
+        with tab5:
+            heat_df = filtered_leases
+            if heat_df.empty:
+                st.info("No data matching current filters.")
+            else:
+                geo_data = heat_df.dropna(subset=['latitude', 'longitude'])
+                value_col = 'rate_monthly'
+                geo_data = geo_data.dropna(subset=[value_col])
+                if not geo_data.empty:
+                    fig = px.density_mapbox(geo_data, lat='latitude', lon='longitude', z=value_col,
+                                            radius=20, zoom=9, mapbox_style='open-street-map',
+                                            hover_data=['address'],
+                                            title="Rate/SF/Mo Heat Map")
+                    fig.update_layout(height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Not enough geocoded data for heat map.")
 
-    # --- PROPERTY COMPARISON ---
-    section_header("Property Comparison")
-
-    if analytics_type == "Sales Comps" and not sales_df.empty:
-        options = sales_df.apply(
-            lambda r: f"{r['id']}: {r.get('address', 'N/A')} - ${r.get('sale_price', 0):,.0f}", axis=1
-        ).tolist()
-        selected = st.multiselect("Select properties to compare (2-5)", options, max_selections=5)
-        if len(selected) >= 2:
-            ids = [int(s.split(":")[0]) for s in selected]
-            compare_raw = sales_df[sales_df['id'].isin(ids)].copy()
-            display_fields = ['address', 'sale_price', 'price_per_sf', 'building_size',
-                             'year_built', 'cap_rate', 'closing_date', 'buyer', 'seller', 'city', 'zip_code']
-            available = [f for f in display_fields if f in compare_raw.columns]
-            compare_df = compare_raw[available].set_index('address').T
-            compare_df.index = compare_df.index.map(lambda x: x.replace('_', ' ').title())
-            st.dataframe(compare_df, use_container_width=True)
-    elif analytics_type == "Lease Comps" and not leases_df.empty:
-        options = leases_df.apply(
-            lambda r: f"{r['id']}: {r.get('address', 'N/A')} - {r.get('tenant_name', 'N/A')}", axis=1
-        ).tolist()
-        selected = st.multiselect("Select properties to compare (2-5)", options, max_selections=5)
-        if len(selected) >= 2:
-            ids = [int(s.split(":")[0]) for s in selected]
-            compare_raw = leases_df[leases_df['id'].isin(ids)].copy()
-            display_fields = ['address', 'rate_monthly', 'rate_annually', 'leased_sf',
-                             'tenant_name', 'term_months', 'ti_allowance', 'lease_type',
-                             'building_type', 'commencement_date', 'city', 'zip_code']
-            available = [f for f in display_fields if f in compare_raw.columns]
-            compare_df = compare_raw[available].set_index('address').T
-            compare_df.index = compare_df.index.map(lambda x: x.replace('_', ' ').title())
-            st.dataframe(compare_df, use_container_width=True)
-    else:
-        st.info("Add data to use the comparison tool.")
+        with tab6:
+            if leases_df.empty:
+                st.info("No data available for comparison.")
+            else:
+                options = leases_df.apply(
+                    lambda r: f"{r['id']}: {r.get('address', 'N/A')} - {r.get('tenant_name', 'N/A')}", axis=1
+                ).tolist()
+                selected = st.multiselect("Select properties to compare (2-5)", options, max_selections=5)
+                if len(selected) >= 2:
+                    ids = [int(s.split(":")[0]) for s in selected]
+                    compare_raw = leases_df[leases_df['id'].isin(ids)].copy()
+                    display_fields = ['address', 'rate_monthly', 'rate_annually', 'leased_sf',
+                                     'tenant_name', 'term_months', 'ti_allowance', 'lease_type',
+                                     'building_type', 'commencement_date', 'city', 'zip_code']
+                    available = [f for f in display_fields if f in compare_raw.columns]
+                    compare_df = compare_raw[available].set_index('address').T
+                    compare_df.index = compare_df.index.map(lambda x: x.replace('_', ' ').title())
+                    st.dataframe(compare_df, use_container_width=True)
 
 # =====================================================================
 # PAGE 4: COMP FINDER
 # =====================================================================
 elif page == "Comp Finder":
-    section_header("Comp Finder", "Input subject property details to find comparable properties")
+    render_topbar("Comp Finder")
 
     # Session state for results persistence
     if 'cf_results' not in st.session_state:
@@ -1618,276 +2038,287 @@ elif page == "Comp Finder":
         st.session_state.cf_subject = None
     if 'cf_subject_coords' not in st.session_state:
         st.session_state.cf_subject_coords = None
+    if 'cf_geocode_status' not in st.session_state:
+        st.session_state.cf_geocode_status = None
+    if 'cf_geocode_addr_done' not in st.session_state:
+        st.session_state.cf_geocode_addr_done = ""
 
     # --- Comp type selector ---
     cf_type = st.radio("Search in", ["Sales Comps", "Leases Comps"], horizontal=True, key="cf_type_radio")
     cf_type_key = "Sales" if "Sales" in cf_type else "Leases"
 
-    # --- Sidebar: Comp Finder Settings ---
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Comp Finder Settings**")
-    w_proximity = st.sidebar.slider("Proximity Weight", 0.0, 1.0, 0.30, 0.05, key="cf_w_prox")
-    w_size = st.sidebar.slider("Size Weight", 0.0, 1.0, 0.25, 0.05, key="cf_w_size")
-    w_price = st.sidebar.slider("Price / Rate Weight", 0.0, 1.0, 0.20, 0.05, key="cf_w_price")
-    w_recency = st.sidebar.slider("Recency Weight", 0.0, 1.0, 0.15, 0.05, key="cf_w_recency")
-    w_other = st.sidebar.slider("Other Attributes Weight", 0.0, 1.0, 0.10, 0.05, key="cf_w_other")
-    max_radius = st.sidebar.slider("Max Radius (miles)", 1, 50, 25, key="cf_max_radius")
-    max_results = st.sidebar.slider("Max Results", 5, 50, 20, key="cf_max_results")
-    use_ai = st.sidebar.checkbox("AI Enhancement", value=False, key="cf_use_ai")
-    ai_blend = 0.3
-    if use_ai:
-        ai_blend = st.sidebar.slider("AI Blend Ratio", 0.1, 0.9, 0.3, 0.05, key="cf_ai_blend")
+    # --- Left panel: form | Right panel: results ---
+    form_col, results_col = st.columns([1, 2])
 
-    # --- Subject property form ---
-    st.markdown("")
-    col_left, col_right = st.columns(2)
-
-    with col_left:
-        st.markdown("**Required**")
+    with form_col:
         cf_address = st.text_input("Subject Address", placeholder="e.g. 123 Main St, Houston TX", key="cf_address")
-        geo_col1, geo_col2 = st.columns([1, 2])
-        with geo_col1:
-            geocode_btn = st.button("Geocode", key="cf_geocode_btn")
-        with geo_col2:
-            if st.session_state.cf_subject_coords:
-                lat, lng = st.session_state.cf_subject_coords
-                st.success(f"{lat:.4f}, {lng:.4f}")
 
-        if geocode_btn and cf_address:
-            api_key = get_secret("GOOGLE_API_KEY", "")
-            if api_key:
-                with st.spinner("Geocoding..."):
-                    _geo_cf = fetch_google_data(cf_address, api_key) or {}
-                    lat, lng, addr = _geo_cf.get("latitude"), _geo_cf.get("longitude"), _geo_cf.get("formatted_address")
-                    if lat and lng:
-                        st.session_state.cf_subject_coords = (lat, lng)
-                        st.toast(f"Geocoded: {addr}", icon="\u2705")
-                        st.rerun()
-                    else:
-                        st.error("Could not geocode this address. Try a more specific address.")
-            else:
-                st.error("Google API Key not configured.")
+        # Geocode status text
+        if st.session_state.cf_geocode_status == "ok" and st.session_state.cf_subject_coords:
+            lat, lng = st.session_state.cf_subject_coords
+            st.markdown(f'<div style="font-size:11px;color:#2E7D32;margin-top:-8px;margin-bottom:8px;">Geocoded: {lat:.4f}, {lng:.4f}</div>', unsafe_allow_html=True)
+        elif st.session_state.cf_geocode_status == "error":
+            st.markdown('<div style="font-size:11px;color:#C62828;margin-top:-8px;margin-bottom:8px;">Could not geocode — try a more specific address.</div>', unsafe_allow_html=True)
 
         if cf_type_key == "Sales":
             cf_size = st.number_input("Building Size (SF)", value=None, min_value=0, step=100, key="cf_size")
         else:
             cf_size = st.number_input("Leased SF", value=None, min_value=0, step=100, key="cf_size")
 
-    with col_right:
-        st.markdown("**Optional**")
-        if cf_type_key == "Sales":
-            cf_price = st.number_input("Sale Price ($)", value=None, min_value=0, step=10000, key="cf_price")
-            cf_psf = st.number_input("Price per SF ($)", value=None, min_value=0.0, step=1.0, key="cf_psf")
-            cf_year = st.number_input("Year Built", value=None, min_value=1900, max_value=2030, step=1, key="cf_year")
-        else:
-            cf_rate_mo = st.number_input("Rate $/SF/Mo", value=None, min_value=0.0, step=0.25, key="cf_rate_mo")
-            cf_rate_yr = st.number_input("Rate $/SF/Yr", value=None, min_value=0.0, step=1.0, key="cf_rate_yr")
-            cf_btype = st.text_input("Building Type", placeholder="e.g. Industrial, Office", key="cf_btype")
-        cf_city = st.text_input("City", placeholder="e.g. Houston", key="cf_city")
+        # Optional fields in 2-column grid
+        _of1, _of2 = st.columns(2)
+        with _of1:
+            if cf_type_key == "Sales":
+                cf_price = st.number_input("Sale Price ($)", value=None, min_value=0, step=10000, key="cf_price")
+                cf_year = st.number_input("Year Built", value=None, min_value=1900, max_value=2030, step=1, key="cf_year")
+            else:
+                cf_rate_mo = st.number_input("Rate $/SF/Mo", value=None, min_value=0.0, step=0.25, key="cf_rate_mo")
+                cf_btype = st.text_input("Building Type", placeholder="e.g. Industrial", key="cf_btype")
+        with _of2:
+            if cf_type_key == "Sales":
+                cf_psf = st.number_input("Price/SF ($)", value=None, min_value=0.0, step=1.0, key="cf_psf")
+                cf_city = st.text_input("City", placeholder="e.g. Houston", key="cf_city")
+            else:
+                cf_rate_yr = st.number_input("Rate $/SF/Yr", value=None, min_value=0.0, step=1.0, key="cf_rate_yr")
+                cf_city = st.text_input("City", placeholder="e.g. Houston", key="cf_city")
         cf_zip = st.text_input("Zip Code", placeholder="e.g. 77001", key="cf_zip")
 
-    # --- Build subject dict ---
-    subject = {}
-    if st.session_state.cf_subject_coords:
-        subject["lat"] = st.session_state.cf_subject_coords[0]
-        subject["lng"] = st.session_state.cf_subject_coords[1]
-    subject["address"] = cf_address or None
-    subject["city"] = cf_city or None
-    subject["zip_code"] = cf_zip or None
+        # Advanced Weights expander
+        with st.expander("Advanced Weights", expanded=False):
+            w_proximity = st.slider("Proximity Weight", 0.0, 1.0, 0.30, 0.05, key="cf_w_prox")
+            w_size = st.slider("Size Weight", 0.0, 1.0, 0.25, 0.05, key="cf_w_size")
+            w_price = st.slider("Price / Rate Weight", 0.0, 1.0, 0.20, 0.05, key="cf_w_price")
+            w_recency = st.slider("Recency Weight", 0.0, 1.0, 0.15, 0.05, key="cf_w_recency")
+            w_other = st.slider("Other Attributes Weight", 0.0, 1.0, 0.10, 0.05, key="cf_w_other")
+            max_radius = st.slider("Max Radius (miles)", 1, 50, 25, key="cf_max_radius")
+            max_results = st.slider("Max Results", 5, 50, 20, key="cf_max_results")
+            use_ai = st.checkbox("AI Enhancement", value=False, key="cf_use_ai")
+            if use_ai:
+                ai_blend = st.slider("AI Blend Ratio", 0.1, 0.9, 0.3, 0.05, key="cf_ai_blend")
+            else:
+                ai_blend = 0.3
 
-    if cf_type_key == "Sales":
-        subject["building_size"] = cf_size
-        subject["sale_price"] = cf_price
-        subject["price_per_sf"] = cf_psf
-        subject["year_built"] = cf_year
-    else:
-        subject["leased_sf"] = cf_size
-        subject["rate_monthly"] = cf_rate_mo
-        subject["rate_annually"] = cf_rate_yr
-        subject["building_type"] = cf_btype or None
+        # Build subject dict
+        subject = {}
+        if st.session_state.cf_subject_coords:
+            subject["lat"] = st.session_state.cf_subject_coords[0]
+            subject["lng"] = st.session_state.cf_subject_coords[1]
+        subject["address"] = cf_address or None
+        subject["city"] = cf_city or None
+        subject["zip_code"] = cf_zip or None
 
-    # --- Weights dict ---
-    if cf_type_key == "Sales":
-        weights = {
-            "proximity": w_proximity,
-            "size": w_size,
-            "price": w_price,
-            "price_psf": w_other,
-            "year_built": w_other,
-            "recency": w_recency,
-        }
-    else:
-        weights = {
-            "proximity": w_proximity,
-            "size": w_size,
-            "rate_monthly": w_price,
-            "rate_annually": w_other,
-            "building_type": w_other,
-            "recency": w_recency,
-        }
-
-    # --- Find Comps button ---
-    st.markdown("")
-    can_search = st.session_state.cf_subject_coords is not None
-    if not can_search:
-        st.warning("Geocode the subject address first to enable search.")
-
-    if st.button("Find Comparable Properties", type="primary", use_container_width=True, disabled=not can_search):
-        comps_df = load_comps(cf_type_key)
-        if comps_df.empty:
-            st.info(f"No {cf_type_key.lower()} comps in database yet. Upload comps first.")
+        if cf_type_key == "Sales":
+            subject["building_size"] = cf_size
+            subject["sale_price"] = locals().get('cf_price')
+            subject["price_per_sf"] = locals().get('cf_psf')
+            subject["year_built"] = locals().get('cf_year')
         else:
-            with st.spinner("Scoring comparables..."):
-                results = compute_match_scores(subject, comps_df, cf_type_key, weights, max_radius)
+            subject["leased_sf"] = cf_size
+            subject["rate_monthly"] = locals().get('cf_rate_mo')
+            subject["rate_annually"] = locals().get('cf_rate_yr')
+            subject["building_type"] = locals().get('cf_btype') or None
 
-                # AI enhancement
-                if use_ai:
-                    try:
-                        ai_scores = compute_ai_scores(subject, results, cf_type_key)
-                        results["match_score"] = blend_scores(results["match_score"], ai_scores, ai_blend)
-                        results = results.sort_values("match_score", ascending=False).reset_index(drop=True)
-                    except Exception as e:
-                        st.toast(f"AI scoring failed, using weighted scores only: {e}", icon="\u26a0\ufe0f")
-
-                # Filter to non-zero scores and limit results
-                results = results[results["match_score"] > 0].head(max_results)
-
-                st.session_state.cf_results = results
-                st.session_state.cf_subject = subject
-
-    # --- Display Results ---
-    if st.session_state.cf_results is not None and not st.session_state.cf_results.empty:
-        results = st.session_state.cf_results
-        subject = st.session_state.cf_subject
+        # Weights dict
+        if cf_type_key == "Sales":
+            weights = {
+                "proximity": w_proximity,
+                "size": w_size,
+                "price": w_price,
+                "price_psf": w_other,
+                "year_built": w_other,
+                "recency": w_recency,
+            }
+        else:
+            weights = {
+                "proximity": w_proximity,
+                "size": w_size,
+                "rate_monthly": w_price,
+                "rate_annually": w_other,
+                "building_type": w_other,
+                "recency": w_recency,
+            }
 
         st.markdown("")
-        section_header("Results", f"{len(results)} comparable properties found")
+        find_btn = st.button("Find Comparable Properties", type="primary", use_container_width=True,
+                             disabled=not bool(cf_address))
 
-        tab_ranked, tab_map, tab_breakdown = st.tabs(["Ranked Results", "Map", "Score Breakdown"])
+        if find_btn and cf_address:
+            api_key = get_secret("GOOGLE_API_KEY", "")
+            if cf_address != st.session_state.cf_geocode_addr_done:
+                with st.spinner("Geocoding address..."):
+                    addr, lat, lng, city_g, zip_g, warn = fetch_google_data(cf_address, api_key)
+                if lat and lng:
+                    st.session_state.cf_subject_coords = (lat, lng)
+                    st.session_state.cf_geocode_status = "ok"
+                    st.session_state.cf_geocode_addr_done = cf_address
+                    subject["lat"] = lat
+                    subject["lng"] = lng
+                else:
+                    st.session_state.cf_geocode_status = "error"
+                    st.session_state.cf_subject_coords = None
+                    st.rerun()
 
-        with tab_ranked:
-            display_df = results.copy()
-            display_df.insert(0, "Rank", range(1, len(display_df) + 1))
-            display_df["match_score"] = (display_df["match_score"] * 100).round(1)
+            if st.session_state.cf_subject_coords:
+                subject["lat"] = st.session_state.cf_subject_coords[0]
+                subject["lng"] = st.session_state.cf_subject_coords[1]
+                comps_df = load_comps(cf_type_key)
+                if comps_df.empty:
+                    st.info(f"No {cf_type_key.lower()} comps in database yet.")
+                else:
+                    with st.spinner("Scoring comparables..."):
+                        results = compute_match_scores(subject, comps_df, cf_type_key, weights, max_radius)
+                        if use_ai:
+                            try:
+                                ai_scores = compute_ai_scores(subject, results, cf_type_key)
+                                results["match_score"] = blend_scores(results["match_score"], ai_scores, ai_blend)
+                                results = results.sort_values("match_score", ascending=False).reset_index(drop=True)
+                            except Exception as e:
+                                st.toast(f"AI scoring failed: {e}")
+                        results = results[results["match_score"] > 0].head(max_results)
+                        st.session_state.cf_results = results
+                        st.session_state.cf_subject = subject
+                        st.rerun()
 
-            if cf_type_key == "Sales":
-                show_cols = ["Rank", "address", "match_score", "distance_miles",
-                             "sale_price", "price_per_sf", "building_size", "year_built",
-                             "closing_date", "city", "zip_code"]
-                col_cfg = {
-                    "match_score": st.column_config.ProgressColumn("Match %", min_value=0, max_value=100, format="%.1f%%"),
-                    "distance_miles": st.column_config.NumberColumn("Distance (mi)", format="%.1f"),
-                    "sale_price": st.column_config.NumberColumn("Sale Price", format="$%,.0f"),
-                    "price_per_sf": st.column_config.NumberColumn("$/SF", format="$%.2f"),
-                    "building_size": st.column_config.NumberColumn("Size (SF)", format="%,.0f"),
-                }
-            else:
-                show_cols = ["Rank", "address", "match_score", "distance_miles",
-                             "rate_monthly", "rate_annually", "leased_sf", "tenant_name",
-                             "building_type", "commencement_date", "city", "zip_code"]
-                col_cfg = {
-                    "match_score": st.column_config.ProgressColumn("Match %", min_value=0, max_value=100, format="%.1f%%"),
-                    "distance_miles": st.column_config.NumberColumn("Distance (mi)", format="%.1f"),
-                    "rate_monthly": st.column_config.NumberColumn("$/SF/Mo", format="$%.2f"),
-                    "rate_annually": st.column_config.NumberColumn("$/SF/Yr", format="$%.2f"),
-                    "leased_sf": st.column_config.NumberColumn("Leased SF", format="%,.0f"),
-                }
+    with results_col:
+        if st.session_state.cf_results is not None and not st.session_state.cf_results.empty:
+            results = st.session_state.cf_results
+            subject = st.session_state.cf_subject
 
-            available_cols = [c for c in show_cols if c in display_df.columns]
-            st.dataframe(
-                display_df[available_cols],
-                column_config=col_cfg,
-                use_container_width=True,
-                hide_index=True,
-            )
+            st.markdown("")
+            section_header("Results", f"{len(results)} comps found")
 
-            # Export results
-            csv_data = display_df[available_cols].to_csv(index=False)
-            st.download_button("Download Results (CSV)", csv_data, "comp_finder_results.csv", "text/csv",
-                               use_container_width=True)
+            # Export dropdown for results
+            cf_export_df = results.copy()
+            if st.button("Export Results ▾", key="cf_export_toggle"):
+                st.session_state.show_cf_export_menu = not st.session_state.get("show_cf_export_menu", False)
+            if st.session_state.get("show_cf_export_menu"):
+                _cfe1, _cfe2 = st.columns(2)
+                with _cfe1:
+                    st.download_button("Excel", to_excel_bytes(cf_export_df), "cf_results.xlsx",
+                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                       use_container_width=True)
+                with _cfe2:
+                    st.download_button("CSV", cf_export_df.to_csv(index=False), "cf_results.csv",
+                                       "text/csv", use_container_width=True)
 
-        with tab_map:
-            map_results = results.dropna(subset=["latitude", "longitude"])
-            if not map_results.empty and subject.get("lat") and subject.get("lng"):
-                m = folium.Map(location=[subject["lat"], subject["lng"]], zoom_start=11)
+            tab_ranked, tab_map, tab_breakdown = st.tabs(["Ranked Results", "Map", "Score Breakdown"])
 
-                # Subject marker
-                folium.Marker(
-                    location=[subject["lat"], subject["lng"]],
-                    popup=folium.Popup(f"<b>Subject Property</b><br>{subject.get('address', 'N/A')}", max_width=300),
-                    icon=folium.Icon(color="red", icon="star", prefix="fa"),
-                ).add_to(m)
+            with tab_ranked:
+                display_df = results.copy()
+                display_df.insert(0, "Rank", range(1, len(display_df) + 1))
+                display_df["match_score"] = (display_df["match_score"] * 100).round(1)
 
-                # Comp markers color-coded by score
-                for _, row in map_results.iterrows():
-                    score = row["match_score"]
-                    if score >= 0.7:
-                        color = "green"
-                    elif score >= 0.4:
-                        color = "orange"
-                    else:
-                        color = "lightred"
+                if cf_type_key == "Sales":
+                    show_cols = ["Rank", "address", "match_score", "distance_miles",
+                                 "sale_price", "price_per_sf", "building_size", "year_built",
+                                 "closing_date", "city", "zip_code"]
+                    col_cfg = {
+                        "match_score": st.column_config.ProgressColumn("Match %", min_value=0, max_value=100, format="%.1f%%"),
+                        "distance_miles": st.column_config.NumberColumn("Distance (mi)", format="%.1f"),
+                        "sale_price": st.column_config.NumberColumn("Sale Price", format="$%,.0f"),
+                        "price_per_sf": st.column_config.NumberColumn("$/SF", format="$%.2f"),
+                        "building_size": st.column_config.NumberColumn("Size (SF)", format="%,.0f"),
+                    }
+                else:
+                    show_cols = ["Rank", "address", "match_score", "distance_miles",
+                                 "rate_monthly", "rate_annually", "leased_sf", "tenant_name",
+                                 "building_type", "commencement_date", "city", "zip_code"]
+                    col_cfg = {
+                        "match_score": st.column_config.ProgressColumn("Match %", min_value=0, max_value=100, format="%.1f%%"),
+                        "distance_miles": st.column_config.NumberColumn("Distance (mi)", format="%.1f"),
+                        "rate_monthly": st.column_config.NumberColumn("$/SF/Mo", format="$%.2f"),
+                        "rate_annually": st.column_config.NumberColumn("$/SF/Yr", format="$%.2f"),
+                        "leased_sf": st.column_config.NumberColumn("Leased SF", format="%,.0f"),
+                    }
 
-                    if cf_type_key == "Sales":
-                        popup_html = f"<b>{row.get('address', 'N/A')}</b><br>Match: {score:.0%}<br>Price: ${row.get('sale_price', 0):,.0f}<br>Size: {row.get('building_size', 0):,.0f} SF<br>Distance: {row.get('distance_miles', 0):.1f} mi"
-                    else:
-                        popup_html = f"<b>{row.get('address', 'N/A')}</b><br>Match: {score:.0%}<br>Rate: ${row.get('rate_monthly', 0):.2f}/SF/Mo<br>Size: {row.get('leased_sf', 0):,.0f} SF<br>Distance: {row.get('distance_miles', 0):.1f} mi"
+                available_cols = [c for c in show_cols if c in display_df.columns]
+                st.dataframe(
+                    display_df[available_cols],
+                    column_config=col_cfg,
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
+            with tab_map:
+                map_results = results.dropna(subset=["latitude", "longitude"])
+                if not map_results.empty and subject.get("lat") and subject.get("lng"):
+                    m = folium.Map(location=[subject["lat"], subject["lng"]], zoom_start=11)
+
+                    # Subject marker
                     folium.Marker(
-                        location=[row["latitude"], row["longitude"]],
-                        popup=folium.Popup(popup_html, max_width=300),
-                        icon=folium.Icon(color=color, icon="building", prefix="fa"),
+                        location=[subject["lat"], subject["lng"]],
+                        popup=folium.Popup(f"<b>Subject Property</b><br>{subject.get('address', 'N/A')}", max_width=300),
+                        icon=folium.Icon(color="red", icon="star", prefix="fa"),
                     ).add_to(m)
 
-                    # Line from subject to comp
-                    folium.PolyLine(
-                        locations=[[subject["lat"], subject["lng"]], [row["latitude"], row["longitude"]]],
+                    # Comp markers color-coded by score
+                    for _, row in map_results.iterrows():
+                        score = row["match_score"]
+                        if score >= 0.7:
+                            color = "green"
+                        elif score >= 0.4:
+                            color = "orange"
+                        else:
+                            color = "lightred"
+
+                        if cf_type_key == "Sales":
+                            popup_html = f"<b>{row.get('address', 'N/A')}</b><br>Match: {score:.0%}<br>Price: ${row.get('sale_price', 0):,.0f}<br>Size: {row.get('building_size', 0):,.0f} SF<br>Distance: {row.get('distance_miles', 0):.1f} mi"
+                        else:
+                            popup_html = f"<b>{row.get('address', 'N/A')}</b><br>Match: {score:.0%}<br>Rate: ${row.get('rate_monthly', 0):.2f}/SF/Mo<br>Size: {row.get('leased_sf', 0):,.0f} SF<br>Distance: {row.get('distance_miles', 0):.1f} mi"
+
+                        folium.Marker(
+                            location=[row["latitude"], row["longitude"]],
+                            popup=folium.Popup(popup_html, max_width=300),
+                            icon=folium.Icon(color=color, icon="building", prefix="fa"),
+                        ).add_to(m)
+
+                        # Line from subject to comp
+                        folium.PolyLine(
+                            locations=[[subject["lat"], subject["lng"]], [row["latitude"], row["longitude"]]],
+                            color="#F5A623",
+                            weight=1.5,
+                            opacity=0.4,
+                        ).add_to(m)
+
+                    # Radius circle
+                    folium.Circle(
+                        location=[subject["lat"], subject["lng"]],
+                        radius=max_radius * 1609.34,
                         color="#F5A623",
-                        weight=1.5,
-                        opacity=0.4,
+                        fill=True,
+                        fill_opacity=0.05,
                     ).add_to(m)
 
-                # Radius circle
-                folium.Circle(
-                    location=[subject["lat"], subject["lng"]],
-                    radius=max_radius * 1609.34,
-                    color="#F5A623",
-                    fill=True,
-                    fill_opacity=0.05,
-                ).add_to(m)
+                    st_folium(m, height=600, use_container_width=True)
+                else:
+                    st.info("No geocoded results to display on map.")
 
-                st_folium(m, height=600, use_container_width=True)
-            else:
-                st.info("No geocoded results to display on map.")
+            with tab_breakdown:
+                score_suffix = "_score"
+                score_columns = [c for c in results.columns if c.endswith(score_suffix) and c != "match_score"]
+                if score_columns:
+                    breakdown_df = results[["address"] + score_columns].head(min(10, len(results))).copy()
+                    breakdown_df.columns = ["Address"] + [c.replace("_score", "").replace("_", " ").title() for c in score_columns]
 
-        with tab_breakdown:
-            score_suffix = "_score"
-            score_columns = [c for c in results.columns if c.endswith(score_suffix) and c != "match_score"]
-            if score_columns:
-                breakdown_df = results[["address"] + score_columns].head(min(10, len(results))).copy()
-                # Rename columns for display
-                breakdown_df.columns = ["Address"] + [c.replace("_score", "").replace("_", " ").title() for c in score_columns]
+                    melted = breakdown_df.melt(id_vars=["Address"], var_name="Category", value_name="Score")
+                    melted["Score"] = melted["Score"].fillna(0)
+                    melted["Address"] = melted["Address"].apply(lambda x: str(x)[:40] if x else "N/A")
 
-                melted = breakdown_df.melt(id_vars=["Address"], var_name="Category", value_name="Score")
-                melted["Score"] = melted["Score"].fillna(0)
-                # Truncate long addresses
-                melted["Address"] = melted["Address"].apply(lambda x: str(x)[:40] if x else "N/A")
+                    fig = px.bar(
+                        melted, y="Address", x="Score", color="Category",
+                        orientation="h", barmode="group",
+                        title="Score Breakdown by Category",
+                        color_discrete_sequence=HC_COLORS,
+                    )
+                    fig.update_layout(
+                        xaxis_title="Score (0 = no match, 1 = perfect)",
+                        yaxis_title="",
+                        height=max(400, len(breakdown_df) * 60),
+                        legend=dict(orientation="h", y=-0.15),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No score breakdown available.")
 
-                fig = px.bar(
-                    melted, y="Address", x="Score", color="Category",
-                    orientation="h", barmode="group",
-                    title="Score Breakdown by Category",
-                    color_discrete_sequence=HC_COLORS,
-                )
-                fig.update_layout(
-                    xaxis_title="Score (0 = no match, 1 = perfect)",
-                    yaxis_title="",
-                    height=max(400, len(breakdown_df) * 60),
-                    legend=dict(orientation="h", y=-0.15),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No score breakdown available.")
-
-    elif st.session_state.cf_results is not None and st.session_state.cf_results.empty:
-        st.info("No comparable properties found within the specified radius. Try increasing the max radius or adjusting weights.")
+        elif st.session_state.cf_results is not None and st.session_state.cf_results.empty:
+            st.info(f"No comparable properties found within {max_radius} miles. Try increasing the max radius or adjusting weights.")
