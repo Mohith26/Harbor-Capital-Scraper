@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Harbor Capital Comp Database</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+    <!-- Alpine.js -->
+    <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
+    <!-- AG Grid -->
+    <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@32.3.3/dist/ag-grid-community.min.js"></script>
+    <!-- Plotly -->
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- App CSS & JS -->
+    <link rel="stylesheet" href="/static/css/app.css">
+    {% block head_extra %}{% endblock %}
+</head>
+<body class="bg-[#f4f5f7] font-sans">
+    <!-- Sidebar -->
+    <nav class="hc-sidebar">
+        <img class="hc-sidebar-logo" src="data:image/png;base64,{{ icon_b64 }}" alt="HC">
+        <a class="hc-nav-item {% if current_page == 'database' %}active{% endif %}" href="/database">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
+            DB
+        </a>
+        <a class="hc-nav-item {% if current_page == 'upload' %}active{% endif %}" href="/upload">
+            <svg viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
+            UPLOAD
+        </a>
+        <a class="hc-nav-item {% if current_page == 'analytics' %}active{% endif %}" href="/analytics">
+            <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
+            STATS
+        </a>
+        <a class="hc-nav-item {% if current_page == 'finder' %}active{% endif %}" href="/finder">
+            <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+            FINDER
+        </a>
+        <div class="hc-nav-spacer"></div>
+        <div class="hc-nav-user">{{ user.name[0]|upper }}<br>{{ user.role[:5]|upper }}</div>
+        <a class="hc-nav-logout" href="/logout">OUT</a>
+    </nav>
+
+    <!-- Topbar -->
+    <header class="hc-topbar">
+        <img class="hc-topbar-logo" src="data:image/png;base64,{{ logo_b64 }}" alt="Harbor Capital">
+        <div class="hc-topbar-divider"></div>
+        <div class="hc-topbar-title">{% block page_title %}{% endblock %}</div>
+        {% block topbar_center %}{% endblock %}
+        <div class="ml-auto flex items-center gap-2">
+            {% block topbar_right %}{% endblock %}
+        </div>
+    </header>
+
+    <!-- Content -->
+    <main class="hc-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- App JS (after DOM) -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
