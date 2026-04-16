@@ -22,7 +22,7 @@ def _load_image_b64(relative_path: str) -> str:
         return ""
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    EXEMPT_PATHS = {"/login", "/static"}
+    EXEMPT_PATHS = {"/login", "/static", "/health"}
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -76,6 +76,10 @@ async def logout(request: Request):
     response = RedirectResponse("/login", status_code=303)
     destroy_session(request, response)
     return response
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 @app.get("/")
 async def root():
