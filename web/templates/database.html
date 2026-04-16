@@ -25,6 +25,13 @@
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
         </svg>
     </div>
+    <!-- Filters button -->
+    <button class="btn-outline text-sm" onclick="document.dispatchEvent(new CustomEvent('toggle-filters'))">
+        <svg class="inline w-4 h-4 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>
+        </svg>
+        Filters
+    </button>
 </div>
 {% endblock %}
 
@@ -51,19 +58,60 @@
     {% include "partials/metrics_row.html" %}
 </div>
 
-<!-- Data Table -->
-<div class="bg-white rounded-lg shadow-sm border border-gray-200 mt-4">
-    <div class="p-3 border-b border-gray-100 flex items-center justify-between">
-        <span class="text-sm text-gray-500" id="record-count">
-            Showing {{ filtered }} of {{ total }} records
-        </span>
-    </div>
-    <div id="ag-grid-container" style="width: 100%; min-height: 400px;" class="ag-theme-alpine"></div>
+<!-- Filter Chips -->
+<div id="filter-chips-container">
+    {% include "partials/filter_chips.html" %}
 </div>
 
-<!-- Table data (HTMX swap target) -->
-<div id="table-data">
-    {% include "partials/data_table.html" %}
+<!-- View Tabs (Table / Map) -->
+<div class="mt-4" x-data="{view: 'table'}">
+    <div class="flex gap-2 mb-3">
+        <button class="type-toggle-btn" :class="view === 'table' && 'active'" @click="view = 'table'">Table</button>
+        <button class="type-toggle-btn" :class="view === 'map' && 'active'" @click="view = 'map'; loadMap()">Map</button>
+    </div>
+
+    <!-- Table View -->
+    <div x-show="view === 'table'">
+        <!-- Data Table -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+            <div class="p-3 border-b border-gray-100 flex items-center justify-between">
+                <span class="text-sm text-gray-500" id="record-count">
+                    Showing {{ filtered }} of {{ total }} records
+                </span>
+            </div>
+            <div id="ag-grid-container" style="width: 100%; min-height: 400px;" class="ag-theme-alpine"></div>
+        </div>
+
+        <!-- Table data (HTMX swap target) -->
+        <div id="table-data">
+            {% include "partials/data_table.html" %}
+        </div>
+    </div>
+
+    <!-- Map View -->
+    <div x-show="view === 'map'" style="display: none;">
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+            <div id="database-map" style="height: 500px; border-radius: 8px;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Filter Panel Overlay -->
+<div x-data="{filterOpen: false}" @keydown.escape.window="filterOpen = false"
+     x-on:toggle-filters.document="filterOpen = !filterOpen">
+    <div x-show="filterOpen" x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="translate-x-full" x-transition:enter-end="translate-x-0"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="translate-x-0" x-transition:leave-end="translate-x-full"
+         class="fixed right-0 top-[52px] bottom-0 w-80 bg-white shadow-lg border-l border-gray-200 z-50 p-5 overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="font-semibold text-sm">Filters</h3>
+            <button @click="filterOpen = false" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+        </div>
+        <div id="filter-panel-content">
+            {% include "partials/filter_panel.html" %}
+        </div>
+    </div>
 </div>
 
 <script>
@@ -77,6 +125,57 @@ function deleteSelected() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ids: ids, type: '{{ comp_type }}'})
     }).then(() => { switchType('{{ comp_type }}'); });
+}
+
+var dbMap = null;
+function loadMap() {
+    fetch('/database/map-data?type={{ comp_type }}')
+        .then(function(r) { return r.json(); })
+        .then(function(points) {
+            if (dbMap) { dbMap.remove(); dbMap = null; }
+            dbMap = initMap('database-map', [29.76, -95.37], 10);
+            addMarkers(dbMap, points);
+            setTimeout(function() { dbMap.invalidateSize(); }, 100);
+        });
+}
+
+function applyFilters() {
+    var params = new URLSearchParams(window.location.search);
+    params.set('type', '{{ comp_type }}');
+    // Collect filter values
+    var citySelect = document.getElementById('filter-city');
+    if (citySelect) {
+        var cities = Array.from(citySelect.selectedOptions).map(function(o) { return o.value; });
+        if (cities.length) params.set('city', cities.join(','));
+        else params.delete('city');
+    }
+    var zipSelect = document.getElementById('filter-zip');
+    if (zipSelect) {
+        var zips = Array.from(zipSelect.selectedOptions).map(function(o) { return o.value; });
+        if (zips.length) params.set('zip_code', zips.join(','));
+        else params.delete('zip_code');
+    }
+    // Numeric filters
+    ['min_sale_price','max_sale_price','min_price_per_sf','max_price_per_sf',
+     'min_building_size','max_building_size','min_rate_monthly','max_rate_monthly'].forEach(function(key) {
+        var el = document.querySelector('[name="'+key+'"]');
+        if (el && el.value) params.set(key, el.value);
+        else params.delete(key);
+    });
+    var qs = params.toString();
+    htmx.ajax('GET', '/database/table?' + qs, {target: '#table-data', swap: 'innerHTML'});
+    htmx.ajax('GET', '/database/metrics?' + qs, {target: '#metrics-container', swap: 'innerHTML'});
+    history.replaceState(null, '', '/database?' + qs);
+}
+
+function clearFilters() {
+    window.location.href = '/database?type={{ comp_type }}';
+}
+
+function removeFilter(key) {
+    var params = new URLSearchParams(window.location.search);
+    params.delete(key);
+    window.location.href = '/database?' + params.toString();
 }
 </script>
 {% endblock %}

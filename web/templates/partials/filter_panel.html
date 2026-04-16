@@ -1,0 +1,58 @@
+<div class="space-y-4">
+    <!-- City filter -->
+    <div>
+        <label class="form-label">City</label>
+        <select name="city" class="form-input text-sm" multiple id="filter-city">
+            {% for city in cities %}
+            <option value="{{ city }}" {% if city in active_cities %}selected{% endif %}>{{ city }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <!-- Zip Code filter -->
+    <div>
+        <label class="form-label">Zip Code</label>
+        <select name="zip_code" class="form-input text-sm" multiple id="filter-zip">
+            {% for zip in zips %}
+            <option value="{{ zip }}" {% if zip in active_zips %}selected{% endif %}>{{ zip }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% if comp_type == 'sales' %}
+    <!-- Sale Price Range -->
+    <div>
+        <label class="form-label">Sale Price Range</label>
+        <div class="flex gap-2">
+            <input type="number" name="min_sale_price" placeholder="Min" class="form-input text-sm" value="{{ filters.get('min_sale_price', '') }}">
+            <input type="number" name="max_sale_price" placeholder="Max" class="form-input text-sm" value="{{ filters.get('max_sale_price', '') }}">
+        </div>
+    </div>
+    <!-- Price/SF Range -->
+    <div>
+        <label class="form-label">Price per SF</label>
+        <div class="flex gap-2">
+            <input type="number" name="min_price_per_sf" placeholder="Min" class="form-input text-sm" step="0.01" value="{{ filters.get('min_price_per_sf', '') }}">
+            <input type="number" name="max_price_per_sf" placeholder="Max" class="form-input text-sm" step="0.01" value="{{ filters.get('max_price_per_sf', '') }}">
+        </div>
+    </div>
+    {% else %}
+    <!-- Rate Range -->
+    <div>
+        <label class="form-label">Rate (Monthly)</label>
+        <div class="flex gap-2">
+            <input type="number" name="min_rate_monthly" placeholder="Min" class="form-input text-sm" step="0.01" value="{{ filters.get('min_rate_monthly', '') }}">
+            <input type="number" name="max_rate_monthly" placeholder="Max" class="form-input text-sm" step="0.01" value="{{ filters.get('max_rate_monthly', '') }}">
+        </div>
+    </div>
+    {% endif %}
+    <!-- Building Size -->
+    <div>
+        <label class="form-label">Building Size (SF)</label>
+        <div class="flex gap-2">
+            <input type="number" name="min_building_size" placeholder="Min" class="form-input text-sm" value="{{ filters.get('min_building_size', '') }}">
+            <input type="number" name="max_building_size" placeholder="Max" class="form-input text-sm" value="{{ filters.get('max_building_size', '') }}">
+        </div>
+    </div>
+    <!-- Apply button -->
+    <button class="btn-primary w-full text-sm" onclick="applyFilters()">Apply Filters</button>
+    <button class="btn-outline w-full text-sm" onclick="clearFilters()">Clear All</button>
+</div>

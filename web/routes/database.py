@@ -94,6 +94,25 @@ def _parse_filters(request: Request) -> dict:
             filters[key] = val
     return filters
 
+def _build_active_filters(filters: dict) -> list:
+    """Build list of (key, display_label) tuples for filter chips."""
+    chips = []
+    for city in filters.get("city", []):
+        chips.append(("city", f"City: {city}"))
+    for z in filters.get("zip_code", []):
+        chips.append(("zip_code", f"Zip: {z}"))
+    label_map = {
+        "min_sale_price": "Min Price", "max_sale_price": "Max Price",
+        "min_price_per_sf": "Min $/SF", "max_price_per_sf": "Max $/SF",
+        "min_building_size": "Min Size", "max_building_size": "Max Size",
+        "min_rate_monthly": "Min Rate", "max_rate_monthly": "Max Rate",
+    }
+    for key, label in label_map.items():
+        val = filters.get(key)
+        if val is not None:
+            chips.append((key, f"{label}: {val}"))
+    return chips
+
 def _safe_json(table_data):
     """Convert table data to JSON-safe format (handle NaN, NaT, etc.)."""
     import math
@@ -128,6 +147,9 @@ async def database_page(request: Request):
         metrics = _compute_metrics(df_filtered, comp_type)
         table_data = _safe_json(df_filtered.to_dict(orient="records")) if not df_filtered.empty else []
         columns = list(df_filtered.columns) if not df_filtered.empty else []
+        Model = SaleComp if comp_type == "sales" else LeaseComp
+        cities = sorted([r[0] for r in session.query(Model.city).distinct().all() if r[0]])
+        zips = sorted([r[0] for r in session.query(Model.zip_code).distinct().all() if r[0]])
         return templates.TemplateResponse("database.html", {
             "request": request,
             "user": user,
@@ -143,6 +165,11 @@ async def database_page(request: Request):
             "filtered": len(df_filtered),
             "filters": filters,
             "columns": json.dumps(columns),
+            "cities": cities,
+            "zips": zips,
+            "active_cities": filters.get("city", []),
+            "active_zips": filters.get("zip_code", []),
+            "active_filters": _build_active_filters(filters),
         })
     finally:
         session.close()
@@ -250,5 +277,66 @@ async def delete_records(request: Request):
     except Exception as e:
         session.rollback()
         return HTMLResponse(f'<div class="text-red-700 text-sm p-2">Error: {e}</div>')
+    finally:
+        session.close()
+
+@router.get("/filter-options", response_class=HTMLResponse)
+async def filter_options(request: Request):
+    """Return distinct values for categorical filters."""
+    session = Session()
+    try:
+        comp_type = request.query_params.get("type", "sales")
+        Model = SaleComp if comp_type == "sales" else LeaseComp
+        cities = sorted([r[0] for r in session.query(Model.city).distinct().all() if r[0]])
+        zips = sorted([r[0] for r in session.query(Model.zip_code).distinct().all() if r[0]])
+        return HTMLResponse(json.dumps({"cities": cities, "zips": zips}))
+    finally:
+        session.close()
+
+@router.get("/filter-panel", response_class=HTMLResponse)
+async def filter_panel(request: Request):
+    templates = request.app.state.templates
+    session = Session()
+    try:
+        comp_type = request.query_params.get("type", "sales")
+        filters = _parse_filters(request)
+        Model = SaleComp if comp_type == "sales" else LeaseComp
+        cities = sorted([r[0] for r in session.query(Model.city).distinct().all() if r[0]])
+        zips = sorted([r[0] for r in session.query(Model.zip_code).distinct().all() if r[0]])
+        return templates.TemplateResponse("partials/filter_panel.html", {
+            "request": request,
+            "comp_type": comp_type,
+            "cities": cities,
+            "zips": zips,
+            "active_cities": filters.get("city", []),
+            "active_zips": filters.get("zip_code", []),
+            "filters": filters,
+        })
+    finally:
+        session.close()
+
+@router.get("/map-data")
+async def map_data(request: Request):
+    """Return GeoJSON-like data for map markers."""
+    session = Session()
+    try:
+        comp_type = request.query_params.get("type", "sales")
+        filters = _parse_filters(request)
+        df = _load_data(session, comp_type)
+        df = _apply_filters(df, filters, comp_type)
+        points = []
+        for _, row in df.iterrows():
+            if pd.notna(row.get("latitude")) and pd.notna(row.get("longitude")):
+                popup_parts = [f"<b>{row.get('address', 'N/A')}</b>"]
+                if comp_type == "sales" and pd.notna(row.get("sale_price")):
+                    popup_parts.append(f"Price: ${row['sale_price']:,.0f}")
+                elif comp_type == "leases" and pd.notna(row.get("rate_monthly")):
+                    popup_parts.append(f"Rate: ${row['rate_monthly']:,.2f}/mo")
+                points.append({
+                    "lat": float(row["latitude"]),
+                    "lng": float(row["longitude"]),
+                    "popup": "<br>".join(popup_parts),
+                })
+        return points
     finally:
         session.close()
