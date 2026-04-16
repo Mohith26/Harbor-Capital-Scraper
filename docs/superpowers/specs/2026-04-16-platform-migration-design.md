@@ -134,7 +134,7 @@ Browser HTMX GET /database/table?type=sales&search=houston
 
 - Same `auth_config.yaml` format and credential storage
 - Login: POST `/login` with username/password → server verifies bcrypt hash → sets signed session cookie (httponly, samesite=lax, 30-day maxage)
-- Session data stored server-side in a dict (adequate for <10 concurrent users). Key: random token. Value: `{username, role, login_time}`.
+- Session data stored server-side in a dict. Key: random token. Value: `{username, role, login_time}`. Single worker assumed (`--workers 1`). If multiple workers are needed later, replace session dict with signed JWT cookies or Redis.
 - Middleware: every request except `/login` and `/static/*` checks session cookie. Invalid/expired → redirect to `/login`.
 - Logout: GET `/logout` → clear session + cookie → redirect to `/login`.
 - Role check: `require_admin` dependency raises 403 for non-admin users on delete/edit endpoints.
@@ -173,29 +173,29 @@ CDN includes in `<head>`: Tailwind CSS, HTMX, Alpine.js, AG Grid, Plotly.js, Lea
 - `POST /database/filters` — add filter, returns updated chips + table
 - `DELETE /database/filters/{key}` — remove filter, returns updated chips + table
 - `GET /database/filter-panel` — returns filter panel partial (show/hide)
-- `GET /database/export` — returns file download (params: format=xlsx|csv|kml, selected_ids)
+- `POST /database/export` — returns file download (JSON body: `{format, ids: [...]}` or empty ids for all filtered)
 - `DELETE /database/records` — admin: delete selected records
 - `GET /database/map` — returns map partial
 
 **Layout:**
 
-Type toggle (Sales/Leases) — radio buttons with HTMX: `hx-get="/database/table?type=sales"` + `hx-get="/database/metrics?type=sales"`, triggers on change, targets `#table-container` and `#metrics-container`.
+Type toggle (Sales/Leases) — radio buttons inside an Alpine.js component. On `@change`, Alpine fires two HTMX requests programmatically: `htmx.ajax('GET', '/database/table?type=sales', {target: '#table-container'})` and `htmx.ajax('GET', '/database/metrics?type=sales', {target: '#metrics-container'})`. This avoids the single-element-two-targets limitation of declarative HTMX.
 
 Metrics row: four cards (Sales Comps count, Lease Comps count, Avg Sale Price / Avg Rate, Avg $/SF). White cards with amber left-border. Empty state: "--" values.
 
 Search input: `hx-get="/database/table"` with `hx-trigger="keyup changed delay:300ms"` and `hx-include="[name='type'],[name='search']"`. Server-side `pandas.str.contains(search, case=False)` on address, buyer/seller/tenant, notes.
 
-Filter button: `+ Filter` opens filter panel below topbar via HTMX (`hx-get="/database/filter-panel"` → `hx-swap="innerHTML"` on `#filter-panel`). Panel contains the same filter widgets as current app (categorical multiselect for city/zip, numeric range for price/size/rate, location radius). Each filter submission → `POST /database/filters` → server stores in URL query params or form data → returns updated chips + table.
+Filter button: `+ Filter` opens filter panel below topbar via HTMX (`hx-get="/database/filter-panel"` → `hx-swap="innerHTML"` on `#filter-panel`). Panel contains the same filter widgets as current app: categorical multiselect for city/zip, numeric range for price/size/rate, date range for closing_date (sales) / commencement_date (leases), and location radius. Each filter submission → `POST /database/filters` → server stores in URL query params or form data → returns updated chips + table.
 
 Filter chips in topbar: rendered server-side from active filter dict. Each chip has `x` button: `hx-delete="/database/filters/filter_cat_city"` → returns updated chips + table.
 
-Data table: AG Grid Community initialized in `app.js`. Data passed as JSON from server in a `<script>` tag embedded in the table partial. Columns match current schema. Features: multi-row select (shift+click), column sort, column resize. Selection state tracked in JS, passed to export/delete endpoints.
+Data table: AG Grid Community initialized once in `app.js` on `DOMContentLoaded` on a stable container div (`#ag-grid-container`) that is never itself replaced by HTMX. HTMX swaps only update a child `<script>` tag that sets `window.__tableData` and calls `gridApi.setRowData(window.__tableData)`. This avoids grid destroy/reinit cost on every filter change. Columns match current schema. Features: multi-row select (shift+click), column sort, column resize. Selection state tracked in JS, passed to export/delete endpoints.
 
 Record count: "N of M" label above table, updated with each HTMX table swap.
 
 Tabs: "Data Table" | "Map View" — Alpine.js `x-show` toggle (no server round-trip for tab switch). Map tab renders Leaflet map with markers from current filtered data (passed as GeoJSON in template).
 
-Export dropdown: Alpine.js `x-show` on click. Three `<a>` links: Excel, CSV, KML. Each is `href="/database/export?format=xlsx"` with selected IDs appended as query params via JS. If no selection, exports all filtered rows.
+Export dropdown: Alpine.js `x-show` on click, lives in the topbar right slot (outside any HTMX swap target, so Alpine state survives content swaps). Three links: Excel, CSV, KML. Each triggers a JS function that POSTs to `/database/export` with `{format, ids}` JSON body (handles large selections without URL length limits). If no selection, sends empty ids array to export all filtered rows.
 
 Admin actions: `x-show="userRole === 'admin'"` expander below table. Delete Selected button: `hx-delete="/database/records"` with confirmation modal (Alpine.js).
 
@@ -207,7 +207,8 @@ Admin actions: `x-show="userRole === 'admin'"` expander below table. Delete Sele
 **HTMX endpoints:**
 - `POST /upload/file` — receive uploaded file, return preview partial
 - `POST /upload/mapping` — apply mapping changes, return updated preview
-- `POST /upload/geocode` — run geocoding, return progress updates via SSE
+- `POST /upload/geocode` — start geocoding job, return job_id
+- `GET /upload/geocode-stream` — SSE endpoint, streams progress for a job_id (params: job_id)
 - `POST /upload/save` — save to database, return success/error message
 
 **Layout:**
@@ -224,9 +225,13 @@ Server processing: receives file → calls `robust_load_file_segmented()` for Ex
 
 **Multi-sheet support:** Tabs for each sheet/segment — Alpine.js `x-show` tabs, all data loaded at once (sheets are small, <500 rows each).
 
-**Geocode & Save button:** `hx-post="/upload/geocode"` with `hx-ext="sse"` for streaming progress. Server geocodes each row, streams progress events (`data: {"done": 5, "total": 50, "current": "123 Main St"}`). On completion, auto-triggers save or shows save button.
+**Confirmed Broker:** Optional text input below the mapping status bar. Pre-populated from `detect_broker_stage()` result (run server-side during file processing). User can edit or clear. Value passed through to `persist_with_learning(confirmed_broker=...)`.
 
-**Save to Database:** `hx-post="/upload/save"` → inserts rows via SQLAlchemy → returns success message with count. Also calls `persist_with_learning()` to record mapping/geocoding corrections in the learning store.
+**Geocode & Save button:** Two-phase flow. Button `hx-post="/upload/geocode"` starts the geocoding job (server returns `job_id`). Then an SSE listener connects via `hx-ext="server-sent-events"` with `sse-connect="/upload/geocode-stream?job_id=..."` to stream progress events (`data: {"done": 5, "total": 50, "current": "123 Main St"}`). On completion, shows save button.
+
+**Save to Database:** `hx-post="/upload/save"` → inserts rows via SQLAlchemy → returns success message with count. Also calls `persist_with_learning(confirmed_broker=..., geocode_overrides={})` to record mapping corrections and broker in the learning store. Geocode overrides are out of scope for v1 (passed as empty dict); the learning store still records geocode aliases from the geocoding stage itself via `resolve_geocode()`.
+
+**Note on Alpine.js + HTMX interaction:** `app.js` listens for `htmx:afterSwap` events and calls `Alpine.initTree(event.detail.target)` to ensure any Alpine `x-data` components in HTMX-swapped partials are properly initialized.
 
 ---
 
@@ -253,7 +258,7 @@ Chart tabs (Alpine.js client-side tab switching):
 5. **Map** — Leaflet heat map layer
 6. **Compare** — Side-by-side property comparison (select 2-5 properties from multiselect)
 
-Chart data: passed as JSON in `<script>` tags within the chart partial. Plotly.js renders client-side. Tab switching is Alpine.js `x-show` — all chart divs present in DOM, Plotly initializes on first show.
+Chart data: server returns raw aggregated data as JSON in `<script>` tags within the chart partial. Plotly.js builds figures client-side (no server-side `plotly` Python package needed for rendering — can be removed from `requirements.txt`). Tab switching is Alpine.js `x-show` — all chart divs present in DOM, Plotly initializes on first show.
 
 Empty state: "No data matching current filters" info box per tab.
 
@@ -264,7 +269,7 @@ Empty state: "No data matching current filters" info box per tab.
 **Route:** `GET /finder` — full page render
 **HTMX endpoints:**
 - `POST /finder/search` — run comp search, return results partial
-- `GET /finder/export` — export results (params: format, result_ids)
+- `POST /finder/export` — export results (JSON body: `{format, ids: [...]}`)
 
 **Layout:**
 
