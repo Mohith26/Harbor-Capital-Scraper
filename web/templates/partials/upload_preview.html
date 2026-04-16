@@ -1,0 +1,167 @@
+<div class="space-y-6" x-data="{activeSegment: 0}">
+    <div class="flex items-center justify-between">
+        <div>
+            <h3 class="font-semibold text-sm text-gray-700">{{ filename }}</h3>
+            <p class="text-xs text-gray-500">{{ segments|length }} segment{{ 's' if segments|length > 1 else '' }} detected</p>
+        </div>
+    </div>
+
+    <!-- Segment tabs (if multiple) -->
+    {% if segments|length > 1 %}
+    <div class="flex gap-1 border-b border-gray-200">
+        {% for seg in segments %}
+        <button class="chart-tab" :class="activeSegment === {{ loop.index0 }} && 'active'"
+                @click="activeSegment = {{ loop.index0 }}">
+            {{ seg.sheet_name or 'Segment' }} {{ loop.index }}
+        </button>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% for seg in segments %}
+    <div x-show="activeSegment === {{ loop.index0 }}" {% if not loop.first %}style="display:none"{% endif %}>
+        <!-- Mapping source badge -->
+        <div class="flex items-center gap-2 mb-3">
+            <span class="text-xs px-2 py-1 rounded-full
+                {% if seg.source == 'exact' %}bg-green-100 text-green-700
+                {% elif seg.source == 'fuzzy' %}bg-blue-100 text-blue-700
+                {% elif seg.source == 'broker' %}bg-purple-100 text-purple-700
+                {% else %}bg-yellow-100 text-yellow-700{% endif %}">
+                {{ seg.source }} mapping ({{ seg.row_count }} rows)
+            </span>
+            <span class="text-xs text-gray-500">{{ seg.file_type|upper }}</span>
+        </div>
+
+        <!-- Raw data preview -->
+        <div class="bg-white rounded-lg border border-gray-200 overflow-x-auto mb-4">
+            <table class="text-xs w-full">
+                <thead>
+                    <tr class="bg-gray-50">
+                        {% for header in seg.raw_headers %}
+                        <th class="px-3 py-2 text-left font-medium text-gray-600 whitespace-nowrap">
+                            {{ header }}
+                            {% if header in seg.mappings %}
+                            <span class="badge-mapped ml-1">{{ seg.mappings[header] }}</span>
+                            {% else %}
+                            <span class="badge-unmapped ml-1">unmapped</span>
+                            {% endif %}
+                        </th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in seg.preview_rows %}
+                    <tr class="border-t border-gray-100">
+                        {% for header in seg.raw_headers %}
+                        <td class="px-3 py-1.5 text-gray-700 whitespace-nowrap">{{ row.get(header, '') or '' }}</td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Column Mapping Grid -->
+        <div class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+            <h4 class="text-sm font-semibold mb-3">Column Mapping</h4>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {% for header in seg.raw_headers %}
+                <div class="flex flex-col gap-1">
+                    <label class="text-xs text-gray-500 truncate" title="{{ header }}">{{ header }}</label>
+                    <select name="mapping__{{ seg.segment_key }}__{{ header }}"
+                            class="form-input text-xs py-1"
+                            hx-post="/upload/mapping" hx-target="#upload-preview"
+                            hx-include="[name^='mapping__'], [name='job_id'], [name='broker_name']">
+                        <option value="---">-- skip --</option>
+                        {% for field in schema_fields %}
+                        <option value="{{ field }}" {% if seg.mappings.get(header) == field %}selected{% endif %}>{{ field }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    <!-- Broker Detection -->
+    <div class="bg-white rounded-lg border border-gray-200 p-4">
+        <h4 class="text-sm font-semibold mb-2">Broker</h4>
+        {% if broker and broker.status != 'missing' %}
+        <p class="text-xs text-gray-500 mb-2">
+            Detected: <span class="font-medium">{{ broker.broker_name or broker.candidate_name or 'Unknown' }}</span>
+            <span class="text-xs px-1.5 py-0.5 rounded
+                {% if broker.status == 'matched' %}bg-green-100 text-green-700
+                {% elif broker.status == 'alias' %}bg-blue-100 text-blue-700
+                {% elif broker.status == 'ambiguous' %}bg-yellow-100 text-yellow-700
+                {% else %}bg-gray-100 text-gray-600{% endif %}">
+                {{ broker.status }}
+            </span>
+        </p>
+        {% endif %}
+        <input type="text" name="broker_name" class="form-input text-sm"
+               placeholder="Confirm or enter broker name"
+               value="{{ broker.broker_name or broker.candidate_name or '' if broker else '' }}">
+    </div>
+
+    <!-- Hidden job_id -->
+    <input type="hidden" name="job_id" value="{{ job_id }}">
+
+    <!-- Action Buttons -->
+    <div class="flex gap-3">
+        <button class="btn-primary" onclick="startGeocode('{{ job_id }}')">
+            Geocode & Save
+        </button>
+        <button class="btn-outline" onclick="document.getElementById('upload-preview').innerHTML = ''">
+            Cancel
+        </button>
+    </div>
+
+    <!-- Geocoding Progress -->
+    <div id="geocode-progress" style="display: none;">
+        <div class="bg-white rounded-lg border border-gray-200 p-4">
+            <h4 class="text-sm font-semibold mb-2">Geocoding Progress</h4>
+            <div class="progress-bar mb-2">
+                <div class="progress-bar-fill" id="geocode-bar" style="width: 0%"></div>
+            </div>
+            <p class="text-xs text-gray-500" id="geocode-status">Starting...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+function startGeocode(jobId) {
+    var brokerName = document.querySelector('[name="broker_name"]')?.value || '';
+    var formData = new FormData();
+    formData.append('job_id', jobId);
+    formData.append('broker_name', brokerName);
+
+    document.getElementById('geocode-progress').style.display = 'block';
+
+    fetch('/upload/geocode', { method: 'POST', body: formData })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            // Start SSE listening
+            var es = new EventSource('/upload/geocode-stream?job_id=' + jobId);
+            es.onmessage = function(e) {
+                var d = JSON.parse(e.data);
+                var bar = document.getElementById('geocode-bar');
+                var status = document.getElementById('geocode-status');
+                bar.style.width = d.pct + '%';
+                status.textContent = d.current + '/' + d.total + ' — ' + (d.address || '');
+                if (d.done) {
+                    es.close();
+                    status.textContent = 'Complete! Saving to database...';
+                    // Auto-save
+                    var saveForm = new FormData();
+                    saveForm.append('job_id', jobId);
+                    fetch('/upload/save', { method: 'POST', body: saveForm })
+                        .then(function(r) { return r.text(); })
+                        .then(function(html) {
+                            document.getElementById('upload-preview').innerHTML = html;
+                        });
+                }
+            };
+        });
+}
+</script>
