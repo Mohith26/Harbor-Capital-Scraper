@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block page_title %}Analytics{% endblock %}
+
+{% block topbar_center %}
+<div class="type-toggle" x-data="{type: '{{ comp_type }}'}">
+    <button class="type-toggle-btn" :class="type === 'sales' && 'active'"
+            @click="window.location.href='/analytics?type=sales'">
+        Sales ({{ sale_count }})
+    </button>
+    <button class="type-toggle-btn" :class="type === 'leases' && 'active'"
+            @click="window.location.href='/analytics?type=leases'">
+        Leases ({{ lease_count }})
+    </button>
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Metrics -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="metric-card">
+        <div class="metric-card-label">Total Comps</div>
+        <div class="metric-card-value">{{ metrics.count }}</div>
+    </div>
+    {% if comp_type == 'sales' %}
+    <div class="metric-card">
+        <div class="metric-card-label">Avg Sale Price</div>
+        <div class="metric-card-value">{% if metrics.avg_price %}${{ "{:,.0f}".format(metrics.avg_price) }}{% else %}--{% endif %}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-card-label">Avg $/SF</div>
+        <div class="metric-card-value">{% if metrics.avg_psf %}${{ "{:,.2f}".format(metrics.avg_psf) }}{% else %}--{% endif %}</div>
+    </div>
+    {% else %}
+    <div class="metric-card">
+        <div class="metric-card-label">Avg Rate (Monthly)</div>
+        <div class="metric-card-value">{% if metrics.avg_rate_monthly %}${{ "{:,.2f}".format(metrics.avg_rate_monthly) }}{% else %}--{% endif %}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-card-label">Avg Rate (Annual)</div>
+        <div class="metric-card-value">{% if metrics.avg_rate_annually %}${{ "{:,.2f}".format(metrics.avg_rate_annually) }}{% else %}--{% endif %}</div>
+    </div>
+    {% endif %}
+    <div class="metric-card">
+        <div class="metric-card-label">Avg Size (SF)</div>
+        <div class="metric-card-value">{% if metrics.avg_size %}{{ "{:,.0f}".format(metrics.avg_size) }}{% else %}--{% endif %}</div>
+    </div>
+</div>
+
+<!-- Chart Tabs -->
+<div x-data="{tab: 'distributions'}">
+    <div class="flex gap-1 border-b border-gray-200 mb-4">
+        <button class="chart-tab" :class="tab === 'distributions' && 'active'" @click="tab = 'distributions'">Distributions</button>
+        <button class="chart-tab" :class="tab === 'scatter' && 'active'" @click="tab = 'scatter'">Price vs Size</button>
+        <button class="chart-tab" :class="tab === 'trends' && 'active'" @click="tab = 'trends'">Trends</button>
+        <button class="chart-tab" :class="tab === 'zip' && 'active'" @click="tab = 'zip'">By Zip Code</button>
+        <button class="chart-tab" :class="tab === 'map' && 'active'" @click="tab = 'map'; $nextTick(() => initAnalyticsMap())">Map</button>
+        <button class="chart-tab" :class="tab === 'compare' && 'active'" @click="tab = 'compare'">Compare</button>
+    </div>
+
+    <!-- Distributions -->
+    <div x-show="tab === 'distributions'" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div id="chart-distributions" style="height: 400px;"></div>
+    </div>
+
+    <!-- Price vs Size -->
+    <div x-show="tab === 'scatter'" style="display:none" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div id="chart-scatter" style="height: 400px;"></div>
+    </div>
+
+    <!-- Trends -->
+    <div x-show="tab === 'trends'" style="display:none" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div id="chart-trends" style="height: 400px;"></div>
+    </div>
+
+    <!-- By Zip Code -->
+    <div x-show="tab === 'zip'" style="display:none" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div id="chart-zip" style="height: 400px;"></div>
+    </div>
+
+    <!-- Map -->
+    <div x-show="tab === 'map'" style="display:none" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div id="analytics-map" style="height: 500px; border-radius: 8px;"></div>
+    </div>
+
+    <!-- Compare -->
+    <div x-show="tab === 'compare'" style="display:none" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <p class="text-sm text-gray-500 text-center py-8">Select properties from the Database View to compare.</p>
+    </div>
+</div>
+
+<script>
+(function() {
+    var charts = {{ charts|safe }};
+
+    // Distributions
+    var distKeys = Object.keys(charts).filter(function(k) { return k.startsWith('dist_'); });
+    if (distKeys.length > 0) {
+        var traces = distKeys.map(function(k) {
+            return { x: charts[k].values, type: 'histogram', name: charts[k].label, opacity: 0.7 };
+        });
+        renderChart('chart-distributions', traces, {
+            barmode: 'overlay',
+            title: 'Value Distributions',
+            xaxis: { title: '' },
+            yaxis: { title: 'Count' },
+        });
+    }
+
+    // Scatter
+    if (charts.scatter) {
+        renderChart('chart-scatter', [{
+            x: charts.scatter.x,
+            y: charts.scatter.y,
+            text: charts.scatter.labels,
+            mode: 'markers',
+            type: 'scatter',
+            marker: { size: 8, color: '#F5A623', opacity: 0.7 },
+        }], {
+            title: charts.scatter.y_label + ' vs ' + charts.scatter.x_label,
+            xaxis: { title: charts.scatter.x_label },
+            yaxis: { title: charts.scatter.y_label },
+        });
+    }
+
+    // Trends
+    if (charts.trends) {
+        renderChart('chart-trends', [{
+            x: charts.trends.dates,
+            y: charts.trends.values,
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#F5A623', width: 2 },
+            marker: { size: 5 },
+        }], {
+            title: charts.trends.label + ' Over Time',
+            xaxis: { title: 'Date' },
+            yaxis: { title: charts.trends.label },
+        });
+    }
+
+    // By Zip
+    if (charts.by_zip) {
+        renderChart('chart-zip', [{
+            x: charts.by_zip.zips,
+            y: charts.by_zip.means,
+            type: 'bar',
+            marker: { color: '#F5A623' },
+            text: charts.by_zip.counts.map(function(c) { return c + ' comps'; }),
+        }], {
+            title: charts.by_zip.label + ' by Zip Code',
+            xaxis: { title: 'Zip Code', type: 'category' },
+            yaxis: { title: charts.by_zip.label },
+        });
+    }
+})();
+
+function initAnalyticsMap() {
+    var charts = {{ charts|safe }};
+    if (charts.map_points && charts.map_points.length > 0) {
+        var map = initMap('analytics-map', [29.76, -95.37], 10);
+        addMarkers(map, charts.map_points);
+        setTimeout(function() { map.invalidateSize(); }, 200);
+    }
+}
+</script>
+{% endblock %}
