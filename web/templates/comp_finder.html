@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block page_title %}Comp Finder{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Search Form (left column) -->
+    <div class="lg:col-span-1">
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+            <h3 class="font-semibold text-sm mb-4">Find Comparable Properties</h3>
+            <form hx-post="/finder/search" hx-target="#results-container" hx-indicator="#search-spinner">
+                <!-- Comp Type -->
+                <div class="mb-3">
+                    <label class="form-label">Type</label>
+                    <select name="comp_type" class="form-input text-sm">
+                        <option value="sales" {% if comp_type == 'sales' %}selected{% endif %}>Sales</option>
+                        <option value="leases" {% if comp_type == 'leases' %}selected{% endif %}>Leases</option>
+                    </select>
+                </div>
+
+                <!-- Address -->
+                <div class="mb-3">
+                    <label class="form-label">Subject Property Address</label>
+                    <input type="text" name="address" class="form-input text-sm" placeholder="Enter full address..." required>
+                </div>
+
+                <!-- Optional Fields -->
+                <div class="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                        <label class="form-label">Building Size (SF)</label>
+                        <input type="number" name="building_size" class="form-input text-sm" placeholder="Optional">
+                    </div>
+                    <div>
+                        <label class="form-label">Year Built</label>
+                        <input type="number" name="year_built" class="form-input text-sm" placeholder="Optional">
+                    </div>
+                    <div>
+                        <label class="form-label">City</label>
+                        <input type="text" name="city" class="form-input text-sm" placeholder="Optional">
+                    </div>
+                    <div>
+                        <label class="form-label">Zip Code</label>
+                        <input type="text" name="zip_code" class="form-input text-sm" placeholder="Optional">
+                    </div>
+                </div>
+
+                <!-- Max Radius -->
+                <div class="mb-3">
+                    <label class="form-label">Max Radius (miles)</label>
+                    <input type="number" name="max_radius" class="form-input text-sm" value="10" step="0.5">
+                </div>
+
+                <!-- AI Toggle -->
+                <div class="mb-4">
+                    <label class="flex items-center gap-2 text-sm">
+                        <input type="checkbox" name="use_ai" class="rounded">
+                        <span>Use AI scoring (slower, more accurate)</span>
+                    </label>
+                </div>
+
+                <!-- Advanced Weights -->
+                <div x-data="{showWeights: false}" class="mb-4">
+                    <button type="button" @click="showWeights = !showWeights" class="text-xs text-[#F5A623] font-medium">
+                        Advanced Weights <span x-text="showWeights ? '▲' : '▼'"></span>
+                    </button>
+                    <div x-show="showWeights" x-transition class="mt-2 space-y-2" style="display: none;">
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs text-gray-500 w-16">Distance</label>
+                            <input type="range" name="weight_distance" min="0" max="1" step="0.1" value="0.4" class="flex-1">
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs text-gray-500 w-16">Size</label>
+                            <input type="range" name="weight_size" min="0" max="1" step="0.1" value="0.3" class="flex-1">
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs text-gray-500 w-16">Price</label>
+                            <input type="range" name="weight_price" min="0" max="1" step="0.1" value="0.2" class="flex-1">
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs text-gray-500 w-16">Age</label>
+                            <input type="range" name="weight_age" min="0" max="1" step="0.1" value="0.1" class="flex-1">
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-primary w-full">Find Comparable Properties</button>
+            </form>
+
+            <!-- Search spinner -->
+            <div id="search-spinner" class="htmx-indicator text-center py-4">
+                <div class="inline-block w-6 h-6 border-3 border-gray-200 border-t-[#F5A623] rounded-full animate-spin"></div>
+                <p class="text-xs text-gray-500 mt-1">Searching...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results (right columns) -->
+    <div class="lg:col-span-2">
+        <div id="results-container">
+            <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center text-gray-400">
+                <svg class="w-16 h-16 mx-auto mb-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+                </svg>
+                <p class="text-sm">Enter an address and click "Find Comparable Properties" to search.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
