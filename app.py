@@ -788,11 +788,11 @@ if page == "Upload & Process":
     # ── Drop zone ──
     st.markdown("""
     <div style="border:2px dashed #ccc;border-radius:9px;padding:24px 20px;text-align:center;background:#fff;margin-bottom:1rem;">
-        <div style="font-size:14px;font-weight:600;color:#555;">Drop Excel or CSV here, or click to browse</div>
-        <div style="font-size:11px;color:#999;margin-top:4px;">.xlsx &nbsp; .xls &nbsp; .csv &nbsp;&#8212;&nbsp; max 500 rows per sheet</div>
+        <div style="font-size:14px;font-weight:600;color:#555;">Drop Excel, CSV, or PDF here, or click to browse</div>
+        <div style="font-size:11px;color:#999;margin-top:4px;">.xlsx &nbsp; .xls &nbsp; .csv &nbsp; .pdf &nbsp;&#8212;&nbsp; max 500 rows per sheet</div>
     </div>
     """, unsafe_allow_html=True)
-    uploaded_file = st.file_uploader("Upload file", type=['csv', 'xlsx', 'xls'], label_visibility="collapsed")
+    uploaded_file = st.file_uploader("Upload file", type=['csv', 'xlsx', 'xls', 'pdf'], label_visibility="collapsed")
 
     if uploaded_file:
         # Save to temp file
@@ -802,21 +802,53 @@ if page == "Upload & Process":
         tmp.close()
         path = tmp.name
 
-        # Detect sheets for multi-sheet Excel files
-        sheets = get_sheet_names(path)
-        selected_sheets = sheets  # default: all sheets
-        if len(sheets) > 1:
-            selected_sheets = st.multiselect(
-                f"This file has {len(sheets)} sheets. Select which to process:",
-                sheets,
-                default=sheets,
-                key="sheet_selector",
-            )
-            if not selected_sheets:
-                st.warning("Select at least one sheet to process.")
+        # PDF path: vision extraction bypasses sheet detection
+        if uploaded_file.name.lower().endswith(".pdf"):
+            if st.session_state.current_filename != uploaded_file.name:
+                with st.spinner("Extracting data from PDF via AI vision..."):
+                    try:
+                        from engine.pipeline import run_vision_pdf_stage
+                        seg_result = run_vision_pdf_stage(path, uploaded_file.name)
+                        pdf_df = seg_result.cleaned_df
+                        pdf_df['source_type'] = seg_result.fingerprint.file_type.upper()
+                        pdf_df['source_file'] = uploaded_file.name
+                        pdf_df['source_sheet'] = f"{uploaded_file.name}::pdf"
+                        pdf_sheet_key = f"{uploaded_file.name}::pdf"
+                        sheet_data = {
+                            pdf_sheet_key: {
+                                'raw_df': pdf_df,
+                                'clean_df': pdf_df,
+                                'mappings': seg_result.mapping_result.mappings,
+                                'confidence': seg_result.mapping_result.confidence,
+                                'file_type': seg_result.fingerprint.file_type.upper(),
+                                'input_columns': list(pdf_df.columns),
+                            }
+                        }
+                        st.session_state.clean_df = pdf_df
+                        st.session_state.mapping_confidence = None
+                        st.session_state.current_filename = uploaded_file.name
+                        st.session_state.geocoding_done = False
+                        st.session_state.sheet_data = sheet_data
+                        st.session_state.pop("broker_resolution", None)
+                        st.success(f"Extracted {len(pdf_df)} records from PDF!")
+                    except Exception as _pe:
+                        st.error(f"PDF extraction failed: {_pe}")
+        else:
+            # Detect sheets for multi-sheet Excel files
+            sheets = get_sheet_names(path)
+            selected_sheets = sheets  # default: all sheets
+            if len(sheets) > 1:
+                selected_sheets = st.multiselect(
+                    f"This file has {len(sheets)} sheets. Select which to process:",
+                    sheets,
+                    default=sheets,
+                    key="sheet_selector",
+                )
+                if not selected_sheets:
+                    st.warning("Select at least one sheet to process.")
 
-        if st.session_state.current_filename != uploaded_file.name and selected_sheets:
-            with st.spinner('AI is analyzing columns...'):
+            if st.session_state.current_filename != uploaded_file.name and selected_sheets:
+              with st.spinner('AI is analyzing columns...'):
                 sheet_data = {}
                 for sheet in selected_sheets:
                     base_label = sheet or "Sheet1"
@@ -865,6 +897,7 @@ if page == "Upload & Process":
                     st.session_state.current_filename = uploaded_file.name
                     st.session_state.geocoding_done = False
                     st.session_state.sheet_data = sheet_data
+                    st.session_state.pop("broker_resolution", None)  # reset on new file
                     st.success(f"Parsed {len(combined)} records from {len(sheet_data)} sheet(s)!")
                 else:
                     st.error("Could not read any sheets. Check the file format.")
@@ -873,6 +906,27 @@ if page == "Upload & Process":
             df = st.session_state.clean_df
             sheet_data = st.session_state.sheet_data
             sheet_names = list(sheet_data.keys())
+
+            # Detect broker once per file upload (runs silently; UI tab picks up from session state)
+            if "broker_resolution" not in st.session_state:
+                try:
+                    from engine.pipeline import detect_broker_stage
+                    from learning.store import SqliteLearningStore
+                    _broker_store = SqliteLearningStore()
+                    _sample_cols = " | ".join(
+                        " ".join(str(c) for c in sd["input_columns"])
+                        for sd in list(sheet_data.values())[:3]
+                    )
+                    _sample_text = f"File: {st.session_state.get('current_filename', '')} | Columns: {_sample_cols}"
+                    st.session_state["broker_resolution"] = detect_broker_stage(
+                        sample_text=_sample_text,
+                        filename=st.session_state.get("current_filename", ""),
+                        store=_broker_store,
+                    )
+                except Exception as _be:
+                    import logging
+                    logging.getLogger(__name__).warning("Broker detection failed: %s", _be)
+                    st.session_state["broker_resolution"] = None
 
             # --- PER-SHEET TABS: Mapping + Preview ---
             if len(sheet_names) > 1:
@@ -1073,10 +1127,16 @@ if page == "Upload & Process":
                     for i, row in df.iterrows():
                         raw_addr = str(row.get('raw_address_data', '') or row.get('address', '') or '')
                         status_text.text(f"Geocoding {i+1}/{len(df)}: {raw_addr[:60]}...")
-                        addr, lat, lng, city, zip_code, warn = fetch_google_data(raw_addr, api_key)
-                        results.append((addr, lat, lng, city, zip_code))
-                        if warn:
-                            warnings.append(f"Row {i+1}: {warn}")
+                        geo = fetch_google_data(raw_addr, api_key) or {}
+                        results.append((
+                            geo.get("formatted_address"),
+                            geo.get("latitude"),
+                            geo.get("longitude"),
+                            geo.get("city"),
+                            geo.get("zip_code"),
+                        ))
+                        if geo.get("warning"):
+                            warnings.append(f"Row {i+1}: {geo['warning']}")
                         progress_bar.progress((i + 1) / len(df))
                     df['address'] = [x[0] for x in results]
                     df['latitude'] = [x[1] for x in results]
@@ -1251,6 +1311,38 @@ if page == "Upload & Process":
                 load_data.clear()
                 get_record_counts.clear()
 
+                # --- Teach the learning store from this confirmed save ---
+                try:
+                    from learning.store import SqliteLearningStore
+                    from engine.fingerprint import compute_fingerprint
+                    _learning_store = SqliteLearningStore()
+                    _user = st.session_state.get("user_email") or st.session_state.get("username") or "unknown"
+                    _fp_count = 0
+                    for _seg_label, _sd in st.session_state.get("sheet_data", {}).items():
+                        _raw_df = _sd.get('raw_df')
+                        _seg_mappings = _sd.get('mappings') or {}
+                        _ftype = _sd.get('file_type', 'LEASE')
+                        if _raw_df is None or _raw_df.empty or not _seg_mappings:
+                            continue
+                        _headers = [str(c) for c in _raw_df.columns]
+                        # mappings stored as {target_col: raw_header} — invert for store
+                        _inverted = {v: k for k, v in _seg_mappings.items() if v}
+                        if not _inverted:
+                            continue
+                        _fp = compute_fingerprint(_headers, uploaded_file.name, _seg_label, _ftype)
+                        _learning_store.record_accepted_mapping(
+                            fingerprint=_fp,
+                            mappings=_inverted,
+                            confirmed_by=_user,
+                        )
+                        _fp_count += 1
+                    if _fp_count:
+                        st.toast(f"✅ Learned {_fp_count} mapping(s) for future uploads", icon="🧠")
+                        st.info(f"🧠 Learning store updated: {_fp_count} mapping fingerprint(s) saved.")
+                except Exception as _le:
+                    import logging, traceback
+                    logging.getLogger(__name__).warning("Learning store writeback failed: %s\n%s", _le, traceback.format_exc())
+
                 msg_parts = []
                 new_count = len(records)
                 if new_count:
@@ -1278,6 +1370,7 @@ if page == "Upload & Process":
                 st.session_state.clean_df = None
                 st.session_state.mapping_confidence = None
                 st.session_state.sheet_data = {}
+                st.session_state.current_filename = ""  # allow same file re-upload
 
 # =====================================================================
 # PAGE 2: DATABASE VIEW
@@ -1379,7 +1472,8 @@ elif page == "Database View":
         lat_c, lon_c = None, None
         if center_addr:
             with st.spinner("Calculating distances..."):
-                _, lat_c, lon_c, _, _, _ = fetch_google_data(center_addr, get_secret("GOOGLE_API_KEY", ""))
+                _geo_c = fetch_google_data(center_addr, get_secret("GOOGLE_API_KEY", "")) or {}
+                lat_c, lon_c = _geo_c.get("latitude"), _geo_c.get("longitude")
                 if lat_c:
                     df['distance_miles'] = df.apply(
                         lambda x: haversine_miles(lat_c, lon_c, x['latitude'], x['longitude']), axis=1
