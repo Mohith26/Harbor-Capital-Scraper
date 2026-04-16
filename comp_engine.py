@@ -164,11 +164,32 @@ def apply_manual_mapping(input_df, mapping_dict, schema_dict, file_type, filenam
     return out, confidence
 
 
+def generate_kml(df):
+    """Generate KML string from a DataFrame with latitude/longitude columns."""
+    kml = ['<?xml version="1.0" encoding="UTF-8"?>']
+    kml.append('<kml xmlns="http://www.opengis.net/kml/2.2">')
+    kml.append('<Document>')
+    for _, row in df.iterrows():
+        if pd.notnull(row.get('latitude')) and pd.notnull(row.get('longitude')):
+            kml.append('<Placemark>')
+            kml.append(f"<name>{row.get('address', 'Unknown Property')}</name>")
+            desc = f"Size: {row.get('building_size') or row.get('leased_sf') or 'N/A'}\n"
+            desc += f"Price/Rate: {row.get('sale_price') or row.get('rate_monthly') or 'N/A'}"
+            kml.append(f"<description>{desc}</description>")
+            kml.append('<Point>')
+            kml.append(f"<coordinates>{row['longitude']},{row['latitude']},0</coordinates>")
+            kml.append('</Point>')
+            kml.append('</Placemark>')
+    kml.append('</Document>')
+    kml.append('</kml>')
+    return "\n".join(kml)
+
+
 __all__ = [
     "get_sheet_names", "detect_table_segments", "robust_load_file", "robust_load_file_segmented",
     "clean_header", "get_column_profile", "apply_rate_logic", "HOUSTON_RATE_THRESHOLD",
     "get_embeddings", "classify_file_type", "generate_standardized_df",
     "LEASE_SCHEMA", "SALE_SCHEMA", "BASE_OVERRIDES", "LEASE_OVERRIDES", "SALE_OVERRIDES",
-    "fetch_google_data",
+    "fetch_google_data", "generate_kml",
     "process_file_to_clean_output", "process_all_sheets", "apply_manual_mapping",
 ]

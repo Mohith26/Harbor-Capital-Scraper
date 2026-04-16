@@ -5,13 +5,9 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
 
-# Try st.secrets first (Streamlit Cloud), then env vars, then SQLite fallback
 def _get_db_url():
-    try:
-        import streamlit as st
-        return st.secrets["SUPABASE_DB_URL"]
-    except Exception:
-        return os.environ.get("SUPABASE_DB_URL", "sqlite:///comps.db")
+    """Get database URL from environment variable. No Streamlit dependency."""
+    return os.environ.get("SUPABASE_DB_URL", "sqlite:///comps.db")
 
 Base = declarative_base()
 from learning.schemas import LearningBase
