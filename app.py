@@ -818,10 +818,16 @@ if page == "Upload & Process":
                     for i, row in df.iterrows():
                         raw_addr = str(row.get('raw_address_data', '') or row.get('address', '') or '')
                         status_text.text(f"Geocoding {i+1}/{len(df)}: {raw_addr[:60]}...")
-                        addr, lat, lng, city, zip_code, warn = fetch_google_data(raw_addr, api_key)
-                        results.append((addr, lat, lng, city, zip_code))
-                        if warn:
-                            warnings.append(f"Row {i+1}: {warn}")
+                        geo = fetch_google_data(raw_addr, api_key) or {}
+                        results.append((
+                            geo.get("formatted_address"),
+                            geo.get("latitude"),
+                            geo.get("longitude"),
+                            geo.get("city"),
+                            geo.get("zip_code"),
+                        ))
+                        if geo.get("warning"):
+                            warnings.append(f"Row {i+1}: {geo['warning']}")
                         progress_bar.progress((i + 1) / len(df))
                     df['address'] = [x[0] for x in results]
                     df['latitude'] = [x[1] for x in results]
@@ -1002,14 +1008,15 @@ if page == "Upload & Process":
                     from engine.fingerprint import compute_fingerprint
                     _learning_store = SqliteLearningStore()
                     _user = st.session_state.get("user_email") or st.session_state.get("username") or "unknown"
-                    for _seg_label, _sd in st.session_state.sheet_data.items():
+                    _fp_count = 0
+                    for _seg_label, _sd in st.session_state.get("sheet_data", {}).items():
                         _raw_df = _sd.get('raw_df')
                         _seg_mappings = _sd.get('mappings') or {}
                         _ftype = _sd.get('file_type', 'LEASE')
-                        if _raw_df is None or _raw_df.empty:
+                        if _raw_df is None or _raw_df.empty or not _seg_mappings:
                             continue
                         _headers = [str(c) for c in _raw_df.columns]
-                        # mappings in session state: {target_col: raw_header} — invert
+                        # mappings stored as {target_col: raw_header} — invert for store
                         _inverted = {v: k for k, v in _seg_mappings.items() if v}
                         if not _inverted:
                             continue
@@ -1019,9 +1026,13 @@ if page == "Upload & Process":
                             mappings=_inverted,
                             confirmed_by=_user,
                         )
+                        _fp_count += 1
+                    if _fp_count:
+                        st.toast(f"✅ Learned {_fp_count} mapping(s) for future uploads", icon="🧠")
+                        st.info(f"🧠 Learning store updated: {_fp_count} mapping fingerprint(s) saved.")
                 except Exception as _le:
-                    import logging
-                    logging.getLogger(__name__).warning("Learning store writeback failed: %s", _le)
+                    import logging, traceback
+                    logging.getLogger(__name__).warning("Learning store writeback failed: %s\n%s", _le, traceback.format_exc())
 
                 msg_parts = []
                 new_count = len(records)
@@ -1050,6 +1061,7 @@ if page == "Upload & Process":
                 st.session_state.clean_df = None
                 st.session_state.mapping_confidence = None
                 st.session_state.sheet_data = {}
+                st.session_state.current_filename = ""  # allow same file re-upload
 
 # =====================================================================
 # PAGE 2: DATABASE VIEW
@@ -1082,7 +1094,8 @@ elif page == "Database View":
         lat_c, lon_c = None, None
         if center_addr:
             with st.spinner("Calculating distances..."):
-                _, lat_c, lon_c, _, _, _ = fetch_google_data(center_addr, get_secret("GOOGLE_API_KEY", ""))
+                _geo_c = fetch_google_data(center_addr, get_secret("GOOGLE_API_KEY", "")) or {}
+                lat_c, lon_c = _geo_c.get("latitude"), _geo_c.get("longitude")
                 if lat_c:
                     df['distance_miles'] = df.apply(
                         lambda x: haversine_miles(lat_c, lon_c, x['latitude'], x['longitude']), axis=1
@@ -1644,7 +1657,8 @@ elif page == "Comp Finder":
             api_key = get_secret("GOOGLE_API_KEY", "")
             if api_key:
                 with st.spinner("Geocoding..."):
-                    addr, lat, lng, city, zip_code, warn = fetch_google_data(cf_address, api_key)
+                    _geo_cf = fetch_google_data(cf_address, api_key) or {}
+                    lat, lng, addr = _geo_cf.get("latitude"), _geo_cf.get("longitude"), _geo_cf.get("formatted_address")
                     if lat and lng:
                         st.session_state.cf_subject_coords = (lat, lng)
                         st.toast(f"Geocoded: {addr}", icon="\u2705")

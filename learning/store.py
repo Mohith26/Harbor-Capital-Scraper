@@ -11,11 +11,30 @@ from learning.schemas import (
 )
 
 
-class SqliteLearningStore:
-    """SQLAlchemy-backed store targeting SQLite (also works with PostgreSQL via dialect swap)."""
+_DEFAULT_DB_URL = "sqlite:///learning_local.db"
 
-    def __init__(self, session_factory):
-        self._Session = session_factory
+
+class SqliteLearningStore:
+    """SQLAlchemy-backed store targeting SQLite (also works with PostgreSQL via dialect swap).
+
+    Usage:
+        SqliteLearningStore(session_factory)          # existing tests/callers
+        SqliteLearningStore(engine_url="sqlite:///x") # URL-based convenience
+        SqliteLearningStore()                          # defaults to learning_local.db
+    """
+
+    def __init__(self, session_factory=None, *, engine_url: Optional[str] = None):
+        if session_factory is None:
+            # URL-based construction: create engine + session factory + tables
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from learning.schemas import LearningBase as Base
+            url = engine_url or _DEFAULT_DB_URL
+            engine = create_engine(url, connect_args={"check_same_thread": False} if "sqlite" in url else {})
+            Base.metadata.create_all(engine)
+            self._Session = sessionmaker(bind=engine, expire_on_commit=False)
+        else:
+            self._Session = session_factory
 
     def _session(self):
         return self._Session()
