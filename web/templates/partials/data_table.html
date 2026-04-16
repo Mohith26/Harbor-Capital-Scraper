@@ -1,0 +1,52 @@
+<script>
+(function() {
+    var data = {{ table_data|safe }};
+    var columns = {{ columns|safe }};
+
+    // Build AG Grid column defs from data columns
+    var colDefs = columns.map(function(col) {
+        var def = { field: col, headerName: col.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); }) };
+        // Format currency columns
+        if (['sale_price', 'price_per_sf', 'rate_monthly', 'rate_annually', 'ti_allowance'].indexOf(col) >= 0) {
+            def.valueFormatter = function(params) {
+                if (params.value == null) return '';
+                return '$' + Number(params.value).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            };
+        }
+        // Format size columns
+        if (['building_size', 'leased_sf'].indexOf(col) >= 0) {
+            def.valueFormatter = function(params) {
+                if (params.value == null) return '';
+                return Number(params.value).toLocaleString(undefined, {maximumFractionDigits: 0}) + ' SF';
+            };
+        }
+        // Hide certain columns
+        if (['raw_address_data', 'latitude', 'longitude', 'source_file_url'].indexOf(col) >= 0) {
+            def.hide = true;
+        }
+        // Checkbox for ID column
+        if (col === 'id') {
+            def.checkboxSelection = true;
+            def.headerCheckboxSelection = true;
+            def.width = 80;
+        }
+        return def;
+    });
+
+    // Init or update grid
+    var container = document.getElementById('ag-grid-container');
+    if (container && colDefs.length > 0) {
+        initGrid('ag-grid-container', colDefs, data, {
+            rowSelection: 'multiple',
+            pagination: true,
+            paginationPageSize: 50,
+        });
+    }
+
+    // Update record count
+    var countEl = document.getElementById('record-count');
+    if (countEl) {
+        countEl.textContent = 'Showing ' + data.length + ' of {{ total }} records';
+    }
+})();
+</script>

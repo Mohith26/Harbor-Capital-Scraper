@@ -1,0 +1,41 @@
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="metric-card">
+        <div class="metric-card-label">Total Comps</div>
+        <div class="metric-card-value">
+            {% if comp_type == 'sales' %}{{ sale_count }}{% else %}{{ lease_count }}{% endif %}
+        </div>
+    </div>
+    {% if comp_type == 'sales' %}
+    <div class="metric-card">
+        <div class="metric-card-label">Avg Sale Price</div>
+        <div class="metric-card-value">
+            {% if metrics.avg_price %}${{ "{:,.0f}".format(metrics.avg_price) }}{% else %}--{% endif %}
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-card-label">Avg $/SF</div>
+        <div class="metric-card-value">
+            {% if metrics.avg_psf %}${{ "{:,.2f}".format(metrics.avg_psf) }}{% else %}--{% endif %}
+        </div>
+    </div>
+    {% else %}
+    <div class="metric-card">
+        <div class="metric-card-label">Avg Rate (Monthly)</div>
+        <div class="metric-card-value">
+            {% if metrics.avg_rate_monthly %}${{ "{:,.2f}".format(metrics.avg_rate_monthly) }}{% else %}--{% endif %}
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-card-label">Avg Rate (Annual)</div>
+        <div class="metric-card-value">
+            {% if metrics.avg_rate_annually %}${{ "{:,.2f}".format(metrics.avg_rate_annually) }}{% else %}--{% endif %}
+        </div>
+    </div>
+    {% endif %}
+    <div class="metric-card">
+        <div class="metric-card-label">Avg Size (SF)</div>
+        <div class="metric-card-value">
+            {% if metrics.avg_size %}{{ "{:,.0f}".format(metrics.avg_size) }}{% else %}--{% endif %}
+        </div>
+    </div>
+</div>

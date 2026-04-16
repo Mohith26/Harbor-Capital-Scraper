@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block page_title %}Database View{% endblock %}
+
+{% block topbar_center %}
+<div class="flex items-center gap-3">
+    <!-- Type Toggle -->
+    <div class="type-toggle" x-data="{type: '{{ comp_type }}'}">
+        <button class="type-toggle-btn" :class="type === 'sales' && 'active'"
+                @click="type='sales'; switchType('sales')">
+            Sales ({{ sale_count }})
+        </button>
+        <button class="type-toggle-btn" :class="type === 'leases' && 'active'"
+                @click="type='leases'; switchType('leases')">
+            Leases ({{ lease_count }})
+        </button>
+    </div>
+    <!-- Search -->
+    <div class="relative">
+        <input type="text" placeholder="Search address, buyer, seller..."
+               class="form-input pl-8 w-64 text-sm" id="search-input"
+               hx-get="/database/table" hx-trigger="keyup changed delay:300ms"
+               hx-target="#table-data" hx-include="this"
+               name="search" value="{{ filters.get('search', '') }}">
+        <svg class="absolute left-2.5 top-2.5 w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+        </svg>
+    </div>
+</div>
+{% endblock %}
+
+{% block topbar_right %}
+<!-- Export dropdown -->
+<div x-data="{open: false}" class="relative">
+    <button @click="open = !open" class="btn-primary text-sm">Export &#9662;</button>
+    <div x-show="open" @click.away="open = false" x-transition class="export-dropdown">
+        <a href="#" @click.prevent="exportData('/database/export','xlsx','{{ comp_type }}'); open=false">Excel (.xlsx)</a>
+        <a href="#" @click.prevent="exportData('/database/export','csv','{{ comp_type }}'); open=false">CSV</a>
+        <a href="#" @click.prevent="exportData('/database/export','kml','{{ comp_type }}'); open=false">KML</a>
+    </div>
+</div>
+<!-- Admin delete -->
+{% if user.role == 'admin' %}
+<button class="btn-outline text-sm text-red-600 border-red-300 hover:bg-red-50"
+        onclick="deleteSelected()">Delete Selected</button>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<!-- Metrics Row -->
+<div id="metrics-container">
+    {% include "partials/metrics_row.html" %}
+</div>
+
+<!-- Data Table -->
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 mt-4">
+    <div class="p-3 border-b border-gray-100 flex items-center justify-between">
+        <span class="text-sm text-gray-500" id="record-count">
+            Showing {{ filtered }} of {{ total }} records
+        </span>
+    </div>
+    <div id="ag-grid-container" style="width: 100%; min-height: 400px;" class="ag-theme-alpine"></div>
+</div>
+
+<!-- Table data (HTMX swap target) -->
+<div id="table-data">
+    {% include "partials/data_table.html" %}
+</div>
+
+<script>
+// Admin delete
+function deleteSelected() {
+    const ids = getSelectedIds();
+    if (ids.length === 0) { alert('No rows selected'); return; }
+    if (!confirm('Delete ' + ids.length + ' records?')) return;
+    fetch('/database/records', {
+        method: 'DELETE',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ids: ids, type: '{{ comp_type }}'})
+    }).then(() => { switchType('{{ comp_type }}'); });
+}
+</script>
+{% endblock %}
