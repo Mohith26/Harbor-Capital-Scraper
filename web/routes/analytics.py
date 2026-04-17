@@ -133,7 +133,7 @@ async def analytics_page(request: Request):
         lease_count = session.query(LeaseComp).count()
         metrics = _compute_metrics(df, comp_type)
         charts = _compute_chart_data(df, comp_type)
-        return templates.TemplateResponse("analytics.html", {
+        return templates.TemplateResponse(request, "analytics.html", {
             "request": request,
             "user": user,
             "current_page": "analytics",

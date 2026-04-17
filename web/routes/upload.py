@@ -49,7 +49,7 @@ def _safe_json_rows(df: pd.DataFrame) -> list[dict]:
 async def upload_page(request: Request):
     templates = request.app.state.templates
     user = request.state.user
-    return templates.TemplateResponse("upload.html", {
+    return templates.TemplateResponse(request, "upload.html", {
         "request": request,
         "user": user,
         "current_page": "upload",
@@ -168,7 +168,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         "schemaFields": schema_fields,
         "brokerName": broker_name,
     }
-    return templates.TemplateResponse("partials/upload_preview.html", {
+    return templates.TemplateResponse(request, "partials/upload_preview.html", {
         "request": request,
         "preview_state": preview_state,
         "broker": broker_resolution,

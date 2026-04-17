@@ -23,7 +23,7 @@ def _safe_val(v):
 async def finder_page(request: Request):
     templates = request.app.state.templates
     user = request.state.user
-    return templates.TemplateResponse("comp_finder.html", {
+    return templates.TemplateResponse(request, "comp_finder.html", {
         "request": request,
         "user": user,
         "current_page": "finder",
@@ -132,7 +132,7 @@ async def search_comps(request: Request):
             result["date"] = row.get("commencement_date", "")
         results.append(result)
 
-    return templates.TemplateResponse("partials/comp_results.html", {
+    return templates.TemplateResponse(request, "partials/comp_results.html", {
         "request": request,
         "results": results,
         "subject": subject,

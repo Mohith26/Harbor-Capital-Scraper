@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN chmod +x start.sh
+
 EXPOSE 8501
 
-CMD ["uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "8501"]
+CMD ["./start.sh"]

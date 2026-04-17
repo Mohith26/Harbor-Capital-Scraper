@@ -9,7 +9,7 @@
 <body class="bg-[#f4f5f7] min-h-screen flex items-center justify-center">
     <div class="bg-white rounded-lg shadow-md p-8 w-full max-w-sm">
         <div class="text-center mb-6">
-            <img src="data:image/png;base64,{{ logo_b64 }}" alt="Harbor Capital" class="h-10 mx-auto mb-4">
+            <img src="data:image/png;base64,{{ logo_b64 | default('', true) }}" alt="Harbor Capital" class="h-10 mx-auto mb-4">
             <h1 class="text-lg font-bold text-[#333333]">Comp Database</h1>
         </div>
         {% if error %}
