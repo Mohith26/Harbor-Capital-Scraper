@@ -25,7 +25,7 @@ def _load_image_b64(relative_path: str) -> str:
         return ""
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    EXEMPT_PATHS = {"/login", "/static", "/health"}
+    EXEMPT_PATHS = {"/login", "/static", "/health", "/api"}
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path

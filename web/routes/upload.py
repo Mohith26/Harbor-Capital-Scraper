@@ -26,6 +26,51 @@ router = APIRouter(prefix="/upload", tags=["upload"])
 _jobs: dict[str, dict] = {}
 
 
+def _apply_mappings_with_notes_concat(raw_df: pd.DataFrame, mappings: dict[str, str]) -> pd.DataFrame:
+    """Apply user-edited mappings to raw_df.
+
+    - Each target field (except 'notes') is populated from at most one source column.
+      If the user mapped two raw columns to the same target, the first wins.
+    - 'notes' is special: ALL source columns mapped to 'notes' are concatenated into
+      a single string in the form 'col1: val1 | col2: val2'.
+    """
+    out = pd.DataFrame(index=raw_df.index)
+    notes_cols = [raw for raw, target in mappings.items() if target == "notes"]
+    other_mappings: dict[str, str] = {}
+    for raw, target in mappings.items():
+        if not target or target in ("---", "unmapped", "notes"):
+            continue
+        if target in other_mappings.values():
+            # Target already has a source; skip duplicates (client should have prevented this)
+            continue
+        other_mappings[raw] = target
+
+    for raw, target in other_mappings.items():
+        if raw in raw_df.columns:
+            out[target] = raw_df[raw]
+
+    if notes_cols:
+        def _concat_row(row):
+            parts = []
+            for col in notes_cols:
+                val = row.get(col)
+                if val is None:
+                    continue
+                try:
+                    if pd.isna(val):
+                        continue
+                except Exception:
+                    pass
+                s = str(val).strip()
+                if s:
+                    parts.append(f"{col}: {s}")
+            return " | ".join(parts) if parts else None
+
+        out["notes"] = raw_df.apply(_concat_row, axis=1)
+
+    return out
+
+
 def _safe_json_rows(df: pd.DataFrame) -> list[dict]:
     """Convert DataFrame rows to JSON-safe dicts."""
     rows = df.head(10).to_dict(orient="records")
@@ -92,6 +137,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             # Store segment results for later save
             _jobs[job_id] = {
                 "segments": [seg_result],
+                "raw_dfs": {seg_result.segment_key: seg_result.cleaned_df.copy()},
                 "tmp_path": tmp_path,
                 "filename": file.filename,
                 "status": "mapped",
@@ -102,6 +148,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             from comp_engine import get_sheet_names, robust_load_file_segmented
             sheets = get_sheet_names(tmp_path)
             all_segments = []
+            raw_dfs: dict[str, pd.DataFrame] = {}
 
             for sheet in sheets:
                 raw_segments = robust_load_file_segmented(tmp_path, sheet_name=sheet)
@@ -120,6 +167,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
                             cleaned_df=mapping_result.cleaned_df,
                         )
                         all_segments.append(seg_result)
+                        raw_dfs[seg_key] = seg_df.copy()
                         segments_data.append({
                             "segment_key": seg_key,
                             "sheet_name": sheet,
@@ -139,6 +187,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
 
             _jobs[job_id] = {
                 "segments": all_segments,
+                "raw_dfs": raw_dfs,
                 "tmp_path": tmp_path,
                 "filename": file.filename,
                 "status": "mapped",
@@ -181,7 +230,11 @@ async def update_mapping(request: Request):
 
 @router.post("/apply-mappings")
 async def apply_mappings(request: Request):
-    """Apply client-submitted mappings to job state before geocoding."""
+    """Apply client-submitted mappings to job state before geocoding.
+
+    Rebuilds each segment's cleaned_df from the stored raw_df using the new
+    mappings. 'notes' target supports multi-source concatenation.
+    """
     body = await request.json()
     job_id = body.get("job_id")
     job = _jobs.get(job_id)
@@ -189,14 +242,20 @@ async def apply_mappings(request: Request):
         return {"error": "Session expired. Please re-upload."}
     final_mappings = body.get("final_mappings", {})
     broker_name = body.get("broker_name", "")
+    raw_dfs = job.get("raw_dfs", {})
 
     for seg in job["segments"]:
-        if seg.segment_key in final_mappings:
-            new_maps = final_mappings[seg.segment_key]
-            seg.mapping_result.mappings = new_maps
-            # Rebuild cleaned_df using raw data + new mappings
-            # The raw df isn't stored; we use the current cleaned_df's columns as-is
-            # Safe fallback: keep cleaned_df; save-time uses final_mappings for learning
+        if seg.segment_key not in final_mappings:
+            continue
+        new_maps = final_mappings[seg.segment_key]
+        # Drop any "unmapped"/"---"/empty values
+        new_maps = {k: v for k, v in new_maps.items() if v and v not in ("---", "unmapped")}
+        seg.mapping_result.mappings = new_maps
+
+        raw_df = raw_dfs.get(seg.segment_key)
+        if raw_df is not None:
+            seg.cleaned_df = _apply_mappings_with_notes_concat(raw_df, new_maps)
+
     if broker_name:
         job["confirmed_broker"] = broker_name
     return {"status": "ok"}

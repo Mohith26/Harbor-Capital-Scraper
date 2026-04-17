@@ -39,12 +39,19 @@
                     Drag a field onto a column header to map it — or use the dropdowns below.
                 </div>
                 <div class="flex flex-wrap gap-1.5">
+                    <span class="inline-block px-2 py-1 bg-gray-100 border border-gray-400 rounded text-xs font-medium text-gray-600 cursor-grab select-none hover:bg-gray-200"
+                          draggable="true"
+                          @dragstart="dragField = '__unmapped__'"
+                          @dragend="dragField = null">
+                        ✕ Unmapped
+                    </span>
                     <template x-for="field in schemaFields" :key="field">
-                        <span class="inline-block px-2 py-1 bg-white border border-amber-300 rounded text-xs font-medium text-[#333] cursor-grab select-none hover:bg-amber-100"
+                        <span class="inline-block px-2 py-1 bg-white border border-amber-300 rounded text-xs font-medium cursor-grab select-none hover:bg-amber-100"
+                              :class="isFieldAssigned(field) ? 'opacity-50 text-gray-500' : 'text-[#333]'"
                               draggable="true"
                               @dragstart="dragField = field"
                               @dragend="dragField = null"
-                              x-text="field"></span>
+                              x-text="field + (isFieldAssigned(field) ? ' ✓' : '')"></span>
                     </template>
                 </div>
             </div>
@@ -149,13 +156,35 @@ function uploadPreview(initial) {
         geocodeStatus: 'Starting...',
 
         setMapping(segIdx, header, field) {
-            // Update in-place — Alpine re-renders the badge automatically
-            if (!this.segments[segIdx].mappings) this.segments[segIdx].mappings = {};
-            if (field === '---' || !field) {
-                delete this.segments[segIdx].mappings[header];
-            } else {
-                this.segments[segIdx].mappings[header] = field;
+            const seg = this.segments[segIdx];
+            if (!seg.mappings) seg.mappings = {};
+
+            // Unmapped chip clears this column's mapping
+            if (!field || field === '---' || field === '__unmapped__' || field === 'unmapped') {
+                delete seg.mappings[header];
+                return;
             }
+
+            // Notes: multiple source columns allowed
+            if (field === 'notes') {
+                seg.mappings[header] = 'notes';
+                return;
+            }
+
+            // All other fields: one source column max — unmap any other column that was using this field
+            for (const otherHeader of Object.keys(seg.mappings)) {
+                if (otherHeader !== header && seg.mappings[otherHeader] === field) {
+                    delete seg.mappings[otherHeader];
+                }
+            }
+            seg.mappings[header] = field;
+        },
+
+        isFieldAssigned(field) {
+            if (field === 'notes') return false;  // notes allows multiple, never mark as assigned
+            const seg = this.segments[this.activeSegment];
+            if (!seg || !seg.mappings) return false;
+            return Object.values(seg.mappings).includes(field);
         },
 
         startGeocode() {

@@ -146,56 +146,109 @@ async function exportData(url, format, compType) {
     URL.revokeObjectURL(a.href);
 }
 
-// ===== Google Places Autocomplete (Texas-bound) =====
-// Texas bounds for biasing autocomplete (approximate bounding box)
-const TEXAS_BOUNDS = {
-    north: 36.5, south: 25.8, east: -93.5, west: -106.6,
-};
-
-async function initAddressAutocomplete(input) {
-    if (!input || input._autocompleteInitialized) return;
-    input._autocompleteInitialized = true;
-
-    // Ensure input stays typable even if Google Maps fails to load.
-    // No readonly, no disabled — just plain text input with optional autocomplete sugar.
-    input.removeAttribute('readonly');
-    input.removeAttribute('disabled');
-
-    // Wait for Google Maps (max 5s). If it never arrives, exit silently.
+// ===== Address Autocomplete (server-side Places proxy, Texas-biased) =====
+async function _fetchAutocomplete(q) {
     try {
-        if (window._googleMapsReady) {
-            await Promise.race([
-                window._googleMapsReady,
-                new Promise((_, reject) => setTimeout(() => reject('timeout'), 5000)),
-            ]);
-        }
-        if (!window.google || !window.google.maps || !window.google.maps.places) {
-            console.warn('[autocomplete] Google Places not available — plain input will still work');
-            return;
-        }
-        const ac = new google.maps.places.Autocomplete(input, {
-            types: ['address'],
-            componentRestrictions: { country: 'us' },
-            bounds: new google.maps.LatLngBounds(
-                { lat: TEXAS_BOUNDS.south, lng: TEXAS_BOUNDS.west },
-                { lat: TEXAS_BOUNDS.north, lng: TEXAS_BOUNDS.east }
-            ),
-            strictBounds: true,
-            fields: ['formatted_address', 'geometry'],
-        });
-        // Prevent Enter from submitting form when a suggestion is visible
-        input.addEventListener('keydown', (e) => {
-            const pac = document.querySelector('.pac-container');
-            if (e.key === 'Enter' && pac && pac.offsetHeight > 0) {
-                e.preventDefault();
-            }
-        });
-    } catch (err) {
-        console.warn('[autocomplete] init failed (input remains typable):', err);
+        const resp = await fetch('/api/autocomplete?q=' + encodeURIComponent(q));
+        if (!resp.ok) return [];
+        const data = await resp.json();
+        return data.predictions || [];
+    } catch (e) {
+        return [];
     }
 }
 
-// Auto-initialize all inputs with data-address-autocomplete attribute
+function initAddressAutocomplete(input) {
+    if (!input || input._autocompleteInitialized) return;
+    input._autocompleteInitialized = true;
+    input.removeAttribute('readonly');
+    input.removeAttribute('disabled');
+    input.setAttribute('autocomplete', 'off');
+
+    // Build dropdown element
+    const dropdown = document.createElement('div');
+    dropdown.className = 'hc-autocomplete-dropdown';
+    dropdown.style.cssText = 'position: absolute; z-index: 10000; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); max-height: 240px; overflow-y: auto; display: none; min-width: 200px;';
+    document.body.appendChild(dropdown);
+
+    let debounceTimer = null;
+    let currentPredictions = [];
+    let selectedIdx = -1;
+
+    const positionDropdown = () => {
+        const rect = input.getBoundingClientRect();
+        dropdown.style.left = (rect.left + window.scrollX) + 'px';
+        dropdown.style.top = (rect.bottom + window.scrollY + 2) + 'px';
+        dropdown.style.width = rect.width + 'px';
+    };
+
+    const hideDropdown = () => { dropdown.style.display = 'none'; selectedIdx = -1; };
+
+    const renderDropdown = () => {
+        if (!currentPredictions.length) { hideDropdown(); return; }
+        dropdown.innerHTML = currentPredictions.map((p, i) => `
+            <div class="hc-ac-item" data-idx="${i}"
+                 style="padding: 8px 12px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #f3f4f6; ${i === selectedIdx ? 'background: #FFF3DC;' : ''}">
+                ${p.description.replace(/</g, '&lt;')}
+            </div>
+        `).join('');
+        positionDropdown();
+        dropdown.style.display = 'block';
+
+        dropdown.querySelectorAll('.hc-ac-item').forEach(el => {
+            el.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                const idx = parseInt(el.dataset.idx, 10);
+                const pick = currentPredictions[idx];
+                if (pick) {
+                    input.value = pick.description;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                hideDropdown();
+            });
+        });
+    };
+
+    input.addEventListener('input', () => {
+        const q = input.value.trim();
+        clearTimeout(debounceTimer);
+        if (q.length < 3) { hideDropdown(); return; }
+        debounceTimer = setTimeout(async () => {
+            currentPredictions = await _fetchAutocomplete(q);
+            selectedIdx = -1;
+            renderDropdown();
+        }, 250);
+    });
+
+    input.addEventListener('keydown', (e) => {
+        if (dropdown.style.display !== 'block') return;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            selectedIdx = Math.min(selectedIdx + 1, currentPredictions.length - 1);
+            renderDropdown();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            selectedIdx = Math.max(selectedIdx - 1, 0);
+            renderDropdown();
+        } else if (e.key === 'Enter') {
+            if (selectedIdx >= 0 && currentPredictions[selectedIdx]) {
+                e.preventDefault();
+                input.value = currentPredictions[selectedIdx].description;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                hideDropdown();
+            }
+        } else if (e.key === 'Escape') {
+            hideDropdown();
+        }
+    });
+
+    input.addEventListener('blur', () => setTimeout(hideDropdown, 150));
+    window.addEventListener('scroll', () => { if (dropdown.style.display === 'block') positionDropdown(); }, true);
+    window.addEventListener('resize', () => { if (dropdown.style.display === 'block') positionDropdown(); });
+}
+
+// Auto-init on DOMContentLoaded and after HTMX swaps
 document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('input[data-address-autocomplete]').forEach(initAddressAutocomplete);
 });
