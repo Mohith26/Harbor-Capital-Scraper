@@ -2,6 +2,9 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f5f7; color: #333333; }
 
+/* Google Places Autocomplete dropdown — must float above everything */
+.pac-container { z-index: 10000 !important; }
+
 /* ===== Sidebar ===== */
 .hc-sidebar {
     position: fixed; left: 0; top: 0; bottom: 0; width: 58px;

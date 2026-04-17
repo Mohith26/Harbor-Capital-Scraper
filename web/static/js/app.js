@@ -156,30 +156,43 @@ async function initAddressAutocomplete(input) {
     if (!input || input._autocompleteInitialized) return;
     input._autocompleteInitialized = true;
 
-    if (window._googleMapsReady) {
-        await window._googleMapsReady;
-    } else if (!window.google || !window.google.maps) {
-        console.warn('Google Maps not loaded; autocomplete disabled');
-        return;
-    }
+    // Ensure input stays typable even if Google Maps fails to load.
+    // No readonly, no disabled — just plain text input with optional autocomplete sugar.
+    input.removeAttribute('readonly');
+    input.removeAttribute('disabled');
 
-    const ac = new google.maps.places.Autocomplete(input, {
-        types: ['address'],
-        componentRestrictions: { country: 'us' },
-        bounds: new google.maps.LatLngBounds(
-            { lat: TEXAS_BOUNDS.south, lng: TEXAS_BOUNDS.west },
-            { lat: TEXAS_BOUNDS.north, lng: TEXAS_BOUNDS.east }
-        ),
-        strictBounds: true,
-        fields: ['formatted_address', 'geometry'],
-    });
-
-    // Prevent Enter from submitting form when a suggestion is open
-    input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && document.querySelector('.pac-container:not([style*="display: none"])')) {
-            e.preventDefault();
+    // Wait for Google Maps (max 5s). If it never arrives, exit silently.
+    try {
+        if (window._googleMapsReady) {
+            await Promise.race([
+                window._googleMapsReady,
+                new Promise((_, reject) => setTimeout(() => reject('timeout'), 5000)),
+            ]);
         }
-    });
+        if (!window.google || !window.google.maps || !window.google.maps.places) {
+            console.warn('[autocomplete] Google Places not available — plain input will still work');
+            return;
+        }
+        const ac = new google.maps.places.Autocomplete(input, {
+            types: ['address'],
+            componentRestrictions: { country: 'us' },
+            bounds: new google.maps.LatLngBounds(
+                { lat: TEXAS_BOUNDS.south, lng: TEXAS_BOUNDS.west },
+                { lat: TEXAS_BOUNDS.north, lng: TEXAS_BOUNDS.east }
+            ),
+            strictBounds: true,
+            fields: ['formatted_address', 'geometry'],
+        });
+        // Prevent Enter from submitting form when a suggestion is visible
+        input.addEventListener('keydown', (e) => {
+            const pac = document.querySelector('.pac-container');
+            if (e.key === 'Enter' && pac && pac.offsetHeight > 0) {
+                e.preventDefault();
+            }
+        });
+    } catch (err) {
+        console.warn('[autocomplete] init failed (input remains typable):', err);
+    }
 }
 
 // Auto-initialize all inputs with data-address-autocomplete attribute

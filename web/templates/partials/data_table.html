@@ -33,14 +33,19 @@
         return def;
     });
 
-    // Init or update grid
+    // Init or update grid — always init so empty-state still shows column headers
     var container = document.getElementById('ag-grid-container');
-    if (container && colDefs.length > 0) {
-        initGrid('ag-grid-container', colDefs, data, {
-            rowSelection: 'multiple',
-            pagination: true,
-            paginationPageSize: 50,
-        });
+    if (container) {
+        if (colDefs.length === 0) {
+            // No data at all in DB — show a friendly message instead of a blank grid
+            container.innerHTML = '<div class="text-center text-sm text-gray-400 py-12">No comps in the database yet. Upload a file to get started.</div>';
+        } else {
+            initGrid('ag-grid-container', colDefs, data, {
+                rowSelection: 'multiple',
+                pagination: true,
+                paginationPageSize: 50,
+            });
+        }
     }
 
     // Update record count

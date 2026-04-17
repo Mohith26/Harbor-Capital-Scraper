@@ -132,13 +132,10 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
                             "row_count": len(seg_df),
                         })
 
-            # Broker detection from first segment
+            # Broker detection: only auto-detect from known broker keywords in filename,
+            # not from row data (which caused garbage like "file.xlsx 8450 152.23 Hold").
+            # Let the user enter/confirm the broker manually.
             broker_resolution = None
-            if all_segments:
-                first_df = all_segments[0].cleaned_df
-                # Try to extract broker from filename or first few cells
-                sample_text = file.filename + " " + " ".join(str(v) for v in first_df.iloc[0].values[:5] if pd.notna(v))
-                broker_resolution = resolve_broker(sample_text, store)
 
             _jobs[job_id] = {
                 "segments": all_segments,
