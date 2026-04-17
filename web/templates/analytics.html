@@ -49,11 +49,16 @@
 <!-- Chart Tabs -->
 <div x-data="{tab: 'distributions'}">
     <div class="flex gap-1 border-b border-gray-200 mb-4">
-        <button class="chart-tab" :class="tab === 'distributions' && 'active'" @click="tab = 'distributions'">Distributions</button>
-        <button class="chart-tab" :class="tab === 'scatter' && 'active'" @click="tab = 'scatter'">Price vs Size</button>
-        <button class="chart-tab" :class="tab === 'trends' && 'active'" @click="tab = 'trends'">Trends</button>
-        <button class="chart-tab" :class="tab === 'zip' && 'active'" @click="tab = 'zip'">By Zip Code</button>
-        <button class="chart-tab" :class="tab === 'map' && 'active'" @click="tab = 'map'; $nextTick(() => initAnalyticsMap())">Map</button>
+        <button class="chart-tab" :class="tab === 'distributions' && 'active'"
+                @click="tab = 'distributions'; $nextTick(() => renderTabChart('distributions'))">Distributions</button>
+        <button class="chart-tab" :class="tab === 'scatter' && 'active'"
+                @click="tab = 'scatter'; $nextTick(() => renderTabChart('scatter'))">Price vs Size</button>
+        <button class="chart-tab" :class="tab === 'trends' && 'active'"
+                @click="tab = 'trends'; $nextTick(() => renderTabChart('trends'))">Trends</button>
+        <button class="chart-tab" :class="tab === 'zip' && 'active'"
+                @click="tab = 'zip'; $nextTick(() => renderTabChart('zip'))">By Zip Code</button>
+        <button class="chart-tab" :class="tab === 'map' && 'active'"
+                @click="tab = 'map'; $nextTick(() => renderTabChart('map'))">Map</button>
         <button class="chart-tab" :class="tab === 'compare' && 'active'" @click="tab = 'compare'">Compare</button>
     </div>
 
@@ -63,104 +68,88 @@
     </div>
 
     <!-- Price vs Size -->
-    <div x-show="tab === 'scatter'" style="display:none" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+    <div x-show="tab === 'scatter'" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
         <div id="chart-scatter" style="height: 400px;"></div>
     </div>
 
     <!-- Trends -->
-    <div x-show="tab === 'trends'" style="display:none" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+    <div x-show="tab === 'trends'" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
         <div id="chart-trends" style="height: 400px;"></div>
     </div>
 
     <!-- By Zip Code -->
-    <div x-show="tab === 'zip'" style="display:none" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+    <div x-show="tab === 'zip'" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
         <div id="chart-zip" style="height: 400px;"></div>
     </div>
 
     <!-- Map -->
-    <div x-show="tab === 'map'" style="display:none" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+    <div x-show="tab === 'map'" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
         <div id="analytics-map" style="height: 500px; border-radius: 8px;"></div>
     </div>
 
     <!-- Compare -->
-    <div x-show="tab === 'compare'" style="display:none" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+    <div x-show="tab === 'compare'" class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
         <p class="text-sm text-gray-500 text-center py-8">Select properties from the Database View to compare.</p>
     </div>
 </div>
 
 <script>
-(function() {
-    var charts = {{ charts|safe }};
+const _chartsData = {{ charts|safe }};
+const _renderedCharts = {};
 
-    // Distributions
-    var distKeys = Object.keys(charts).filter(function(k) { return k.startsWith('dist_'); });
-    if (distKeys.length > 0) {
-        var traces = distKeys.map(function(k) {
-            return { x: charts[k].values, type: 'histogram', name: charts[k].label, opacity: 0.7 };
-        });
-        renderChart('chart-distributions', traces, {
-            barmode: 'overlay',
-            title: 'Value Distributions',
-            xaxis: { title: '' },
-            yaxis: { title: 'Count' },
-        });
+function renderTabChart(tab) {
+    if (_renderedCharts[tab]) {
+        // Already rendered; just resize
+        if (tab === 'map' && window._analyticsMap) {
+            window._analyticsMap.invalidateSize();
+        } else {
+            const divId = 'chart-' + tab;
+            const el = document.getElementById(divId);
+            if (el && window.Plotly) Plotly.Plots.resize(el);
+        }
+        return;
     }
+    _renderedCharts[tab] = true;
 
-    // Scatter
-    if (charts.scatter) {
+    if (tab === 'distributions') {
+        const distKeys = Object.keys(_chartsData).filter(k => k.startsWith('dist_'));
+        if (distKeys.length > 0) {
+            const traces = distKeys.map(k => ({ x: _chartsData[k].values, type: 'histogram', name: _chartsData[k].label, opacity: 0.7 }));
+            renderChart('chart-distributions', traces, {
+                barmode: 'overlay', title: 'Value Distributions',
+                xaxis: { title: '' }, yaxis: { title: 'Count' },
+            });
+        }
+    } else if (tab === 'scatter' && _chartsData.scatter) {
         renderChart('chart-scatter', [{
-            x: charts.scatter.x,
-            y: charts.scatter.y,
-            text: charts.scatter.labels,
-            mode: 'markers',
-            type: 'scatter',
-            marker: { size: 8, color: '#F5A623', opacity: 0.7 },
-        }], {
-            title: charts.scatter.y_label + ' vs ' + charts.scatter.x_label,
-            xaxis: { title: charts.scatter.x_label },
-            yaxis: { title: charts.scatter.y_label },
-        });
-    }
-
-    // Trends
-    if (charts.trends) {
+            x: _chartsData.scatter.x, y: _chartsData.scatter.y, text: _chartsData.scatter.labels,
+            mode: 'markers', type: 'scatter', marker: { size: 8, color: '#F5A623', opacity: 0.7 },
+        }], { title: _chartsData.scatter.y_label + ' vs ' + _chartsData.scatter.x_label,
+               xaxis: { title: _chartsData.scatter.x_label }, yaxis: { title: _chartsData.scatter.y_label } });
+    } else if (tab === 'trends' && _chartsData.trends) {
         renderChart('chart-trends', [{
-            x: charts.trends.dates,
-            y: charts.trends.values,
-            type: 'scatter',
-            mode: 'lines+markers',
-            line: { color: '#F5A623', width: 2 },
-            marker: { size: 5 },
-        }], {
-            title: charts.trends.label + ' Over Time',
-            xaxis: { title: 'Date' },
-            yaxis: { title: charts.trends.label },
-        });
-    }
-
-    // By Zip
-    if (charts.by_zip) {
+            x: _chartsData.trends.dates, y: _chartsData.trends.values,
+            type: 'scatter', mode: 'lines+markers',
+            line: { color: '#F5A623', width: 2 }, marker: { size: 5 },
+        }], { title: _chartsData.trends.label + ' Over Time',
+               xaxis: { title: 'Date' }, yaxis: { title: _chartsData.trends.label } });
+    } else if (tab === 'zip' && _chartsData.by_zip) {
         renderChart('chart-zip', [{
-            x: charts.by_zip.zips,
-            y: charts.by_zip.means,
-            type: 'bar',
-            marker: { color: '#F5A623' },
-            text: charts.by_zip.counts.map(function(c) { return c + ' comps'; }),
-        }], {
-            title: charts.by_zip.label + ' by Zip Code',
-            xaxis: { title: 'Zip Code', type: 'category' },
-            yaxis: { title: charts.by_zip.label },
-        });
-    }
-})();
-
-function initAnalyticsMap() {
-    var charts = {{ charts|safe }};
-    if (charts.map_points && charts.map_points.length > 0) {
-        var map = initMap('analytics-map', [29.76, -95.37], 10);
-        addMarkers(map, charts.map_points);
-        setTimeout(function() { map.invalidateSize(); }, 200);
+            x: _chartsData.by_zip.zips, y: _chartsData.by_zip.means,
+            type: 'bar', marker: { color: '#F5A623' },
+            text: _chartsData.by_zip.counts.map(c => c + ' comps'),
+        }], { title: _chartsData.by_zip.label + ' by Zip Code',
+               xaxis: { title: 'Zip Code', type: 'category' }, yaxis: { title: _chartsData.by_zip.label } });
+    } else if (tab === 'map') {
+        if (_chartsData.map_points && _chartsData.map_points.length > 0) {
+            window._analyticsMap = initMap('analytics-map', [31.0, -99.0], 6);
+            addMarkers(window._analyticsMap, _chartsData.map_points);
+            setTimeout(() => window._analyticsMap.invalidateSize(), 200);
+        }
     }
 }
+
+// Render default tab on load
+window.addEventListener('DOMContentLoaded', () => renderTabChart('distributions'));
 </script>
 {% endblock %}

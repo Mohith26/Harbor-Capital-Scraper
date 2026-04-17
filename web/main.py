@@ -52,20 +52,27 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
 os.makedirs(templates_dir, exist_ok=True)
 templates = Jinja2Templates(directory=templates_dir)
+templates.env.globals["GOOGLE_API_KEY"] = settings.GOOGLE_API_KEY
 app.state.templates = templates
 
 app.include_router(api_router)
 
 @app.get("/login")
 async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse("login.html", {
+        "request": request, "error": None,
+        "logo_b64": request.app.state.logo_b64,
+    })
 
 @app.post("/login")
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
     from web.auth import verify_password, create_session
     user = verify_password(username, password)
     if not user:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password"})
+        return templates.TemplateResponse("login.html", {
+            "request": request, "error": "Invalid username or password",
+            "logo_b64": request.app.state.logo_b64,
+        })
     response = RedirectResponse("/database", status_code=303)
     create_session(user, response)
     return response

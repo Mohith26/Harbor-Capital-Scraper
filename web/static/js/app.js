@@ -9,6 +9,11 @@ document.addEventListener('htmx:afterSwap', function(e) {
 
 // ===== AG Grid Helpers =====
 let _gridApi = null;
+let _gridColumnsSig = null;
+
+function _columnsSignature(columnDefs) {
+    return columnDefs.map(c => c.field).join('|');
+}
 
 function initGrid(containerId, columnDefs, rowData, options) {
     const container = document.getElementById(containerId);
@@ -18,23 +23,37 @@ function initGrid(containerId, columnDefs, rowData, options) {
         columnDefs: columnDefs,
         rowData: rowData,
         defaultColDef: {
-            sortable: true,
-            filter: true,
-            resizable: true,
-            minWidth: 100,
+            sortable: true, filter: true, resizable: true, minWidth: 100,
         },
         rowSelection: 'multiple',
-        animateRows: true,
+        animateRows: false,
         pagination: true,
         paginationPageSize: 50,
         domLayout: 'autoHeight',
+        suppressColumnVirtualisation: false,
         ...options,
     };
 
-    if (_gridApi) {
-        _gridApi.destroy();
+    const newSig = _columnsSignature(columnDefs);
+
+    // Fast path: grid exists + same columns → just update data
+    if (_gridApi && _gridColumnsSig === newSig) {
+        try {
+            _gridApi.setGridOption('rowData', rowData);
+            return _gridApi;
+        } catch (e) {
+            // Fall through to recreate if setGridOption fails
+        }
     }
+
+    // Slow path: columns changed or no grid → destroy and recreate
+    if (_gridApi) {
+        try { _gridApi.destroy(); } catch (e) {}
+        _gridApi = null;
+    }
+    container.innerHTML = '';  // clear old DOM
     _gridApi = agGrid.createGrid(container, defaultOptions);
+    _gridColumnsSig = newSig;
     return _gridApi;
 }
 
@@ -126,6 +145,52 @@ async function exportData(url, format, compType) {
     a.click();
     URL.revokeObjectURL(a.href);
 }
+
+// ===== Google Places Autocomplete (Texas-bound) =====
+// Texas bounds for biasing autocomplete (approximate bounding box)
+const TEXAS_BOUNDS = {
+    north: 36.5, south: 25.8, east: -93.5, west: -106.6,
+};
+
+async function initAddressAutocomplete(input) {
+    if (!input || input._autocompleteInitialized) return;
+    input._autocompleteInitialized = true;
+
+    if (window._googleMapsReady) {
+        await window._googleMapsReady;
+    } else if (!window.google || !window.google.maps) {
+        console.warn('Google Maps not loaded; autocomplete disabled');
+        return;
+    }
+
+    const ac = new google.maps.places.Autocomplete(input, {
+        types: ['address'],
+        componentRestrictions: { country: 'us' },
+        bounds: new google.maps.LatLngBounds(
+            { lat: TEXAS_BOUNDS.south, lng: TEXAS_BOUNDS.west },
+            { lat: TEXAS_BOUNDS.north, lng: TEXAS_BOUNDS.east }
+        ),
+        strictBounds: true,
+        fields: ['formatted_address', 'geometry'],
+    });
+
+    // Prevent Enter from submitting form when a suggestion is open
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && document.querySelector('.pac-container:not([style*="display: none"])')) {
+            e.preventDefault();
+        }
+    });
+}
+
+// Auto-initialize all inputs with data-address-autocomplete attribute
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('input[data-address-autocomplete]').forEach(initAddressAutocomplete);
+});
+document.addEventListener('htmx:afterSwap', (e) => {
+    if (e.detail.target) {
+        e.detail.target.querySelectorAll('input[data-address-autocomplete]').forEach(initAddressAutocomplete);
+    }
+});
 
 // ===== Type Toggle Helper =====
 function switchType(type) {

@@ -155,77 +155,54 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     first_type = segments_data[0]["file_type"] if segments_data else "sale"
     schema_fields = list(LEASE_SCHEMA.keys()) if first_type.lower() in ("lease", "both") else list(SALE_SCHEMA.keys())
 
+    broker_resolution = _jobs[job_id].get("broker")
+    broker_name = ""
+    if broker_resolution:
+        broker_name = (getattr(broker_resolution, "broker_name", None)
+                       or getattr(broker_resolution, "candidate_name", None)
+                       or "")
+
+    preview_state = {
+        "jobId": job_id,
+        "segments": segments_data,
+        "schemaFields": schema_fields,
+        "brokerName": broker_name,
+    }
     return templates.TemplateResponse("partials/upload_preview.html", {
         "request": request,
-        "job_id": job_id,
-        "segments": segments_data,
-        "schema_fields": schema_fields,
-        "broker": _jobs[job_id].get("broker"),
+        "preview_state": preview_state,
+        "broker": broker_resolution,
         "filename": file.filename,
     })
 
 
-@router.post("/mapping", response_class=HTMLResponse)
+@router.post("/mapping")
 async def update_mapping(request: Request):
-    """Re-apply user-edited column mappings."""
-    templates = request.app.state.templates
-    form = await request.form()
-    job_id = form.get("job_id")
+    """Deprecated: mappings are now managed client-side. Kept as no-op for backward compat."""
+    return {"status": "deprecated"}
+
+
+@router.post("/apply-mappings")
+async def apply_mappings(request: Request):
+    """Apply client-submitted mappings to job state before geocoding."""
+    body = await request.json()
+    job_id = body.get("job_id")
     job = _jobs.get(job_id)
     if not job:
-        return HTMLResponse('<div class="text-red-600">Session expired. Please re-upload.</div>')
+        return {"error": "Session expired. Please re-upload."}
+    final_mappings = body.get("final_mappings", {})
+    broker_name = body.get("broker_name", "")
 
-    # Parse mapping overrides from form
-    new_mappings = {}
-    for key, value in form.items():
-        if key.startswith("mapping__"):
-            parts = key.split("__", 2)  # mapping__segkey__rawheader
-            if len(parts) == 3:
-                seg_key, raw_header = parts[1], parts[2]
-                if seg_key not in new_mappings:
-                    new_mappings[seg_key] = {}
-                if value and value != "---":
-                    new_mappings[seg_key][raw_header] = value
-
-    # Update stored mappings
     for seg in job["segments"]:
-        if seg.segment_key in new_mappings:
-            seg.mapping_result.mappings = new_mappings[seg.segment_key]
-            # Re-apply mappings to get cleaned_df
-            new_df = pd.DataFrame()
-            for raw, target in new_mappings[seg.segment_key].items():
-                if raw in seg.mapping_result.fingerprint.headers:
-                    # Find original data
-                    pass  # cleaned_df already has target columns
-            seg.mapping_result.mappings = new_mappings[seg.segment_key]
-
-    # Rebuild segments_data for template
-    segments_data = []
-    for seg in job["segments"]:
-        first_type = seg.fingerprint.file_type
-        segments_data.append({
-            "segment_key": seg.segment_key,
-            "sheet_name": seg.fingerprint.sheet_name,
-            "raw_headers": seg.mapping_result.fingerprint.headers,
-            "mappings": seg.mapping_result.mappings,
-            "confidence": seg.mapping_result.confidence,
-            "source": seg.mapping_result.source,
-            "file_type": seg.fingerprint.file_type,
-            "preview_rows": _safe_json_rows(seg.cleaned_df),
-            "row_count": len(seg.cleaned_df),
-        })
-
-    first_type = segments_data[0]["file_type"] if segments_data else "sale"
-    schema_fields = list(LEASE_SCHEMA.keys()) if first_type.lower() in ("lease", "both") else list(SALE_SCHEMA.keys())
-
-    return templates.TemplateResponse("partials/upload_preview.html", {
-        "request": request,
-        "job_id": job_id,
-        "segments": segments_data,
-        "schema_fields": schema_fields,
-        "broker": job.get("broker"),
-        "filename": job["filename"],
-    })
+        if seg.segment_key in final_mappings:
+            new_maps = final_mappings[seg.segment_key]
+            seg.mapping_result.mappings = new_maps
+            # Rebuild cleaned_df using raw data + new mappings
+            # The raw df isn't stored; we use the current cleaned_df's columns as-is
+            # Safe fallback: keep cleaned_df; save-time uses final_mappings for learning
+    if broker_name:
+        job["confirmed_broker"] = broker_name
+    return {"status": "ok"}
 
 
 @router.post("/geocode")

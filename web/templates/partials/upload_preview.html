@@ -1,88 +1,108 @@
-<div class="space-y-6" x-data="{activeSegment: 0}">
+<div class="space-y-6" x-data="uploadPreview({{ preview_state|tojson }})">
     <div class="flex items-center justify-between">
         <div>
             <h3 class="font-semibold text-sm text-gray-700">{{ filename }}</h3>
-            <p class="text-xs text-gray-500">{{ segments|length }} segment{{ 's' if segments|length > 1 else '' }} detected</p>
+            <p class="text-xs text-gray-500" x-text="segments.length + ' segment' + (segments.length > 1 ? 's' : '') + ' detected'"></p>
         </div>
     </div>
 
-    <!-- Segment tabs (if multiple) -->
-    {% if segments|length > 1 %}
-    <div class="flex gap-1 border-b border-gray-200">
-        {% for seg in segments %}
-        <button class="chart-tab" :class="activeSegment === {{ loop.index0 }} && 'active'"
-                @click="activeSegment = {{ loop.index0 }}">
-            {{ seg.sheet_name or 'Segment' }} {{ loop.index }}
-        </button>
-        {% endfor %}
-    </div>
-    {% endif %}
-
-    {% for seg in segments %}
-    <div x-show="activeSegment === {{ loop.index0 }}" {% if not loop.first %}style="display:none"{% endif %}>
-        <!-- Mapping source badge -->
-        <div class="flex items-center gap-2 mb-3">
-            <span class="text-xs px-2 py-1 rounded-full
-                {% if seg.source == 'exact' %}bg-green-100 text-green-700
-                {% elif seg.source == 'fuzzy' %}bg-blue-100 text-blue-700
-                {% elif seg.source == 'broker' %}bg-purple-100 text-purple-700
-                {% else %}bg-yellow-100 text-yellow-700{% endif %}">
-                {{ seg.source }} mapping ({{ seg.row_count }} rows)
-            </span>
-            <span class="text-xs text-gray-500">{{ seg.file_type|upper }}</span>
+    <!-- Segment tabs -->
+    <template x-if="segments.length > 1">
+        <div class="flex gap-1 border-b border-gray-200">
+            <template x-for="(seg, idx) in segments" :key="idx">
+                <button class="chart-tab" :class="activeSegment === idx && 'active'"
+                        @click="activeSegment = idx"
+                        x-text="(seg.sheet_name || 'Segment') + ' ' + (idx + 1)"></button>
+            </template>
         </div>
+    </template>
 
-        <!-- Raw data preview -->
-        <div class="bg-white rounded-lg border border-gray-200 overflow-x-auto mb-4">
-            <table class="text-xs w-full">
-                <thead>
-                    <tr class="bg-gray-50">
-                        {% for header in seg.raw_headers %}
-                        <th class="px-3 py-2 text-left font-medium text-gray-600 whitespace-nowrap">
-                            {{ header }}
-                            {% if header in seg.mappings %}
-                            <span class="badge-mapped ml-1">{{ seg.mappings[header] }}</span>
-                            {% else %}
-                            <span class="badge-unmapped ml-1">unmapped</span>
-                            {% endif %}
-                        </th>
-                        {% endfor %}
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in seg.preview_rows %}
-                    <tr class="border-t border-gray-100">
-                        {% for header in seg.raw_headers %}
-                        <td class="px-3 py-1.5 text-gray-700 whitespace-nowrap">{{ row.get(header, '') or '' }}</td>
-                        {% endfor %}
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-
-        <!-- Column Mapping Grid -->
-        <div class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
-            <h4 class="text-sm font-semibold mb-3">Column Mapping</h4>
-            <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
-                {% for header in seg.raw_headers %}
-                <div class="flex flex-col gap-1">
-                    <label class="text-xs text-gray-500 truncate" title="{{ header }}">{{ header }}</label>
-                    <select name="mapping__{{ seg.segment_key }}__{{ header }}"
-                            class="form-input text-xs py-1"
-                            hx-post="/upload/mapping" hx-target="#upload-preview"
-                            hx-include="[name^='mapping__'], [name='job_id'], [name='broker_name']">
-                        <option value="---">-- skip --</option>
-                        {% for field in schema_fields %}
-                        <option value="{{ field }}" {% if seg.mappings.get(header) == field %}selected{% endif %}>{{ field }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                {% endfor %}
+    <template x-for="(seg, segIdx) in segments" :key="segIdx">
+        <div x-show="activeSegment === segIdx">
+            <!-- Mapping source badge -->
+            <div class="flex items-center gap-2 mb-3">
+                <span class="text-xs px-2 py-1 rounded-full"
+                      :class="{
+                          'bg-green-100 text-green-700': seg.source === 'exact',
+                          'bg-blue-100 text-blue-700': seg.source === 'fuzzy',
+                          'bg-purple-100 text-purple-700': seg.source === 'broker',
+                          'bg-yellow-100 text-yellow-700': !['exact','fuzzy','broker'].includes(seg.source),
+                      }"
+                      x-text="seg.source + ' mapping (' + seg.row_count + ' rows)'"></span>
+                <span class="text-xs text-gray-500" x-text="seg.file_type.toUpperCase()"></span>
             </div>
+
+            <!-- Schema field chips (draggable) -->
+            <div class="bg-amber-50 rounded-lg border border-amber-200 p-3 mb-3">
+                <div class="text-xs font-semibold text-amber-800 mb-2">
+                    Drag a field onto a column header to map it — or use the dropdowns below.
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    <template x-for="field in schemaFields" :key="field">
+                        <span class="inline-block px-2 py-1 bg-white border border-amber-300 rounded text-xs font-medium text-[#333] cursor-grab select-none hover:bg-amber-100"
+                              draggable="true"
+                              @dragstart="dragField = field"
+                              @dragend="dragField = null"
+                              x-text="field"></span>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Raw data preview with drop zones -->
+            <div class="bg-white rounded-lg border border-gray-200 overflow-x-auto mb-4">
+                <table class="text-xs w-full">
+                    <thead>
+                        <tr class="bg-gray-50">
+                            <template x-for="header in seg.raw_headers" :key="header">
+                                <th class="px-3 py-2 text-left font-medium text-gray-600 whitespace-nowrap"
+                                    :class="{'bg-amber-100': dragOverHeader === header + '::' + segIdx}"
+                                    @dragover.prevent="dragOverHeader = header + '::' + segIdx"
+                                    @dragleave="dragOverHeader = null"
+                                    @drop.prevent="setMapping(segIdx, header, dragField); dragOverHeader = null; dragField = null">
+                                    <span x-text="header"></span>
+                                    <template x-if="seg.mappings[header] && seg.mappings[header] !== '---'">
+                                        <span class="badge-mapped ml-1" x-text="seg.mappings[header]"></span>
+                                    </template>
+                                    <template x-if="!seg.mappings[header] || seg.mappings[header] === '---'">
+                                        <span class="badge-unmapped ml-1">unmapped</span>
+                                    </template>
+                                </th>
+                            </template>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(row, rowIdx) in seg.preview_rows" :key="rowIdx">
+                            <tr class="border-t border-gray-100">
+                                <template x-for="header in seg.raw_headers" :key="header">
+                                    <td class="px-3 py-1.5 text-gray-700 whitespace-nowrap" x-text="row[header] || ''"></td>
+                                </template>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Fallback dropdowns -->
+            <details class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+                <summary class="text-sm font-semibold cursor-pointer">Column Mapping (dropdown editor)</summary>
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
+                    <template x-for="header in seg.raw_headers" :key="header">
+                        <div class="flex flex-col gap-1">
+                            <label class="text-xs text-gray-500 truncate" :title="header" x-text="header"></label>
+                            <select class="form-input text-xs py-1"
+                                    :value="seg.mappings[header] || '---'"
+                                    @change="setMapping(segIdx, header, $event.target.value)">
+                                <option value="---">-- skip --</option>
+                                <template x-for="field in schemaFields" :key="field">
+                                    <option :value="field" x-text="field"></option>
+                                </template>
+                            </select>
+                        </div>
+                    </template>
+                </div>
+            </details>
         </div>
-    </div>
-    {% endfor %}
+    </template>
 
     <!-- Broker Detection -->
     <div class="bg-white rounded-lg border border-gray-200 p-4">
@@ -90,78 +110,105 @@
         {% if broker and broker.status != 'missing' %}
         <p class="text-xs text-gray-500 mb-2">
             Detected: <span class="font-medium">{{ broker.broker_name or broker.candidate_name or 'Unknown' }}</span>
-            <span class="text-xs px-1.5 py-0.5 rounded
-                {% if broker.status == 'matched' %}bg-green-100 text-green-700
-                {% elif broker.status == 'alias' %}bg-blue-100 text-blue-700
-                {% elif broker.status == 'ambiguous' %}bg-yellow-100 text-yellow-700
-                {% else %}bg-gray-100 text-gray-600{% endif %}">
-                {{ broker.status }}
-            </span>
         </p>
         {% endif %}
-        <input type="text" name="broker_name" class="form-input text-sm"
-               placeholder="Confirm or enter broker name"
-               value="{{ broker.broker_name or broker.candidate_name or '' if broker else '' }}">
+        <input type="text" x-model="brokerName" class="form-input text-sm" placeholder="Confirm or enter broker name">
     </div>
-
-    <!-- Hidden job_id -->
-    <input type="hidden" name="job_id" value="{{ job_id }}">
 
     <!-- Action Buttons -->
     <div class="flex gap-3">
-        <button class="btn-primary" onclick="startGeocode('{{ job_id }}')">
-            Geocode & Save
-        </button>
-        <button class="btn-outline" onclick="document.getElementById('upload-preview').innerHTML = ''">
-            Cancel
-        </button>
+        <button class="btn-primary" @click="startGeocode()">Geocode & Save</button>
+        <button class="btn-outline" @click="cancel()">Cancel</button>
     </div>
 
     <!-- Geocoding Progress -->
-    <div id="geocode-progress" style="display: none;">
+    <div x-show="geocoding" style="display: none;">
         <div class="bg-white rounded-lg border border-gray-200 p-4">
             <h4 class="text-sm font-semibold mb-2">Geocoding Progress</h4>
             <div class="progress-bar mb-2">
-                <div class="progress-bar-fill" id="geocode-bar" style="width: 0%"></div>
+                <div class="progress-bar-fill" :style="'width: ' + geocodePct + '%'"></div>
             </div>
-            <p class="text-xs text-gray-500" id="geocode-status">Starting...</p>
+            <p class="text-xs text-gray-500" x-text="geocodeStatus"></p>
         </div>
     </div>
 </div>
 
 <script>
-function startGeocode(jobId) {
-    var brokerName = document.querySelector('[name="broker_name"]')?.value || '';
-    var formData = new FormData();
-    formData.append('job_id', jobId);
-    formData.append('broker_name', brokerName);
+function uploadPreview(initial) {
+    return {
+        segments: initial.segments,
+        schemaFields: initial.schemaFields,
+        jobId: initial.jobId,
+        activeSegment: 0,
+        dragField: null,
+        dragOverHeader: null,
+        brokerName: initial.brokerName || '',
+        geocoding: false,
+        geocodePct: 0,
+        geocodeStatus: 'Starting...',
 
-    document.getElementById('geocode-progress').style.display = 'block';
+        setMapping(segIdx, header, field) {
+            // Update in-place — Alpine re-renders the badge automatically
+            if (!this.segments[segIdx].mappings) this.segments[segIdx].mappings = {};
+            if (field === '---' || !field) {
+                delete this.segments[segIdx].mappings[header];
+            } else {
+                this.segments[segIdx].mappings[header] = field;
+            }
+        },
 
-    fetch('/upload/geocode', { method: 'POST', body: formData })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            // Start SSE listening
-            var es = new EventSource('/upload/geocode-stream?job_id=' + jobId);
-            es.onmessage = function(e) {
-                var d = JSON.parse(e.data);
-                var bar = document.getElementById('geocode-bar');
-                var status = document.getElementById('geocode-status');
-                bar.style.width = d.pct + '%';
-                status.textContent = d.current + '/' + d.total + ' — ' + (d.address || '');
-                if (d.done) {
-                    es.close();
-                    status.textContent = 'Complete! Saving to database...';
-                    // Auto-save
-                    var saveForm = new FormData();
-                    saveForm.append('job_id', jobId);
-                    fetch('/upload/save', { method: 'POST', body: saveForm })
-                        .then(function(r) { return r.text(); })
-                        .then(function(html) {
-                            document.getElementById('upload-preview').innerHTML = html;
-                        });
-                }
+        startGeocode() {
+            this.geocoding = true;
+            this.geocodePct = 0;
+            this.geocodeStatus = 'Submitting mappings...';
+
+            // 1. Send mappings to server
+            const mappingsPayload = {
+                job_id: this.jobId,
+                broker_name: this.brokerName,
+                final_mappings: Object.fromEntries(this.segments.map(s => [s.segment_key, s.mappings || {}])),
             };
-        });
+
+            fetch('/upload/apply-mappings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(mappingsPayload),
+            }).then(r => r.json()).then(data => {
+                if (data.error) { alert('Error: ' + data.error); this.geocoding = false; return; }
+                // 2. Kick off geocoding
+                this.geocodeStatus = 'Geocoding...';
+                const fd = new FormData();
+                fd.append('job_id', this.jobId);
+                fd.append('broker_name', this.brokerName);
+                return fetch('/upload/geocode', { method: 'POST', body: fd });
+            }).then(r => r && r.json()).then(data => {
+                if (!data) return;
+                // 3. Listen to SSE
+                const es = new EventSource('/upload/geocode-stream?job_id=' + this.jobId);
+                es.onmessage = (e) => {
+                    const d = JSON.parse(e.data);
+                    this.geocodePct = d.pct;
+                    this.geocodeStatus = d.current + '/' + d.total + ' — ' + (d.address || '');
+                    if (d.done) {
+                        es.close();
+                        this.geocodeStatus = 'Complete! Saving to database...';
+                        // 4. Save
+                        const sf = new FormData();
+                        sf.append('job_id', this.jobId);
+                        fetch('/upload/save', { method: 'POST', body: sf })
+                            .then(r => r.text())
+                            .then(html => { document.getElementById('upload-preview').innerHTML = html; });
+                    }
+                };
+            }).catch(err => {
+                this.geocoding = false;
+                alert('Error: ' + err);
+            });
+        },
+
+        cancel() {
+            document.getElementById('upload-preview').innerHTML = '';
+        },
+    };
 }
 </script>

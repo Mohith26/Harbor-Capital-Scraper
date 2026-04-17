@@ -20,6 +20,14 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <!-- App CSS & JS -->
     <link rel="stylesheet" href="/static/css/app.css">
+    {% if GOOGLE_API_KEY %}
+    <script>
+    window._googleMapsReady = new Promise((resolve) => { window._resolveGoogleMaps = resolve; });
+    function initGoogleMaps() { window._resolveGoogleMaps(); }
+    </script>
+    <script async defer
+      src="https://maps.googleapis.com/maps/api/js?key={{ GOOGLE_API_KEY }}&libraries=places&callback=initGoogleMaps"></script>
+    {% endif %}
     {% block head_extra %}{% endblock %}
 </head>
 <body class="bg-[#f4f5f7] font-sans">
