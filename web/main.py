@@ -83,7 +83,7 @@ app.include_router(api_router)
 
 @app.get("/login")
 async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {
+    return templates.TemplateResponse(request, "login.html", {
         "request": request, "error": None,
         "logo_b64": request.app.state.logo_b64,
     })
@@ -93,7 +93,7 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     from web.auth import verify_password, create_session
     user = verify_password(username, password)
     if not user:
-        return templates.TemplateResponse("login.html", {
+        return templates.TemplateResponse(request, "login.html", {
             "request": request, "error": "Invalid username or password",
             "logo_b64": request.app.state.logo_b64,
         })

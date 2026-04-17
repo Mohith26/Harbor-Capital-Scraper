@@ -49,7 +49,7 @@ def _safe_json_rows(df: pd.DataFrame) -> list[dict]:
 async def upload_page(request: Request):
     templates = request.app.state.templates
     user = request.state.user
-    return templates.TemplateResponse("upload.html", {
+    return templates.TemplateResponse(request, "upload.html", {
         "request": request,
         "user": user,
         "current_page": "upload",
@@ -155,7 +155,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     first_type = segments_data[0]["file_type"] if segments_data else "sale"
     schema_fields = list(LEASE_SCHEMA.keys()) if first_type.lower() in ("lease", "both") else list(SALE_SCHEMA.keys())
 
-    return templates.TemplateResponse("partials/upload_preview.html", {
+    return templates.TemplateResponse(request, "partials/upload_preview.html", {
         "request": request,
         "job_id": job_id,
         "segments": segments_data,
@@ -218,7 +218,7 @@ async def update_mapping(request: Request):
     first_type = segments_data[0]["file_type"] if segments_data else "sale"
     schema_fields = list(LEASE_SCHEMA.keys()) if first_type.lower() in ("lease", "both") else list(SALE_SCHEMA.keys())
 
-    return templates.TemplateResponse("partials/upload_preview.html", {
+    return templates.TemplateResponse(request, "partials/upload_preview.html", {
         "request": request,
         "job_id": job_id,
         "segments": segments_data,

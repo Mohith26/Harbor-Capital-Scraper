@@ -150,7 +150,7 @@ async def database_page(request: Request):
         Model = SaleComp if comp_type == "sales" else LeaseComp
         cities = sorted([r[0] for r in session.query(Model.city).distinct().all() if r[0]])
         zips = sorted([r[0] for r in session.query(Model.zip_code).distinct().all() if r[0]])
-        return templates.TemplateResponse("database.html", {
+        return templates.TemplateResponse(request, "database.html", {
             "request": request,
             "user": user,
             "current_page": "database",
@@ -186,7 +186,7 @@ async def database_table(request: Request):
         df_filtered = _apply_filters(df, filters, comp_type)
         table_data = _safe_json(df_filtered.to_dict(orient="records")) if not df_filtered.empty else []
         columns = list(df_filtered.columns) if not df_filtered.empty else []
-        return templates.TemplateResponse("partials/data_table.html", {
+        return templates.TemplateResponse(request, "partials/data_table.html", {
             "request": request,
             "table_data": json.dumps(table_data),
             "total": total,
@@ -209,7 +209,7 @@ async def database_metrics(request: Request):
         sale_count = session.query(SaleComp).count()
         lease_count = session.query(LeaseComp).count()
         metrics = _compute_metrics(df_filtered, comp_type)
-        return templates.TemplateResponse("partials/metrics_row.html", {
+        return templates.TemplateResponse(request, "partials/metrics_row.html", {
             "request": request,
             "sale_count": sale_count,
             "lease_count": lease_count,
@@ -303,7 +303,7 @@ async def filter_panel(request: Request):
         Model = SaleComp if comp_type == "sales" else LeaseComp
         cities = sorted([r[0] for r in session.query(Model.city).distinct().all() if r[0]])
         zips = sorted([r[0] for r in session.query(Model.zip_code).distinct().all() if r[0]])
-        return templates.TemplateResponse("partials/filter_panel.html", {
+        return templates.TemplateResponse(request, "partials/filter_panel.html", {
             "request": request,
             "comp_type": comp_type,
             "cities": cities,
