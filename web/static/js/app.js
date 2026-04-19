@@ -158,6 +158,21 @@ async function _fetchAutocomplete(q) {
     }
 }
 
+async function _fetchDbAutocomplete(q, opts) {
+    opts = opts || {};
+    try {
+        const p = new URLSearchParams({ q: q });
+        if (opts.type) p.set('type', opts.type);
+        if (opts.fields) p.set('fields', opts.fields);
+        const resp = await fetch('/api/db-autocomplete?' + p.toString());
+        if (!resp.ok) return [];
+        const data = await resp.json();
+        return data.suggestions || [];
+    } catch (e) {
+        return [];
+    }
+}
+
 function initAddressAutocomplete(input) {
     if (!input || input._autocompleteInitialized) return;
     input._autocompleteInitialized = true;
@@ -186,12 +201,16 @@ function initAddressAutocomplete(input) {
 
     const renderDropdown = () => {
         if (!currentPredictions.length) { hideDropdown(); return; }
-        dropdown.innerHTML = currentPredictions.map((p, i) => `
+        dropdown.innerHTML = currentPredictions.map((p, i) => {
+            const badge = p.source === 'db'
+                ? '<span style="margin-left:8px;font-size:10px;font-weight:600;color:#D88A10;background:#FFF3DC;padding:2px 6px;border-radius:8px;">In DB</span>'
+                : '';
+            return `
             <div class="hc-ac-item" data-idx="${i}"
-                 style="padding: 8px 12px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #f3f4f6; ${i === selectedIdx ? 'background: #FFF3DC;' : ''}">
-                ${p.description.replace(/</g, '&lt;')}
-            </div>
-        `).join('');
+                 style="padding: 8px 12px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #f3f4f6; display:flex; align-items:center; justify-content:space-between; ${i === selectedIdx ? 'background: #FFF3DC;' : ''}">
+                <span>${p.description.replace(/</g, '&lt;')}</span>${badge}
+            </div>`;
+        }).join('');
         positionDropdown();
         dropdown.style.display = 'block';
 
@@ -213,12 +232,27 @@ function initAddressAutocomplete(input) {
     input.addEventListener('input', () => {
         const q = input.value.trim();
         clearTimeout(debounceTimer);
-        if (q.length < 3) { hideDropdown(); return; }
+        if (q.length < 2) { hideDropdown(); return; }
         debounceTimer = setTimeout(async () => {
-            currentPredictions = await _fetchAutocomplete(q);
+            // Fetch Google Places and DB-backed addresses in parallel
+            const [googleRes, dbRes] = await Promise.all([
+                q.length >= 3 ? _fetchAutocomplete(q) : Promise.resolve([]),
+                _fetchDbAutocomplete(q, { fields: 'address', type: 'all' }),
+            ]);
+            const merged = [];
+            const seen = new Set();
+            googleRes.forEach(p => {
+                const key = (p.description || '').toLowerCase();
+                if (key && !seen.has(key)) { seen.add(key); merged.push({ description: p.description, source: 'google' }); }
+            });
+            dbRes.forEach(s => {
+                const key = (s.value || '').toLowerCase();
+                if (key && !seen.has(key)) { seen.add(key); merged.push({ description: s.value, source: 'db' }); }
+            });
+            currentPredictions = merged;
             selectedIdx = -1;
             renderDropdown();
-        }, 250);
+        }, 200);
     });
 
     input.addEventListener('keydown', (e) => {
@@ -248,15 +282,102 @@ function initAddressAutocomplete(input) {
     window.addEventListener('resize', () => { if (dropdown.style.display === 'block') positionDropdown(); });
 }
 
+// ===== DB-backed search autocomplete (for Database topbar search) =====
+function initDbSearchAutocomplete(input) {
+    if (!input || input._dbSearchInitialized) return;
+    input._dbSearchInitialized = true;
+    input.setAttribute('autocomplete', 'off');
+
+    const dropdown = document.createElement('div');
+    dropdown.className = 'hc-autocomplete-dropdown';
+    dropdown.style.cssText = 'position: absolute; z-index: 10000; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); max-height: 280px; overflow-y: auto; display: none; min-width: 240px;';
+    document.body.appendChild(dropdown);
+
+    let debounceTimer = null;
+    let currentItems = [];
+    let selectedIdx = -1;
+
+    const positionDropdown = () => {
+        const rect = input.getBoundingClientRect();
+        dropdown.style.left = (rect.left + window.scrollX) + 'px';
+        dropdown.style.top = (rect.bottom + window.scrollY + 2) + 'px';
+        dropdown.style.width = Math.max(rect.width, 280) + 'px';
+    };
+    const hideDropdown = () => { dropdown.style.display = 'none'; selectedIdx = -1; };
+
+    const fieldLabel = (f) => ({
+        address: 'Address', buyer: 'Buyer', seller: 'Seller',
+        tenant_name: 'Tenant', city: 'City', zip_code: 'Zip',
+    }[f] || f);
+
+    const render = () => {
+        if (!currentItems.length) { hideDropdown(); return; }
+        dropdown.innerHTML = currentItems.map((s, i) => {
+            const highlighted = i === selectedIdx ? 'background:#FFF3DC;' : '';
+            return `
+                <div class="hc-ac-item" data-idx="${i}"
+                     style="padding: 8px 12px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #f3f4f6; display:flex; justify-content:space-between; align-items:center; gap:8px; ${highlighted}">
+                    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(s.value || '').toString().replace(/</g, '&lt;')}</span>
+                    <span style="font-size:10px;font-weight:600;color:#8a7a5c;text-transform:uppercase;letter-spacing:0.4px;flex-shrink:0;">${fieldLabel(s.field)}</span>
+                </div>`;
+        }).join('');
+        positionDropdown();
+        dropdown.style.display = 'block';
+        dropdown.querySelectorAll('.hc-ac-item').forEach(el => {
+            el.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                const idx = parseInt(el.dataset.idx, 10);
+                const pick = currentItems[idx];
+                if (pick) {
+                    input.value = pick.value;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('keyup', { bubbles: true }));
+                }
+                hideDropdown();
+            });
+        });
+    };
+
+    input.addEventListener('input', () => {
+        const q = input.value.trim();
+        clearTimeout(debounceTimer);
+        if (q.length < 2) { hideDropdown(); return; }
+        debounceTimer = setTimeout(async () => {
+            const compType = input.dataset.compType || 'all';
+            const fields = input.dataset.fields || 'address,buyer,seller,tenant_name';
+            currentItems = await _fetchDbAutocomplete(q, { type: compType, fields: fields });
+            selectedIdx = -1;
+            render();
+        }, 180);
+    });
+
+    input.addEventListener('keydown', (e) => {
+        if (dropdown.style.display !== 'block') return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); selectedIdx = Math.min(selectedIdx + 1, currentItems.length - 1); render(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); selectedIdx = Math.max(selectedIdx - 1, 0); render(); }
+        else if (e.key === 'Enter') {
+            if (selectedIdx >= 0 && currentItems[selectedIdx]) {
+                e.preventDefault();
+                input.value = currentItems[selectedIdx].value;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('keyup', { bubbles: true }));
+                hideDropdown();
+            }
+        } else if (e.key === 'Escape') { hideDropdown(); }
+    });
+
+    input.addEventListener('blur', () => setTimeout(hideDropdown, 150));
+    window.addEventListener('scroll', () => { if (dropdown.style.display === 'block') positionDropdown(); }, true);
+    window.addEventListener('resize', () => { if (dropdown.style.display === 'block') positionDropdown(); });
+}
+
 // Auto-init on DOMContentLoaded and after HTMX swaps
-document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('input[data-address-autocomplete]').forEach(initAddressAutocomplete);
-});
-document.addEventListener('htmx:afterSwap', (e) => {
-    if (e.detail.target) {
-        e.detail.target.querySelectorAll('input[data-address-autocomplete]').forEach(initAddressAutocomplete);
-    }
-});
+function _initAllAutocompletes(root) {
+    (root || document).querySelectorAll('input[data-address-autocomplete]').forEach(initAddressAutocomplete);
+    (root || document).querySelectorAll('input[data-db-search-autocomplete]').forEach(initDbSearchAutocomplete);
+}
+document.addEventListener('DOMContentLoaded', () => _initAllAutocompletes());
+document.addEventListener('htmx:afterSwap', (e) => { if (e.detail.target) _initAllAutocompletes(e.detail.target); });
 
 // ===== Type Toggle Helper =====
 function switchType(type) {

@@ -280,6 +280,19 @@ async def delete_records(request: Request):
     finally:
         session.close()
 
+@router.get("/count")
+async def database_count(request: Request):
+    """Return filtered record count as JSON (for live filter preview)."""
+    session = Session()
+    try:
+        comp_type = request.query_params.get("type", "sales")
+        filters = _parse_filters(request)
+        df = _load_data(session, comp_type)
+        df_filtered = _apply_filters(df, filters, comp_type)
+        return {"count": len(df_filtered), "total": len(df)}
+    finally:
+        session.close()
+
 @router.get("/filter-options", response_class=HTMLResponse)
 async def filter_options(request: Request):
     """Return distinct values for categorical filters."""

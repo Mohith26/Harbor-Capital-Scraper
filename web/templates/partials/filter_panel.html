@@ -1,58 +1,188 @@
-<div class="space-y-4">
-    <!-- City filter -->
-    <div>
-        <label class="form-label">City</label>
-        <select name="city" class="form-input text-sm" multiple id="filter-city">
+<div class="filter-panel-body" id="filter-panel-body" data-comp-type="{{ comp_type }}">
+    <!-- Location -->
+    <section class="filter-section">
+        <h4 class="filter-section-title">Location</h4>
+        <div class="filter-search-wrap" data-picker-group="city">
+            <svg class="filter-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+            </svg>
+            <input type="text" class="filter-search-input" placeholder="Search cities..."
+                   oninput="filterChips(this, 'city'); openPicker(this, 'city')"
+                   onfocus="openPicker(this, 'city')"
+                   onblur="closePicker(this, 'city')">
+            <button type="button" class="filter-picker-caret" onclick="togglePicker(this, 'city')" aria-label="Toggle dropdown">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="filter-picker-dropdown" data-picker-dropdown="city" hidden>
+                {% for city in cities %}
+                <div class="filter-picker-option {% if city in active_cities %}active{% endif %}"
+                     data-value="{{ city }}"
+                     onmousedown="event.preventDefault(); pickerToggle(this, 'city')">
+                    <span>{{ city }}</span>
+                    <svg class="filter-picker-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="chip-toggle-grid" data-chip-group="city">
             {% for city in cities %}
-            <option value="{{ city }}" {% if city in active_cities %}selected{% endif %}>{{ city }}</option>
+            <button type="button"
+                    class="chip-toggle {% if city in active_cities %}active{% endif %}"
+                    data-value="{{ city }}"
+                    onclick="toggleChip(this)">
+                {{ city }}
+                <span class="chip-toggle-x" aria-hidden="true">&times;</span>
+            </button>
             {% endfor %}
-        </select>
-    </div>
-    <!-- Zip Code filter -->
-    <div>
-        <label class="form-label">Zip Code</label>
-        <select name="zip_code" class="form-input text-sm" multiple id="filter-zip">
+        </div>
+    </section>
+
+    <!-- Zip Codes -->
+    <section class="filter-section">
+        <h4 class="filter-section-title">Zip Codes</h4>
+        <div class="filter-search-wrap" data-picker-group="zip_code">
+            <svg class="filter-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+            </svg>
+            <input type="text" class="filter-search-input" placeholder="Search zip codes..."
+                   oninput="filterChips(this, 'zip_code'); openPicker(this, 'zip_code')"
+                   onfocus="openPicker(this, 'zip_code')"
+                   onblur="closePicker(this, 'zip_code')">
+            <button type="button" class="filter-picker-caret" onclick="togglePicker(this, 'zip_code')" aria-label="Toggle dropdown">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="filter-picker-dropdown" data-picker-dropdown="zip_code" hidden>
+                {% for zip in zips %}
+                <div class="filter-picker-option {% if zip in active_zips %}active{% endif %}"
+                     data-value="{{ zip }}"
+                     onmousedown="event.preventDefault(); pickerToggle(this, 'zip_code')">
+                    <span>{{ zip }}</span>
+                    <svg class="filter-picker-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="chip-toggle-grid" data-chip-group="zip_code">
             {% for zip in zips %}
-            <option value="{{ zip }}" {% if zip in active_zips %}selected{% endif %}>{{ zip }}</option>
+            <button type="button"
+                    class="chip-toggle {% if zip in active_zips %}active{% endif %}"
+                    data-value="{{ zip }}"
+                    onclick="toggleChip(this)">
+                {{ zip }}
+            </button>
             {% endfor %}
-        </select>
-    </div>
+        </div>
+    </section>
+
     {% if comp_type == 'sales' %}
-    <!-- Sale Price Range -->
-    <div>
-        <label class="form-label">Sale Price Range</label>
-        <div class="flex gap-2">
-            <input type="number" name="min_sale_price" placeholder="Min" class="form-input text-sm" value="{{ filters.get('min_sale_price', '') }}">
-            <input type="number" name="max_sale_price" placeholder="Max" class="form-input text-sm" value="{{ filters.get('max_sale_price', '') }}">
+    <!-- Sale Price -->
+    <section class="filter-range-card">
+        <div class="filter-range-header">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/>
+            </svg>
+            <span>Sale Price</span>
         </div>
-    </div>
-    <!-- Price/SF Range -->
-    <div>
-        <label class="form-label">Price per SF</label>
-        <div class="flex gap-2">
-            <input type="number" name="min_price_per_sf" placeholder="Min" class="form-input text-sm" step="0.01" value="{{ filters.get('min_price_per_sf', '') }}">
-            <input type="number" name="max_price_per_sf" placeholder="Max" class="form-input text-sm" step="0.01" value="{{ filters.get('max_price_per_sf', '') }}">
+        <div class="filter-range-inputs">
+            <div>
+                <label class="filter-range-label">MIN ($)</label>
+                <input type="number" name="min_sale_price" class="filter-range-input"
+                       placeholder="0" value="{{ filters.get('min_sale_price', '') }}"
+                       oninput="updateFilterPreview()">
+            </div>
+            <div>
+                <label class="filter-range-label">MAX ($)</label>
+                <input type="number" name="max_sale_price" class="filter-range-input"
+                       placeholder="No Limit" value="{{ filters.get('max_sale_price', '') }}"
+                       oninput="updateFilterPreview()">
+            </div>
         </div>
-    </div>
+    </section>
+
+    <!-- Price per SF -->
+    <section class="filter-range-card">
+        <div class="filter-range-header">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+            <span>Price per SF</span>
+        </div>
+        <div class="filter-range-inputs">
+            <div>
+                <label class="filter-range-label">MIN ($/SF)</label>
+                <input type="number" name="min_price_per_sf" step="0.01" class="filter-range-input"
+                       placeholder="0" value="{{ filters.get('min_price_per_sf', '') }}"
+                       oninput="updateFilterPreview()">
+            </div>
+            <div>
+                <label class="filter-range-label">MAX ($/SF)</label>
+                <input type="number" name="max_price_per_sf" step="0.01" class="filter-range-input"
+                       placeholder="No Limit" value="{{ filters.get('max_price_per_sf', '') }}"
+                       oninput="updateFilterPreview()">
+            </div>
+        </div>
+    </section>
     {% else %}
-    <!-- Rate Range -->
-    <div>
-        <label class="form-label">Rate (Monthly)</label>
-        <div class="flex gap-2">
-            <input type="number" name="min_rate_monthly" placeholder="Min" class="form-input text-sm" step="0.01" value="{{ filters.get('min_rate_monthly', '') }}">
-            <input type="number" name="max_rate_monthly" placeholder="Max" class="form-input text-sm" step="0.01" value="{{ filters.get('max_rate_monthly', '') }}">
+    <!-- Rate (Monthly) -->
+    <section class="filter-range-card">
+        <div class="filter-range-header">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+            <span>Rate (Monthly)</span>
         </div>
-    </div>
+        <div class="filter-range-inputs">
+            <div>
+                <label class="filter-range-label">MIN ($/MO)</label>
+                <input type="number" name="min_rate_monthly" step="0.01" class="filter-range-input"
+                       placeholder="0" value="{{ filters.get('min_rate_monthly', '') }}"
+                       oninput="updateFilterPreview()">
+            </div>
+            <div>
+                <label class="filter-range-label">MAX ($/MO)</label>
+                <input type="number" name="max_rate_monthly" step="0.01" class="filter-range-input"
+                       placeholder="No Limit" value="{{ filters.get('max_rate_monthly', '') }}"
+                       oninput="updateFilterPreview()">
+            </div>
+        </div>
+    </section>
     {% endif %}
+
     <!-- Building Size -->
-    <div>
-        <label class="form-label">Building Size (SF)</label>
-        <div class="flex gap-2">
-            <input type="number" name="min_building_size" placeholder="Min" class="form-input text-sm" value="{{ filters.get('min_building_size', '') }}">
-            <input type="number" name="max_building_size" placeholder="Max" class="form-input text-sm" value="{{ filters.get('max_building_size', '') }}">
+    <section class="filter-range-card">
+        <div class="filter-range-header">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 21h18M6 21V8l6-4 6 4v13M10 9h4M10 13h4M10 17h4"/>
+            </svg>
+            <span>Building Size</span>
         </div>
+        <div class="filter-range-inputs">
+            <div>
+                <label class="filter-range-label">MIN (SF)</label>
+                <input type="number" name="min_building_size" class="filter-range-input"
+                       placeholder="0" value="{{ filters.get('min_building_size', '') }}"
+                       oninput="updateFilterPreview()">
+            </div>
+            <div>
+                <label class="filter-range-label">MAX (SF)</label>
+                <input type="number" name="max_building_size" class="filter-range-input"
+                       placeholder="No Limit" value="{{ filters.get('max_building_size', '') }}"
+                       oninput="updateFilterPreview()">
+            </div>
+        </div>
+    </section>
+
+    <!-- Preview Card -->
+    <div class="filter-preview-card">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+        </svg>
+        <span>Viewing <strong id="filter-preview-count">{{ filtered if filtered is defined else 0 }}</strong> potential assets</span>
     </div>
-    <!-- Apply button -->
-    <button class="btn-primary w-full text-sm" onclick="applyFilters()">Apply Filters</button>
-    <button class="btn-outline w-full text-sm" onclick="clearFilters()">Clear All</button>
+</div>
+
+<!-- Sticky footer -->
+<div class="filter-panel-footer">
+    <button type="button" class="btn-outline filter-btn-clear" onclick="clearFilters()">Clear All</button>
+    <button type="button" class="btn-primary filter-btn-apply" onclick="applyFilters()">Apply Filters</button>
 </div>

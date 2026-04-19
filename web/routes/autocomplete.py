@@ -1,7 +1,9 @@
 """Server-side address autocomplete via Google Places REST API (Texas-biased)."""
 import httpx
 from fastapi import APIRouter, Request
+from sqlalchemy import or_, func as sa_func
 from web.config import settings
+from database import Session, SaleComp, LeaseComp
 
 router = APIRouter(prefix="/api", tags=["autocomplete"])
 
@@ -14,7 +16,7 @@ _TX_RADIUS = "600000"  # meters (~372 miles, covers Texas)
 async def autocomplete(request: Request, q: str = ""):
     """Return Google Places autocomplete predictions for an address query.
 
-    Constrained to US addresses biased toward Texas.
+    Uses legacy Places API. Constrained to US, biased toward Texas.
     """
     q = (q or "").strip()
     if len(q) < 3:
@@ -31,7 +33,6 @@ async def autocomplete(request: Request, q: str = ""):
         "components": "country:us",
         "location": _TX_CENTER,
         "radius": _TX_RADIUS,
-        "strictbounds": "true",
     }
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -51,3 +52,85 @@ async def autocomplete(request: Request, q: str = ""):
         return {"predictions": predictions}
     except Exception as e:
         return {"predictions": [], "error": str(e)}
+
+
+@router.get("/db-autocomplete")
+async def db_autocomplete(request: Request, q: str = "", type: str = "all", fields: str = ""):
+    """Return distinct DB-backed suggestions matching q.
+
+    - type: "sales" | "leases" | "all" (default "all")
+    - fields: comma-separated subset of {address, buyer, seller, tenant_name, city, zip_code}
+              if empty, defaults are used per type
+    """
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"suggestions": []}
+    like = f"%{q}%"
+    requested = set(f.strip() for f in fields.split(",") if f.strip()) if fields else set()
+
+    sales_field_map = {
+        "address": SaleComp.address,
+        "buyer": SaleComp.buyer,
+        "seller": SaleComp.seller,
+        "city": SaleComp.city,
+        "zip_code": SaleComp.zip_code,
+    }
+    lease_field_map = {
+        "address": LeaseComp.address,
+        "tenant_name": LeaseComp.tenant_name,
+        "city": LeaseComp.city,
+        "zip_code": LeaseComp.zip_code,
+    }
+
+    if not requested:
+        sales_use = set(sales_field_map.keys()) if type in ("sales", "all") else set()
+        lease_use = set(lease_field_map.keys()) if type in ("leases", "all") else set()
+    else:
+        sales_use = requested & set(sales_field_map.keys()) if type in ("sales", "all") else set()
+        lease_use = requested & set(lease_field_map.keys()) if type in ("leases", "all") else set()
+
+    results = []
+    seen = set()
+    session = Session()
+    try:
+        for fname in sales_use:
+            col = sales_field_map[fname]
+            rows = (
+                session.query(col)
+                .filter(col.isnot(None), col.ilike(like) if hasattr(col, "ilike") else col.like(like))
+                .distinct()
+                .limit(15)
+                .all()
+            )
+            for (val,) in rows:
+                if not val:
+                    continue
+                key = (fname, str(val).strip().lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append({"value": val, "field": fname, "comp_type": "sales"})
+        for fname in lease_use:
+            col = lease_field_map[fname]
+            rows = (
+                session.query(col)
+                .filter(col.isnot(None), col.ilike(like) if hasattr(col, "ilike") else col.like(like))
+                .distinct()
+                .limit(15)
+                .all()
+            )
+            for (val,) in rows:
+                if not val:
+                    continue
+                key = (fname, str(val).strip().lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append({"value": val, "field": fname, "comp_type": "leases"})
+    finally:
+        session.close()
+
+    # Rank: exact-prefix matches first, then alphabetical, cap to 20
+    q_lower = q.lower()
+    results.sort(key=lambda r: (0 if str(r["value"]).lower().startswith(q_lower) else 1, str(r["value"]).lower()))
+    return {"suggestions": results[:20]}
