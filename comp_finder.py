@@ -63,7 +63,8 @@ def score_recency(comp_date_str, max_age_years=3):
 def load_comps(comp_type):
     session = Session()
     try:
-        Model = SaleComp if comp_type == "Sales" else LeaseComp
+        ct = (comp_type or "").lower()
+        Model = SaleComp if ct == "sales" else LeaseComp
         records = session.query(Model).all()
         if not records:
             return pd.DataFrame()
@@ -77,8 +78,16 @@ def load_comps(comp_type):
 # 3. COMPOSITE WEIGHTED SCORING
 # ---------------------------------------------------------------------------
 
+def _subj_lat(subj):
+    return subj.get("latitude", subj.get("lat"))
+
+
+def _subj_lng(subj):
+    return subj.get("longitude", subj.get("lng"))
+
+
 SALE_SCORE_MAP = {
-    "proximity":  lambda subj, row, mr: score_proximity(subj["lat"], subj["lng"], row.get("latitude"), row.get("longitude"), mr),
+    "proximity":  lambda subj, row, mr: score_proximity(_subj_lat(subj), _subj_lng(subj), row.get("latitude"), row.get("longitude"), mr),
     "size":       lambda subj, row, _: score_numeric_similarity(subj.get("building_size"), row.get("building_size")),
     "price":      lambda subj, row, _: score_numeric_similarity(subj.get("sale_price"), row.get("sale_price")),
     "price_psf":  lambda subj, row, _: score_numeric_similarity(subj.get("price_per_sf"), row.get("price_per_sf")),
@@ -87,12 +96,22 @@ SALE_SCORE_MAP = {
 }
 
 LEASE_SCORE_MAP = {
-    "proximity":      lambda subj, row, mr: score_proximity(subj["lat"], subj["lng"], row.get("latitude"), row.get("longitude"), mr),
+    "proximity":      lambda subj, row, mr: score_proximity(_subj_lat(subj), _subj_lng(subj), row.get("latitude"), row.get("longitude"), mr),
     "size":           lambda subj, row, _: score_numeric_similarity(subj.get("leased_sf"), row.get("leased_sf")),
     "rate_monthly":   lambda subj, row, _: score_numeric_similarity(subj.get("rate_monthly"), row.get("rate_monthly")),
     "rate_annually":  lambda subj, row, _: score_numeric_similarity(subj.get("rate_annually"), row.get("rate_annually")),
     "building_type":  lambda subj, row, _: score_categorical_match(subj.get("building_type"), row.get("building_type")),
     "recency":        lambda subj, row, _: score_recency(row.get("commencement_date")),
+}
+
+# Default weights when caller doesn't specify any
+DEFAULT_SALE_WEIGHTS = {
+    "proximity": 0.4, "size": 0.2, "price": 0.15, "price_psf": 0.1,
+    "year_built": 0.05, "recency": 0.1,
+}
+DEFAULT_LEASE_WEIGHTS = {
+    "proximity": 0.4, "size": 0.25, "rate_monthly": 0.15, "rate_annually": 0.05,
+    "building_type": 0.05, "recency": 0.1,
 }
 
 
@@ -101,7 +120,11 @@ def compute_match_scores(subject, comps_df, comp_type, weights, max_radius=25.0)
 
     Returns comps_df with added score columns and sorted by match_score desc.
     """
-    score_map = SALE_SCORE_MAP if comp_type == "Sales" else LEASE_SCORE_MAP
+    ct = (comp_type or "").lower()
+    is_sales = ct == "sales"
+    score_map = SALE_SCORE_MAP if is_sales else LEASE_SCORE_MAP
+    if not weights:
+        weights = DEFAULT_SALE_WEIGHTS if is_sales else DEFAULT_LEASE_WEIGHTS
 
     # Build score columns
     score_cols = {}
@@ -133,8 +156,9 @@ def compute_match_scores(subject, comps_df, comp_type, weights, max_radius=25.0)
     comps_df["match_score"] = totals
 
     # Distance column for display
+    s_lat, s_lng = _subj_lat(subject), _subj_lng(subject)
     comps_df["distance_miles"] = comps_df.apply(
-        lambda r: round(haversine_miles(subject["lat"], subject["lng"], r.get("latitude"), r.get("longitude")), 1),
+        lambda r: round(haversine_miles(s_lat, s_lng, r.get("latitude"), r.get("longitude")), 1),
         axis=1,
     )
 

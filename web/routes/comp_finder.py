@@ -93,21 +93,31 @@ async def search_comps(request: Request):
             except ValueError:
                 pass
 
-    scored = compute_match_scores(subject, comps_df, comp_type, weights or None, max_radius)
+    scored = compute_match_scores(subject, comps_df, comp_type, weights, max_radius)
 
+    score_col = "match_score"
     if use_ai:
         try:
             from comp_finder import compute_ai_scores, blend_scores
             ai_scored = compute_ai_scores(subject, scored, comp_type)
-            scored = blend_scores(scored, ai_scored, ai_weight=0.3)
+            scored["final_score"] = blend_scores(scored["match_score"], ai_scored, ai_weight=0.3)
             score_col = "final_score"
-        except Exception:
-            score_col = "weighted_score"
-    else:
-        score_col = "weighted_score"
+        except Exception as e:
+            print(f"[finder] AI scoring failed, falling back to weighted: {e}")
+
+    # Filter out comps beyond max_radius
+    if "distance_miles" in scored.columns:
+        scored = scored[scored["distance_miles"] <= max_radius]
 
     # Sort by score descending, take top 25
     scored = scored.sort_values(score_col, ascending=False).head(25)
+
+    if scored.empty:
+        return HTMLResponse(
+            f'<div class="text-gray-500 text-sm p-4">No comparable properties found within '
+            f'{max_radius:g} miles. Try increasing the radius or check that comps have '
+            f'latitude/longitude set in the database.</div>'
+        )
 
     # Build results for template
     results = []
