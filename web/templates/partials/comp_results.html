@@ -7,6 +7,7 @@
             <div x-show="open" @click.away="open = false" x-transition class="export-dropdown">
                 <a href="#" @click.prevent="exportCompResults('csv'); open=false">CSV</a>
                 <a href="#" @click.prevent="exportCompResults('xlsx'); open=false">Excel</a>
+                <a href="#" @click.prevent="exportCompResults('kml'); open=false">KML</a>
             </div>
         </div>
     </div>
@@ -89,7 +90,66 @@ function initCompMap() {
 }
 
 function exportCompResults(format) {
+    if (format === 'kml') {
+        return exportCompResultsKml();
+    }
     // Build CSV/XLSX from results
     alert('Export as ' + format + ' — implement with server endpoint if needed');
+}
+
+function _kmlEscape(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function exportCompResultsKml() {
+    var parts = [];
+    parts.push('<?xml version="1.0" encoding="UTF-8"?>');
+    parts.push('<kml xmlns="http://www.opengis.net/kml/2.2">');
+    parts.push('<Document>');
+    parts.push('<name>Comp Finder Results</name>');
+    parts.push('<Style id="subjectStyle"><IconStyle><color>ff333333</color><Icon><href>http://maps.google.com/mapfiles/kml/paddle/S.png</href></Icon></IconStyle></Style>');
+    parts.push('<Style id="compStyle"><IconStyle><color>ff23a6f5</color><Icon><href>http://maps.google.com/mapfiles/kml/paddle/orange-circle.png</href></Icon></IconStyle></Style>');
+
+    if (_compSubject && _compSubject.latitude && _compSubject.longitude) {
+        parts.push('<Placemark>');
+        parts.push('<name>Subject — ' + _kmlEscape(_compSubject.address) + '</name>');
+        parts.push('<styleUrl>#subjectStyle</styleUrl>');
+        parts.push('<Point><coordinates>' + _compSubject.longitude + ',' + _compSubject.latitude + ',0</coordinates></Point>');
+        parts.push('</Placemark>');
+    }
+
+    (_compResults || []).forEach(function(r) {
+        if (r.lat == null || r.lng == null) return;
+        var desc = [];
+        if (r.score != null) desc.push('Score: ' + r.score + '%');
+        if (r.price != null) desc.push('Price: $' + r.price);
+        if (r.rate != null) desc.push('Rate: $' + r.rate + '/mo');
+        if (r.size != null) desc.push('Size: ' + r.size + ' SF');
+        if (r.psf != null) desc.push('$/SF: ' + r.psf);
+        if (r.term != null) desc.push('Term: ' + r.term + ' mo');
+        if (r.date) desc.push('Date: ' + r.date);
+
+        parts.push('<Placemark>');
+        parts.push('<name>#' + r.rank + ' — ' + _kmlEscape(r.address) + '</name>');
+        parts.push('<description>' + _kmlEscape(desc.join('\n')) + '</description>');
+        parts.push('<styleUrl>#compStyle</styleUrl>');
+        parts.push('<Point><coordinates>' + r.lng + ',' + r.lat + ',0</coordinates></Point>');
+        parts.push('</Placemark>');
+    });
+
+    parts.push('</Document></kml>');
+    var blob = new Blob([parts.join('\n')], { type: 'application/vnd.google-earth.kml+xml' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'comp_results.kml';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 </script>
