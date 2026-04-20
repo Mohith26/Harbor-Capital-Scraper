@@ -1,5 +1,6 @@
 """Upload & Process page and HTMX endpoints."""
 import os
+import re
 import json
 import uuid
 import time
@@ -11,6 +12,7 @@ from typing import Optional
 import pandas as pd
 from fastapi import APIRouter, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, StreamingResponse
+from sqlalchemy import Float, Integer, Numeric
 
 from database import Session, SaleComp, LeaseComp
 from engine.pipeline import run_mapping_stage, run_geocoding_stage, run_vision_pdf_stage
@@ -69,6 +71,40 @@ def _apply_mappings_with_notes_concat(raw_df: pd.DataFrame, mappings: dict[str, 
         out["notes"] = raw_df.apply(_concat_row, axis=1)
 
     return out
+
+
+def _coerce_numeric(val):
+    """Coerce strings like '$32,572,600', '5.70%', '4,950 - 7,700' into float.
+
+    Returns None for empty/unparseable. For ranges, returns the first number
+    (keeps the row instead of dropping it; user can refine manually later).
+    """
+    if val is None:
+        return None
+    try:
+        if pd.isna(val):
+            return None
+    except Exception:
+        pass
+    if isinstance(val, (int, float)):
+        return float(val) if not (isinstance(val, float) and math.isnan(val)) else None
+    s = str(val).strip()
+    if not s:
+        return None
+    cleaned = s.replace(',', '').replace('$', '').replace('%', '')
+    cleaned = re.sub(r'(?i)\bsf\b', '', cleaned).strip()
+    try:
+        return float(cleaned)
+    except Exception:
+        pass
+    # Range or messy: take first signed number
+    m = re.search(r'-?\d+\.?\d*', cleaned)
+    if m:
+        try:
+            return float(m.group(0))
+        except Exception:
+            return None
+    return None
 
 
 def _safe_json_rows(df: pd.DataFrame) -> list[dict]:
@@ -363,14 +399,28 @@ async def save_to_db(request: Request):
         try:
             file_type = segments[0].fingerprint.file_type if segments else "sale"
             Model = LeaseComp if file_type.lower() in ("lease", "both") else SaleComp
+            numeric_cols = {
+                c.name for c in Model.__table__.columns
+                if isinstance(c.type, (Float, Integer, Numeric))
+            }
             ids = []
             for _, row in concat_df.iterrows():
                 record = Model()
                 for col in Model.__table__.columns:
-                    if col.name != "id" and col.name != "created_at" and col.name in row.index:
-                        val = row[col.name]
-                        if pd.notna(val):
-                            setattr(record, col.name, val)
+                    if col.name in ("id", "created_at") or col.name not in row.index:
+                        continue
+                    val = row[col.name]
+                    try:
+                        is_na = pd.isna(val)
+                    except Exception:
+                        is_na = False
+                    if is_na:
+                        continue
+                    if col.name in numeric_cols:
+                        val = _coerce_numeric(val)
+                        if val is None:
+                            continue
+                    setattr(record, col.name, val)
                 record.source_file = job["filename"]
                 session.add(record)
                 session.flush()
