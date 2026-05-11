@@ -32,6 +32,13 @@
                       x-text="seg.source + ' mapping (' + seg.row_count + ' rows)'"></span>
                 <span class="text-xs text-gray-500" x-text="seg.file_type.toUpperCase()"></span>
             </div>
+            <template x-if="seg.warnings && seg.warnings.length">
+                <div class="bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg p-3 mb-3 text-xs">
+                    <template x-for="warning in seg.warnings" :key="warning">
+                        <div x-text="warning"></div>
+                    </template>
+                </div>
+            </template>
 
             <!-- Schema field chips (draggable) -->
             <div class="bg-amber-50 rounded-lg border border-amber-200 p-3 mb-3">
@@ -125,7 +132,7 @@
 
     <!-- Action Buttons -->
     <div class="flex gap-3">
-        <button class="btn-primary" @click="startGeocode()">Geocode & Save</button>
+        <button class="btn-primary" @click="startGeocode()" :disabled="geocoding">Geocode & Save</button>
         <button class="btn-outline" @click="cancel()">Cancel</button>
     </div>
 
@@ -217,6 +224,13 @@ function uploadPreview(initial) {
                 const es = new EventSource('/upload/geocode-stream?job_id=' + this.jobId);
                 es.onmessage = (e) => {
                     const d = JSON.parse(e.data);
+                    if (d.error) {
+                        es.close();
+                        this.geocoding = false;
+                        this.geocodeStatus = d.error;
+                        alert('Geocoding failed: ' + d.error);
+                        return;
+                    }
                     this.geocodePct = d.pct;
                     this.geocodeStatus = d.current + '/' + d.total + ' — ' + (d.address || '');
                     if (d.done) {

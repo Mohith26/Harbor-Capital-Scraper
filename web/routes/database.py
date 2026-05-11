@@ -1,9 +1,12 @@
 """Database View page and HTMX endpoints."""
+import html
 import io
 import json
+import math
 import pandas as pd
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
+from sqlalchemy import or_
 from database import Session, SaleComp, LeaseComp
 
 router = APIRouter(prefix="/database", tags=["database"])
@@ -93,6 +96,56 @@ def _parse_filters(request: Request) -> dict:
         if val:
             filters[key] = val
     return filters
+
+def _apply_query_filters(query, Model, filters: dict, comp_type: str):
+    """Apply the common database filters directly in SQL for lightweight endpoints."""
+    search = filters.get("search", "").strip()
+    if search:
+        search_cols = ["address"]
+        search_cols += ["buyer", "seller", "notes"] if comp_type == "sales" else ["tenant_name", "notes"]
+        clauses = [
+            getattr(Model, col).ilike(f"%{search}%")
+            for col in search_cols
+            if hasattr(Model, col)
+        ]
+        if clauses:
+            query = query.filter(or_(*clauses))
+
+    for key in ["city", "zip_code"]:
+        vals = filters.get(key)
+        if vals and hasattr(Model, key):
+            query = query.filter(getattr(Model, key).in_(vals))
+
+    numeric_filters = {
+        "min_sale_price": ("sale_price", ">="), "max_sale_price": ("sale_price", "<="),
+        "min_price_per_sf": ("price_per_sf", ">="), "max_price_per_sf": ("price_per_sf", "<="),
+        "min_building_size": ("building_size", ">="), "max_building_size": ("building_size", "<="),
+        "min_rate_monthly": ("rate_monthly", ">="), "max_rate_monthly": ("rate_monthly", "<="),
+    }
+    for fkey, (col, op) in numeric_filters.items():
+        val = filters.get(fkey)
+        if val is None or not hasattr(Model, col):
+            continue
+        try:
+            numeric_val = float(val)
+        except (TypeError, ValueError):
+            continue
+        column = getattr(Model, col)
+        query = query.filter(column >= numeric_val if op == ">=" else column <= numeric_val)
+
+    date_cols = ["closing_date"] if comp_type == "sales" else ["commencement_date"]
+    for col in date_cols:
+        if not hasattr(Model, col):
+            continue
+        min_date = filters.get(f"min_{col}")
+        max_date = filters.get(f"max_{col}")
+        column = getattr(Model, col)
+        if min_date:
+            query = query.filter(column >= min_date)
+        if max_date:
+            query = query.filter(column <= max_date)
+
+    return query
 
 def _build_active_filters(filters: dict) -> list:
     """Build list of (key, display_label) tuples for filter chips."""
@@ -335,21 +388,63 @@ async def map_data(request: Request):
     try:
         comp_type = request.query_params.get("type", "sales")
         filters = _parse_filters(request)
-        df = _load_data(session, comp_type)
-        df = _apply_filters(df, filters, comp_type)
+        Model = SaleComp if comp_type == "sales" else LeaseComp
+        query = session.query(Model).filter(
+            Model.latitude.isnot(None),
+            Model.longitude.isnot(None),
+        )
+        query = _apply_query_filters(query, Model, filters, comp_type)
+
+        if comp_type == "sales":
+            rows = query.with_entities(
+                Model.id,
+                Model.address,
+                Model.latitude,
+                Model.longitude,
+                Model.sale_price,
+            ).limit(5000).all()
+        else:
+            rows = query.with_entities(
+                Model.id,
+                Model.address,
+                Model.latitude,
+                Model.longitude,
+                Model.rate_monthly,
+                Model.rate_annually,
+                Model.tenant_name,
+            ).limit(5000).all()
+
         points = []
-        for _, row in df.iterrows():
-            if pd.notna(row.get("latitude")) and pd.notna(row.get("longitude")):
-                popup_parts = [f"<b>{row.get('address', 'N/A')}</b>"]
-                if comp_type == "sales" and pd.notna(row.get("sale_price")):
-                    popup_parts.append(f"Price: ${row['sale_price']:,.0f}")
-                elif comp_type == "leases" and pd.notna(row.get("rate_monthly")):
-                    popup_parts.append(f"Rate: ${row['rate_monthly']:,.2f}/mo")
-                points.append({
-                    "lat": float(row["latitude"]),
-                    "lng": float(row["longitude"]),
-                    "popup": "<br>".join(popup_parts),
-                })
+        for row in rows:
+            try:
+                lat = float(row.latitude)
+                lng = float(row.longitude)
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(lat) and math.isfinite(lng)):
+                continue
+
+            popup_parts = [f"<b>{html.escape(str(row.address or 'N/A'))}</b>"]
+            if comp_type == "sales":
+                sale_price = row.sale_price
+                if sale_price is not None:
+                    popup_parts.append(f"Price: ${float(sale_price):,.0f}")
+            else:
+                tenant = getattr(row, "tenant_name", None)
+                if tenant:
+                    popup_parts.append(html.escape(str(tenant)))
+                rate_monthly = getattr(row, "rate_monthly", None)
+                rate_annually = getattr(row, "rate_annually", None)
+                if rate_monthly is not None:
+                    popup_parts.append(f"Rate: ${float(rate_monthly):,.2f}/mo")
+                elif rate_annually is not None:
+                    popup_parts.append(f"Rate: ${float(rate_annually):,.2f}/yr")
+            points.append({
+                "id": row.id,
+                "lat": lat,
+                "lng": lng,
+                "popup": "<br>".join(popup_parts),
+            })
         return points
     finally:
         session.close()

@@ -1,5 +1,6 @@
 import pathlib
 import pandas as pd
+import pytest
 from engine.loaders import get_sheet_names, robust_load_file, robust_load_file_segmented
 
 # Resolve the sample files directory whether running from repo root or a worktree
@@ -12,7 +13,7 @@ for _candidate in [
         SAMPLE_DIR = _candidate
         break
 else:
-    raise RuntimeError("Cannot find 'sample comp files' directory")
+    pytest.skip("sample comp files directory is not available", allow_module_level=True)
 
 SAMPLE = str(SAMPLE_DIR / "Arlington Class B Comps.xlsx")
 

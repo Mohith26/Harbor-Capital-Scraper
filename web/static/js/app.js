@@ -97,7 +97,7 @@ function initMap(divId, center, zoom) {
     if (_maps[divId]) {
         _maps[divId].remove();
     }
-    const map = L.map(divId).setView(center || [29.76, -95.37], zoom || 10);
+    const map = L.map(divId, { preferCanvas: true }).setView(center || [29.76, -95.37], zoom || 10);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap contributors',
         maxZoom: 19,
@@ -383,9 +383,5 @@ document.addEventListener('htmx:afterSwap', (e) => { if (e.detail.target) _initA
 function switchType(type) {
     const params = new URLSearchParams(window.location.search);
     params.set('type', type);
-    const qs = params.toString();
-    htmx.ajax('GET', '/database/table?' + qs, { target: '#table-data', swap: 'innerHTML' });
-    htmx.ajax('GET', '/database/metrics?' + qs, { target: '#metrics-container', swap: 'innerHTML' });
-    // Update URL without reload
-    history.replaceState(null, '', '/database?' + qs);
+    window.location.href = '/database?' + params.toString();
 }

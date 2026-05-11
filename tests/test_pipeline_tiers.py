@@ -26,6 +26,30 @@ def test_exact_tier_skips_embeddings():
     assert result.mappings.get("Rent PSF") == "rate_psf"
 
 
+def test_exact_tier_dedupes_duplicate_target_mappings():
+    store = FakeLearningStore()
+    headers = ["Property Name", "Rate", "Rate PSF", "SF"]
+    df = pd.DataFrame({h: ["x"] for h in headers})
+
+    fp = compute_fingerprint(headers, "lease.xlsx", None, "LEASE")
+    store.record_accepted_mapping(
+        fp,
+        {
+            "Property Name": "address",
+            "Rate": "rate_psf",
+            "Rate PSF": "rate_psf",
+            "SF": "leased_sf",
+        },
+        confirmed_by="user@test",
+    )
+
+    result = run_mapping_stage(df, filename="lease.xlsx", sheet_name=None, store=store)
+
+    assert result.source == "exact"
+    assert list(result.mappings.values()).count("rate_psf") == 1
+    assert result.mappings.get("Rate PSF") == "rate_psf"
+
+
 def test_no_match_falls_back_to_embeddings():
     """Empty store causes fallback to embedding pipeline."""
     store = FakeLearningStore()

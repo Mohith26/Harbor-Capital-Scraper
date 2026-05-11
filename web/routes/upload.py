@@ -17,7 +17,8 @@ from sqlalchemy import Float, Integer, Numeric
 from database import Session, SaleComp, LeaseComp
 from engine.pipeline import run_mapping_stage, run_geocoding_stage, run_vision_pdf_stage
 from engine.brokers import resolve_broker
-from engine.mapping import SALE_SCHEMA, LEASE_SCHEMA
+from engine.cleaning import apply_rate_logic
+from engine.mapping import SALE_SCHEMA, LEASE_SCHEMA, dedupe_mappings_by_target
 from learning.corrections import persist_with_learning
 from web.config import settings
 from web.dependencies import get_learning_store
@@ -126,6 +127,33 @@ def _safe_json_rows(df: pd.DataFrame) -> list[dict]:
     return clean
 
 
+def _clean_address_text(val) -> str:
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except Exception:
+        pass
+    text = str(val).strip()
+    if not text or text.lower() in {"nan", "none", "null", "n/a", "na", "-", "--"}:
+        return ""
+    return text
+
+
+def _row_geocode_text(row) -> str:
+    """Prefer richer combined address text when the pipeline produced it."""
+    for col in ("raw_address_data", "address"):
+        text = _clean_address_text(row.get(col))
+        if text:
+            return text
+    return ""
+
+
+def _rate_header_for_mapping(mappings: dict[str, str]) -> Optional[str]:
+    return next((raw for raw, target in mappings.items() if target == "rate_psf"), None)
+
+
 @router.get("", response_class=HTMLResponse)
 async def upload_page(request: Request):
     templates = request.app.state.templates
@@ -158,7 +186,21 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     try:
         if suffix.lower() == '.pdf':
             # PDF vision pipeline
-            seg_result = run_vision_pdf_stage(tmp_path, file.filename)
+            seg_result = run_vision_pdf_stage(
+                tmp_path,
+                file.filename,
+                max_pages=settings.PDF_MAX_PAGES,
+                total_timeout_seconds=settings.PDF_TOTAL_TIMEOUT_SECONDS,
+                raster_timeout_seconds=settings.PDF_RASTER_TIMEOUT_SECONDS,
+                openai_timeout_seconds=settings.PDF_OPENAI_TIMEOUT_SECONDS,
+                dpi=settings.PDF_DPI,
+            )
+            pdf_warnings = list(seg_result.cleaned_df.attrs.get("warnings", []))
+            if seg_result.cleaned_df.empty:
+                warning_text = " ".join(pdf_warnings) if pdf_warnings else "No rows were extracted."
+                return HTMLResponse(
+                    f'<div class="text-red-600 p-4">PDF processing stopped before usable rows were extracted. {warning_text} Try splitting the PDF into fewer pages and uploading again.</div>'
+                )
             segments_data.append({
                 "segment_key": seg_result.segment_key,
                 "sheet_name": None,
@@ -169,6 +211,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
                 "file_type": seg_result.fingerprint.file_type,
                 "preview_rows": _safe_json_rows(seg_result.cleaned_df),
                 "row_count": len(seg_result.cleaned_df),
+                "warnings": pdf_warnings,
             })
             # Store segment results for later save
             _jobs[job_id] = {
@@ -286,11 +329,18 @@ async def apply_mappings(request: Request):
         new_maps = final_mappings[seg.segment_key]
         # Drop any "unmapped"/"---"/empty values
         new_maps = {k: v for k, v in new_maps.items() if v and v not in ("---", "unmapped")}
+        raw_df = raw_dfs.get(seg.segment_key)
+        raw_headers = list(raw_df.columns) if raw_df is not None else list(new_maps.keys())
+        new_maps = dedupe_mappings_by_target(new_maps, raw_headers)
+        if not hasattr(seg.mapping_result, "original_mappings"):
+            seg.mapping_result.original_mappings = dict(seg.mapping_result.mappings)
         seg.mapping_result.mappings = new_maps
 
-        raw_df = raw_dfs.get(seg.segment_key)
         if raw_df is not None:
-            seg.cleaned_df = _apply_mappings_with_notes_concat(raw_df, new_maps)
+            cleaned_df = _apply_mappings_with_notes_concat(raw_df, new_maps)
+            if seg.fingerprint.file_type.lower() in ("lease", "both"):
+                cleaned_df = apply_rate_logic(cleaned_df, rate_header=_rate_header_for_mapping(new_maps))
+            seg.cleaned_df = cleaned_df
 
     if broker_name:
         job["confirmed_broker"] = broker_name
@@ -306,6 +356,8 @@ async def start_geocode(request: Request):
     job = _jobs.get(job_id)
     if not job:
         return {"error": "Session expired"}
+    if job.get("status") == "geocoding":
+        return {"job_id": job_id, "status": "geocoding"}
 
     job["status"] = "geocoding"
     job["geocode_progress"] = {"current": 0, "total": 0, "address": ""}
@@ -313,32 +365,60 @@ async def start_geocode(request: Request):
         job["confirmed_broker"] = broker_name
 
     def _geocode_thread():
-        store = get_learning_store()
-        api_key = settings.GOOGLE_API_KEY
-        for seg in job["segments"]:
-            df = seg.cleaned_df
-            if "address" not in df.columns:
-                continue
-            total = len(df)
-            job["geocode_progress"]["total"] += total
-
-            # Geocode row by row for progress
-            from engine.geocoding import resolve_geocode
+        try:
+            store = get_learning_store()
+            api_key = settings.GOOGLE_API_KEY
+            from engine.geocoding import resolve_geocode, _normalize_raw
             from engine import openai_client
-            lats, lngs = [], []
-            for idx, row in df.iterrows():
-                raw = str(row.get("address", ""))
-                job["geocode_progress"]["address"] = raw
-                result = resolve_geocode(raw, api_key, store, openai_client)
-                lats.append(result.get("latitude"))
-                lngs.append(result.get("longitude"))
-                job["geocode_progress"]["current"] += 1
 
-            df["latitude"] = lats
-            df["longitude"] = lngs
-            seg.cleaned_df = df
+            address_rows = []
+            for seg in job["segments"]:
+                df = seg.cleaned_df
+                if "address" not in df.columns and "raw_address_data" not in df.columns:
+                    continue
+                address_rows.append((seg, df))
+                job["geocode_progress"]["total"] += len(df)
 
-        job["status"] = "geocoded"
+            resolved_cache: dict[str, dict] = {}
+            for seg, df in address_rows:
+                lats, lngs, cities, zips, formatted_addresses = [], [], [], [], []
+                for _, row in df.iterrows():
+                    raw = _row_geocode_text(row)
+                    job["geocode_progress"]["address"] = raw
+
+                    if raw:
+                        cache_key = _normalize_raw(raw).lower()
+                        if cache_key not in resolved_cache:
+                            resolved_cache[cache_key] = resolve_geocode(raw, api_key, store, openai_client)
+                        result = resolved_cache[cache_key]
+                    else:
+                        result = {"source": "skipped", "latitude": None, "longitude": None}
+
+                    lats.append(result.get("latitude"))
+                    lngs.append(result.get("longitude"))
+                    cities.append(result.get("city"))
+                    zips.append(result.get("zip_code"))
+                    formatted_addresses.append(result.get("formatted_address"))
+                    job["geocode_progress"]["current"] += 1
+
+                df["latitude"] = lats
+                df["longitude"] = lngs
+                if any(cities):
+                    df["city"] = cities
+                if any(zips):
+                    df["zip_code"] = zips
+                if any(formatted_addresses):
+                    existing_addresses = df["address"] if "address" in df.columns else pd.Series([None] * len(df), index=df.index)
+                    df["address"] = [
+                        formatted or _clean_address_text(existing)
+                        for formatted, existing in zip(formatted_addresses, existing_addresses)
+                    ]
+                seg.cleaned_df = df
+
+            job["status"] = "geocoded"
+        except Exception as exc:
+            job["status"] = "error"
+            job["geocode_error"] = str(exc)
 
     thread = threading.Thread(target=_geocode_thread, daemon=True)
     thread.start()
@@ -366,6 +446,9 @@ async def geocode_stream(request: Request):
 
             if job.get("status") == "geocoded":
                 yield f"data: {json.dumps({'done': True, 'current': current, 'total': total, 'pct': 100})}\n\n"
+                break
+            if job.get("status") == "error":
+                yield f"data: {json.dumps({'done': True, 'error': job.get('geocode_error', 'Geocoding failed'), 'current': current, 'total': total, 'pct': pct})}\n\n"
                 break
             await asyncio.sleep(0.5)
 

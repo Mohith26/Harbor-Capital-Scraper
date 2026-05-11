@@ -100,7 +100,7 @@ def _record_mapping_learning(segments, final_mappings, edited_dfs, user, store, 
         )
 
         # Diff against original guesses → corrections.
-        original = seg.mapping_result.mappings
+        original = getattr(seg.mapping_result, "original_mappings", seg.mapping_result.mappings)
         for raw_header, final_target in new_mappings.items():
             original_target = original.get(raw_header)
             if original_target != final_target:

@@ -12,6 +12,7 @@ from engine.types import MappingResult
 from engine.cleaning import clean_header
 from engine.mapping import (
     classify_file_type,
+    dedupe_mappings_by_target,
     generate_standardized_df_with_hints,
     LEASE_SCHEMA,
     SALE_SCHEMA,
@@ -47,11 +48,15 @@ def run_mapping_stage(
     # Tier 1: exact hash match
     hit = tier1_exact_lookup(store, fp)
     if hit is not None:
-        out_df = _apply_mappings(df, hit.mappings)
+        mappings = dedupe_mappings_by_target(
+            _filter_to_present(hit.mappings, raw_headers),
+            raw_headers,
+        )
+        out_df = _apply_mappings(df, mappings)
         return MappingResult(
             fingerprint=fp,
-            mappings=hit.mappings,
-            confidence={h: hit.confidence for h in hit.mappings},
+            mappings=mappings,
+            confidence={h: hit.confidence for h in mappings},
             source="exact",
             similarity=1.0,
             cleaned_df=out_df,
@@ -60,7 +65,10 @@ def run_mapping_stage(
     # Tier 2: fuzzy Jaccard ≥ 0.80
     hit = tier2_fuzzy_lookup(store, fp, threshold=0.80)
     if hit is not None:
-        mappings = _filter_to_present(hit.mappings, raw_headers)
+        mappings = dedupe_mappings_by_target(
+            _filter_to_present(hit.mappings, raw_headers),
+            raw_headers,
+        )
         out_df = _apply_mappings(df, mappings)
         return MappingResult(
             fingerprint=fp,
@@ -75,7 +83,10 @@ def run_mapping_stage(
     if broker_name:
         hit = tier3_broker_lookup(store, fp, broker_name=broker_name, threshold=0.60)
         if hit is not None:
-            mappings = _filter_to_present(hit.mappings, raw_headers)
+            mappings = dedupe_mappings_by_target(
+                _filter_to_present(hit.mappings, raw_headers),
+                raw_headers,
+            )
             out_df = _apply_mappings(df, mappings)
             return MappingResult(
                 fingerprint=fp,
@@ -90,6 +101,8 @@ def run_mapping_stage(
     out_df, mappings, confidence = generate_standardized_df_with_hints(
         df, schema, file_type=file_type, store=store
     )
+    mappings = dedupe_mappings_by_target(mappings, raw_headers, confidence)
+    out_df = _apply_mappings(df, mappings)
     has_corrections = _has_any_corrections(store, file_type, raw_headers)
     source = "embedding+corrections" if has_corrections else "embedding"
     return MappingResult(
@@ -159,7 +172,15 @@ def run_geocoding_stage(
     return out
 
 
-def run_vision_pdf_stage(pdf_path: str, filename: str) -> "SegmentResult":
+def run_vision_pdf_stage(
+    pdf_path: str,
+    filename: str,
+    max_pages: int | None = None,
+    total_timeout_seconds: int | None = 120,
+    raster_timeout_seconds: int | None = 20,
+    openai_timeout_seconds: int | None = 45,
+    dpi: int = 150,
+) -> "SegmentResult":
     """Extract rows from a PDF via GPT-4o vision and return as a SegmentResult.
 
     Uses identity mapping (every column = schema column, no fingerprinting tier).
@@ -167,7 +188,14 @@ def run_vision_pdf_stage(pdf_path: str, filename: str) -> "SegmentResult":
     from engine.vision_pdf import extract_pdf_to_rows, _pdf_content_hash
     from engine.types import SegmentResult, Fingerprint, MappingResult
 
-    df, file_type = extract_pdf_to_rows(pdf_path)
+    df, file_type = extract_pdf_to_rows(
+        pdf_path,
+        max_pages=max_pages,
+        total_timeout_seconds=total_timeout_seconds,
+        raster_timeout_seconds=raster_timeout_seconds,
+        openai_timeout_seconds=openai_timeout_seconds,
+        dpi=dpi,
+    )
     pdf_hash = _pdf_content_hash(pdf_path)
     mappings = {c: c for c in df.columns}
 

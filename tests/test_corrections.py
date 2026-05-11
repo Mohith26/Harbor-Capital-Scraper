@@ -86,6 +86,34 @@ def test_persist_records_corrections_when_user_renames_mapping():
     assert "rent_psf" in corrections
 
 
+def test_persist_uses_preserved_original_mapping_for_corrections():
+    store = FakeLearningStore()
+
+    def fake_saver(df):
+        return list(range(len(df)))
+
+    seg = _make_segment(
+        "Sheet1::0",
+        headers=["Property", "Asking Rate"],
+        mappings={"Property": "property_name", "Asking Rate": "rent_psf"},
+    )
+    seg.mapping_result.original_mappings = {"Property": "property_name", "Asking Rate": "sf"}
+
+    persist_with_learning(
+        segments=[seg],
+        final_mappings={"Sheet1::0": seg.mapping_result.mappings},
+        edited_dfs={"Sheet1::0": seg.cleaned_df},
+        confirmed_broker=None,
+        geocode_overrides={},
+        store=store,
+        db_saver=fake_saver,
+        user="u@test",
+    )
+
+    corrections = store.get_corrections_for_context(file_type="lease", raw_header="asking rate")
+    assert "rent_psf" in corrections
+
+
 def test_db_save_failure_skips_learning_writes():
     store = FakeLearningStore()
 
