@@ -93,10 +93,20 @@ function renderChart(divId, traces, layoutOverrides) {
 // ===== Leaflet Helpers =====
 let _maps = {};
 
-function initMap(divId, center, zoom) {
-    if (_maps[divId]) {
-        _maps[divId].remove();
+function destroyMap(divId) {
+    const map = _maps[divId];
+    if (map) {
+        try { map.remove(); } catch (e) {}
+        delete _maps[divId];
     }
+    const container = document.getElementById(divId);
+    if (container && container._leaflet_id) {
+        try { delete container._leaflet_id; } catch (e) { container._leaflet_id = null; }
+    }
+}
+
+function initMap(divId, center, zoom) {
+    destroyMap(divId);
     const map = L.map(divId, { preferCanvas: true }).setView(center || [29.76, -95.37], zoom || 10);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap contributors',
@@ -109,8 +119,10 @@ function initMap(divId, center, zoom) {
 function addMarkers(map, points, options) {
     const markers = [];
     points.forEach(function(pt) {
-        if (pt.lat && pt.lng) {
-            const marker = L.circleMarker([pt.lat, pt.lng], {
+        const lat = Number(pt.lat);
+        const lng = Number(pt.lng);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const marker = L.circleMarker([lat, lng], {
                 radius: options?.radius || 6,
                 fillColor: options?.color || HC_COLORS.amber,
                 color: '#fff',
