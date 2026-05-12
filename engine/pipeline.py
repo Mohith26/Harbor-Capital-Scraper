@@ -101,10 +101,12 @@ def run_mapping_stage(
     out_df, mappings, confidence = generate_standardized_df_with_hints(
         df, schema, file_type=file_type, store=store
     )
+    mapping_source = out_df.attrs.get("mapping_source")
     mappings = dedupe_mappings_by_target(mappings, raw_headers, confidence)
     out_df = _apply_mappings(df, mappings)
     has_corrections = _has_any_corrections(store, file_type, raw_headers)
     source = "embedding+corrections" if has_corrections else "embedding"
+    source = mapping_source or source
     return MappingResult(
         fingerprint=fp,
         mappings=mappings,

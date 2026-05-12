@@ -62,6 +62,32 @@ def test_no_match_falls_back_to_embeddings():
     assert "Rent PSF" in result.mappings
 
 
+def test_missing_embeddings_falls_back_to_heuristic_mapping(monkeypatch):
+    """Uploads stay editable when OpenAI embeddings are unavailable."""
+    import engine.mapping
+
+    def _missing_embeddings(_texts):
+        raise RuntimeError("missing credentials")
+
+    monkeypatch.setattr(engine.mapping, "get_embeddings", _missing_embeddings)
+    store = FakeLearningStore()
+    df = pd.DataFrame({
+        "Property": ["123 Main St"],
+        "Tenant": ["Acme"],
+        "Rent PSF": [12.5],
+        "Lease Date": ["2024-01-01"],
+        "SF": [10000],
+    })
+
+    result = run_mapping_stage(df, filename="lease.csv", sheet_name=None, store=store)
+
+    assert result.source == "heuristic"
+    assert result.mappings["Property"] == "address"
+    assert result.mappings["Tenant"] == "tenant_name"
+    assert result.mappings["Rent PSF"] == "rate_psf"
+    assert result.mappings["SF"] == "leased_sf"
+
+
 def test_result_is_mapping_result_type():
     """run_mapping_stage returns a MappingResult with all required fields."""
     from engine.types import MappingResult
@@ -72,4 +98,4 @@ def test_result_is_mapping_result_type():
     assert result.fingerprint is not None
     assert isinstance(result.mappings, dict)
     assert isinstance(result.confidence, dict)
-    assert result.source in {"exact", "fuzzy", "broker", "embedding", "embedding+corrections"}
+    assert result.source in {"exact", "fuzzy", "broker", "embedding", "embedding+corrections", "heuristic"}

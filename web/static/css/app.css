@@ -222,6 +222,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
     text-align: center; color: #888; transition: all 0.2s; cursor: pointer;
 }
 .drop-zone:hover, .drop-zone.dragover { border-color: #F5A623; background: #FFF3DC; color: #333; }
+.drop-zone:focus { outline: none; border-color: #F5A623; box-shadow: 0 0 0 3px rgba(245,166,35,0.22); }
+
+/* HTMX shows these while the associated request is active. */
+.htmx-indicator { display: none; }
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator { display: block; }
 
 /* ===== Forms ===== */
 .form-input {
@@ -271,6 +277,78 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 }
 .chart-tab:hover { color: #333; }
 .chart-tab.active { color: #F5A623; border-bottom-color: #F5A623; }
+
+/* ===== Upload Segment Tabs ===== */
+.upload-segment-tabs {
+    display: flex;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 0;
+    border-bottom: 1px solid #e5e7eb;
+    padding-top: 6px;
+}
+.upload-segment-tab-wrap {
+    position: relative;
+    flex: 1 1 96px;
+    min-width: 78px;
+    max-width: 132px;
+}
+.upload-segment-tab {
+    width: 100%;
+    min-height: 76px;
+    padding: 9px 28px 10px 12px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    text-align: center;
+    white-space: normal;
+    line-height: 1.25;
+    font-size: 13px;
+    font-weight: 500;
+    color: #666;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.upload-segment-tab:hover { color: #333; background: #fafafa; }
+.upload-segment-tab.active { color: #F5A623; border-bottom-color: #F5A623; }
+.upload-segment-tab.voided { color: #9ca3af; background: #f9fafb; }
+.upload-segment-menu-trigger {
+    position: absolute;
+    top: 8px;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #8a8f98;
+    cursor: pointer;
+}
+.upload-segment-menu-trigger:hover { background: #f3f4f6; color: #333; }
+.upload-segment-menu-trigger svg {
+    width: 4px;
+    height: 16px;
+    fill: currentColor;
+    display: block;
+}
+.upload-segment-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 6px;
+    z-index: 20;
+    min-width: 120px;
+    padding: 4px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #fff;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+}
 
 /* ===== Badge Tags ===== */
 .badge-mapped { background: #d1fae5; color: #065f46; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }

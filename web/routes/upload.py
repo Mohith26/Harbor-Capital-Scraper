@@ -20,6 +20,7 @@ from engine.brokers import resolve_broker
 from engine.cleaning import apply_rate_logic
 from engine.mapping import SALE_SCHEMA, LEASE_SCHEMA, dedupe_mappings_by_target
 from learning.corrections import persist_with_learning
+from utils import normalize_address
 from web.config import settings
 from web.dependencies import get_learning_store
 
@@ -27,6 +28,20 @@ router = APIRouter(prefix="/upload", tags=["upload"])
 
 # Server-side job storage
 _jobs: dict[str, dict] = {}
+
+
+def _schema_fields_for_type(file_type: Optional[str]) -> list[str]:
+    ft = (file_type or "").lower()
+    if ft in ("lease", "both"):
+        return list(LEASE_SCHEMA.keys())
+    if ft == "sale":
+        return list(SALE_SCHEMA.keys())
+    return list(dict.fromkeys([*SALE_SCHEMA.keys(), *LEASE_SCHEMA.keys()]))
+
+
+def _active_segments(job: dict) -> list:
+    voided = set(job.get("voided_segment_keys") or [])
+    return [seg for seg in job.get("segments", []) if seg.segment_key not in voided]
 
 
 def _apply_mappings_with_notes_concat(raw_df: pd.DataFrame, mappings: dict[str, str]) -> pd.DataFrame:
@@ -141,6 +156,134 @@ def _clean_address_text(val) -> str:
     return text
 
 
+def _normalize_entry_value(val, field: str = "") -> str:
+    text = _clean_address_text(val).lower()
+    if not text:
+        return ""
+    if field in {"sale_price", "leased_sf"}:
+        num = _coerce_numeric(val)
+        if num is not None:
+            return f"{num:.2f}"
+    if field.endswith("_date") or field in {"closing_date", "commencement_date"}:
+        text = text.split("t", 1)[0]
+    return re.sub(r"\s+", " ", re.sub(r"[^\w.\- ]+", " ", text)).strip()
+
+
+def _row_completeness(row: pd.Series) -> tuple[int, int]:
+    score = 0
+    char_count = 0
+    ignored = {"source_type", "source_file", "source_sheet", "latitude", "longitude", "geocode_source"}
+    for col, val in row.items():
+        if col in ignored:
+            continue
+        text = _clean_address_text(val)
+        if text:
+            score += 1
+            char_count += len(text)
+    return score, char_count
+
+
+def _dedupe_identity(row: pd.Series, file_type: str) -> Optional[tuple[str, dict[str, str]]]:
+    address = _clean_address_text(row.get("address")) or _clean_address_text(row.get("raw_address_data"))
+    norm_address = normalize_address(address)
+    if not norm_address:
+        return None
+
+    ft = (file_type or "").lower()
+    if ft in {"lease", "both"}:
+        identity_fields = ("tenant_name", "commencement_date")
+        values = {
+            field: _normalize_entry_value(row.get(field), field)
+            for field in identity_fields
+            if _normalize_entry_value(row.get(field), field)
+        }
+        if not values:
+            return None
+        return norm_address, values
+
+    identity_fields = ("closing_date", "sale_price")
+    values = {
+        field: _normalize_entry_value(row.get(field), field)
+        for field in identity_fields
+        if _normalize_entry_value(row.get(field), field)
+    }
+    return norm_address, values
+
+
+def _compatible_identity(cluster_identity: dict[str, str], row_identity: dict[str, str]) -> bool:
+    for field, value in row_identity.items():
+        existing = cluster_identity.get(field)
+        if existing and existing != value:
+            return False
+    return True
+
+
+def _dedupe_segments_within_sheets(segments: list) -> int:
+    """Drop duplicate entries within the same uploaded sheet, keeping the richest row."""
+    if not segments:
+        return 0
+
+    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    keep_all: list[dict] = []
+    order = 0
+    for seg in segments:
+        df = getattr(seg, "cleaned_df", None)
+        if df is None or df.empty:
+            continue
+        file_type = getattr(getattr(seg, "fingerprint", None), "file_type", "") or ""
+        sheet_name = getattr(getattr(seg, "fingerprint", None), "sheet_name", None) or seg.segment_key.split("::", 1)[0]
+        for row_idx, row in df.iterrows():
+            identity = _dedupe_identity(row, file_type)
+            item = {
+                "seg": seg,
+                "row_idx": row_idx,
+                "row": row,
+                "file_type": file_type,
+                "sheet_name": sheet_name,
+                "order": order,
+            }
+            order += 1
+            if identity is None:
+                keep_all.append(item)
+                continue
+            address_key, row_identity = identity
+            grouped.setdefault((sheet_name, file_type.lower(), address_key), []).append({**item, "identity": row_identity})
+
+    keep_items = list(keep_all)
+    duplicate_count = 0
+    for items in grouped.values():
+        clusters: list[dict] = []
+        for item in items:
+            placed = False
+            for cluster in clusters:
+                if _compatible_identity(cluster["identity"], item["identity"]):
+                    cluster["items"].append(item)
+                    cluster["identity"].update(item["identity"])
+                    placed = True
+                    break
+            if not placed:
+                clusters.append({"identity": dict(item["identity"]), "items": [item]})
+
+        for cluster in clusters:
+            cluster_items = cluster["items"]
+            if len(cluster_items) > 1:
+                duplicate_count += len(cluster_items) - 1
+            keep_items.append(max(cluster_items, key=lambda i: (*_row_completeness(i["row"]), -i["order"])))
+
+    keep_by_segment: dict[str, list] = {}
+    for item in sorted(keep_items, key=lambda i: i["order"]):
+        keep_by_segment.setdefault(item["seg"].segment_key, []).append(item["row_idx"])
+
+    for seg in segments:
+        df = getattr(seg, "cleaned_df", None)
+        if df is None or df.empty:
+            continue
+        keep_indices = keep_by_segment.get(seg.segment_key, [])
+        seg.cleaned_df = df.loc[keep_indices].reset_index(drop=True) if keep_indices else df.iloc[0:0].copy()
+
+    return duplicate_count
+
+
 def _row_geocode_text(row) -> str:
     """Prefer richer combined address text when the pipeline produced it."""
     for col in ("raw_address_data", "address"):
@@ -209,8 +352,10 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
                 "confidence": seg_result.mapping_result.confidence,
                 "source": seg_result.mapping_result.source,
                 "file_type": seg_result.fingerprint.file_type,
+                "schema_fields": _schema_fields_for_type(seg_result.fingerprint.file_type),
                 "preview_rows": _safe_json_rows(seg_result.cleaned_df),
                 "row_count": len(seg_result.cleaned_df),
+                "voided": False,
                 "warnings": pdf_warnings,
             })
             # Store segment results for later save
@@ -255,8 +400,10 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
                             "confidence": mapping_result.confidence,
                             "source": mapping_result.source,
                             "file_type": mapping_result.fingerprint.file_type,
+                            "schema_fields": _schema_fields_for_type(mapping_result.fingerprint.file_type),
                             "preview_rows": _safe_json_rows(seg_df),
                             "row_count": len(seg_df),
+                            "voided": False,
                         })
 
             # Broker detection: only auto-detect from known broker keywords in filename,
@@ -278,7 +425,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
 
     # Determine schema fields for mapping dropdowns
     first_type = segments_data[0]["file_type"] if segments_data else "sale"
-    schema_fields = list(LEASE_SCHEMA.keys()) if first_type.lower() in ("lease", "both") else list(SALE_SCHEMA.keys())
+    schema_fields = _schema_fields_for_type(first_type)
 
     broker_resolution = _jobs[job_id].get("broker")
     broker_name = ""
@@ -320,10 +467,15 @@ async def apply_mappings(request: Request):
     if not job:
         return {"error": "Session expired. Please re-upload."}
     final_mappings = body.get("final_mappings", {})
+    voided_segment_keys = set(body.get("voided_segment_keys") or [])
     broker_name = body.get("broker_name", "")
     raw_dfs = job.get("raw_dfs", {})
+    job["voided_segment_keys"] = list(voided_segment_keys)
+    active_segments = _active_segments(job)
+    if not active_segments:
+        return {"error": "All sheets are voided. Restore at least one sheet before saving."}
 
-    for seg in job["segments"]:
+    for seg in active_segments:
         if seg.segment_key not in final_mappings:
             continue
         new_maps = final_mappings[seg.segment_key]
@@ -342,6 +494,10 @@ async def apply_mappings(request: Request):
                 cleaned_df = apply_rate_logic(cleaned_df, rate_header=_rate_header_for_mapping(new_maps))
             seg.cleaned_df = cleaned_df
 
+    deduped_count = _dedupe_segments_within_sheets(active_segments)
+    if deduped_count:
+        job["deduped_count"] = job.get("deduped_count", 0) + deduped_count
+
     if broker_name:
         job["confirmed_broker"] = broker_name
     return {"status": "ok"}
@@ -356,6 +512,9 @@ async def start_geocode(request: Request):
     job = _jobs.get(job_id)
     if not job:
         return {"error": "Session expired"}
+    active_segments = _active_segments(job)
+    if not active_segments:
+        return {"error": "All sheets are voided. Restore at least one sheet before geocoding."}
     if job.get("status") == "geocoding":
         return {"job_id": job_id, "status": "geocoding"}
 
@@ -371,8 +530,13 @@ async def start_geocode(request: Request):
             from engine.geocoding import resolve_geocode, _normalize_raw
             from engine import openai_client
 
+            active_segments = _active_segments(job)
+            deduped_count = _dedupe_segments_within_sheets(active_segments)
+            if deduped_count:
+                job["deduped_count"] = job.get("deduped_count", 0) + deduped_count
+
             address_rows = []
-            for seg in job["segments"]:
+            for seg in active_segments:
                 df = seg.cleaned_df
                 if "address" not in df.columns and "raw_address_data" not in df.columns:
                     continue
@@ -466,28 +630,35 @@ async def save_to_db(request: Request):
 
     user = request.state.user
     store = get_learning_store()
-    segments = job["segments"]
+    segments = _active_segments(job)
+    if not segments:
+        return HTMLResponse('<div class="text-red-600">All sheets are voided. Restore at least one sheet before saving.</div>')
     confirmed_broker = job.get("confirmed_broker", "")
 
     # Build final_mappings and edited_dfs
     final_mappings = {}
     edited_dfs = {}
+    _dedupe_segments_within_sheets(segments)
     for seg in segments:
         final_mappings[seg.segment_key] = seg.mapping_result.mappings
-        edited_dfs[seg.segment_key] = seg.cleaned_df
+        seg_df = seg.cleaned_df.copy()
+        seg_df["source_type"] = seg.fingerprint.file_type.upper()
+        seg_df["source_sheet"] = seg.fingerprint.sheet_name or seg.segment_key.split("::", 1)[0]
+        edited_dfs[seg.segment_key] = seg_df
 
     # DB saver function
     def db_saver(concat_df: pd.DataFrame) -> list[int]:
         session = Session()
         try:
-            file_type = segments[0].fingerprint.file_type if segments else "sale"
-            Model = LeaseComp if file_type.lower() in ("lease", "both") else SaleComp
-            numeric_cols = {
-                c.name for c in Model.__table__.columns
-                if isinstance(c.type, (Float, Integer, Numeric))
-            }
+            fallback_type = segments[0].fingerprint.file_type if segments else "sale"
             ids = []
             for _, row in concat_df.iterrows():
+                row_type = str(row.get("source_type") or fallback_type).lower()
+                Model = LeaseComp if row_type in ("lease", "both") else SaleComp
+                numeric_cols = {
+                    c.name for c in Model.__table__.columns
+                    if isinstance(c.type, (Float, Integer, Numeric))
+                }
                 record = Model()
                 for col in Model.__table__.columns:
                     if col.name in ("id", "created_at") or col.name not in row.index:

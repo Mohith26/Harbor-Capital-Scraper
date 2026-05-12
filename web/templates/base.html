@@ -20,6 +20,11 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <!-- App CSS & JS -->
     <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        .htmx-indicator { display: none; }
+        .htmx-request .htmx-indicator,
+        .htmx-request.htmx-indicator { display: block; }
+    </style>
     <script src="/static/js/app.js"></script>
     {% block head_extra %}{% endblock %}
 </head>
