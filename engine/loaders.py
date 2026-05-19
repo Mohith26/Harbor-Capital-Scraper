@@ -261,9 +261,11 @@ def _merge_split_headers(df):
         if non_empty <= len(df.columns) * 0.3:
             break
 
-        # Merge sub-header into column names
+        # Merge sub-header into column names. Empty cells get positional
+        # placeholders ("Unknown_3") instead of literal "Unknown" so we
+        # don't emit duplicate labels that break downstream label lookups.
         new_columns = []
-        for col, sub in zip(df.columns, sub_row):
+        for idx, (col, sub) in enumerate(zip(df.columns, sub_row)):
             col_str = str(col).strip()
             sub_str = str(sub).strip()
             if "Unnamed" in col_str:
@@ -271,7 +273,7 @@ def _merge_split_headers(df):
             if sub_str.lower() == "nan" or not sub_str:
                 sub_str = ""
             combined = f"{col_str} {sub_str}".strip()
-            new_columns.append(combined if combined else "Unknown")
+            new_columns.append(combined if combined else f"Unknown_{idx}")
 
         df.columns = new_columns
         df = df.iloc[1:].reset_index(drop=True)
@@ -280,12 +282,19 @@ def _merge_split_headers(df):
 
 
 def _trim_leading_empty_columns(df):
-    """Drop leading columns that are entirely NaN/empty."""
-    cols_to_drop = []
-    for col in df.columns:
-        col_data = df[col]
+    """Drop leading columns that are entirely NaN/empty.
+
+    Iterates positionally — duplicate column labels are common after
+    _merge_split_headers folds blank header cells together, and label-based
+    df[col] would return a DataFrame in that case, breaking .all().
+    """
+    n_to_drop = 0
+    for i in range(len(df.columns)):
+        col_data = df.iloc[:, i]
         if col_data.isna().all() or col_data.astype(str).str.strip().eq('').all():
-            cols_to_drop.append(col)
+            n_to_drop += 1
         else:
             break
-    return df.drop(columns=cols_to_drop) if cols_to_drop else df
+    if n_to_drop == 0:
+        return df
+    return df.iloc[:, n_to_drop:]
