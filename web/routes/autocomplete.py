@@ -1,56 +1,73 @@
-"""Server-side address autocomplete via Google Places REST API (Texas-biased)."""
+"""Server-side address autocomplete via Google Places API (New), Texas-restricted."""
+import logging
 import httpx
 from fastapi import APIRouter, Request
 from sqlalchemy import or_, func as sa_func
 from web.config import settings
 from database import Session, SaleComp, LeaseComp
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api", tags=["autocomplete"])
 
-# Texas center + radius for biasing
-_TX_CENTER = "31.0,-99.0"
-_TX_RADIUS = "600000"  # meters (~372 miles, covers Texas)
+# Texas bounding box (approximate). Used as a hard locationRestriction so only
+# Texas results are returned.
+_TX_BBOX_LOW = {"latitude": 25.8371, "longitude": -106.6456}   # SW corner
+_TX_BBOX_HIGH = {"latitude": 36.5008, "longitude": -93.5083}   # NE corner
 
 
 @router.get("/autocomplete")
 async def autocomplete(request: Request, q: str = ""):
-    """Return Google Places autocomplete predictions for an address query.
+    """Return Google Places (New) autocomplete predictions for an address query.
 
-    Uses legacy Places API. Constrained to US, biased toward Texas.
+    Uses Places API (New) v1. Hard-restricted to a Texas bounding box.
     """
     q = (q or "").strip()
     if len(q) < 3:
         return {"predictions": []}
     api_key = settings.GOOGLE_API_KEY
     if not api_key:
+        logger.warning("autocomplete: GOOGLE_API_KEY not configured")
         return {"predictions": [], "error": "GOOGLE_API_KEY not configured"}
 
-    url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
-    params = {
+    url = "https://places.googleapis.com/v1/places:autocomplete"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+    }
+    body = {
         "input": q,
-        "key": api_key,
-        "types": "address",
-        "components": "country:us",
-        "location": _TX_CENTER,
-        "radius": _TX_RADIUS,
+        "includedRegionCodes": ["us"],
+        "locationRestriction": {
+            "rectangle": {"low": _TX_BBOX_LOW, "high": _TX_BBOX_HIGH}
+        },
     }
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url, params=params)
+            resp = await client.post(url, headers=headers, json=body)
         data = resp.json()
-        status = data.get("status", "UNKNOWN")
-        if status not in ("OK", "ZERO_RESULTS"):
+        if resp.status_code != 200:
+            err = (data.get("error") or {}).get("message") or data.get("error") or resp.text
+            logger.warning("autocomplete: Places API %s: %s", resp.status_code, err)
             return {
                 "predictions": [],
-                "error": f"Places API status: {status}",
-                "message": data.get("error_message", ""),
+                "error": f"Places API status: {resp.status_code}",
+                "message": str(err),
             }
-        predictions = [
-            {"description": p.get("description", ""), "place_id": p.get("place_id", "")}
-            for p in data.get("predictions", [])
-        ]
+        predictions = []
+        for s in data.get("suggestions", []):
+            pp = s.get("placePrediction") or {}
+            text = (pp.get("text") or {}).get("text", "")
+            place_id = pp.get("placeId", "")
+            if not text:
+                continue
+            # Bounding rectangle spills into AR/OK/LA/NM corners; keep TX only.
+            if ", TX" not in text and ", TX," not in text and not text.endswith(", TX"):
+                continue
+            predictions.append({"description": text, "place_id": place_id})
         return {"predictions": predictions}
     except Exception as e:
+        logger.exception("autocomplete: request failed")
         return {"predictions": [], "error": str(e)}
 
 

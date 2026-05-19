@@ -150,10 +150,17 @@ async function exportData(url, format, compType) {
 async function _fetchAutocomplete(q) {
     try {
         const resp = await fetch('/api/autocomplete?q=' + encodeURIComponent(q));
-        if (!resp.ok) return [];
+        if (!resp.ok) {
+            console.warn('[autocomplete] HTTP', resp.status);
+            return [];
+        }
         const data = await resp.json();
+        if (data.error) {
+            console.warn('[autocomplete] Google Places error:', data.error, data.message || '');
+        }
         return data.predictions || [];
     } catch (e) {
+        console.warn('[autocomplete] fetch failed:', e);
         return [];
     }
 }
