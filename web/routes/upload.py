@@ -5,6 +5,7 @@ import json
 import uuid
 import time
 import math
+import logging
 import tempfile
 import threading
 from typing import Optional
@@ -15,6 +16,8 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import Float, Integer, Numeric
 
 from database import Session, SaleComp, LeaseComp
+
+log = logging.getLogger(__name__)
 from engine.pipeline import run_mapping_stage, run_geocoding_stage, run_vision_pdf_stage
 from engine.brokers import resolve_broker
 from engine.mapping import SALE_SCHEMA, LEASE_SCHEMA
@@ -124,6 +127,99 @@ def _safe_json_rows(df: pd.DataFrame) -> list[dict]:
                 cr[k] = v
         clean.append(cr)
     return clean
+
+
+def _has_address(val) -> bool:
+    """Return True only if ``val`` is a non-empty, non-whitespace address.
+
+    Treats NULL / NaN / pandas-NA / empty-string / whitespace-only as missing.
+    This is the canonical "does this comp have an address?" check used by both
+    the upload save path and the application-level validation. Address is
+    required: without it the row can't be geocoded, mapped, or matched in
+    Comp Finder.
+    """
+    if val is None:
+        return False
+    try:
+        if pd.isna(val):
+            return False
+    except (TypeError, ValueError):
+        pass
+    if isinstance(val, float) and math.isnan(val):
+        return False
+    return bool(str(val).strip())
+
+
+def _save_rows_to_db(
+    concat_df: pd.DataFrame,
+    *,
+    file_type: str,
+    source_file: Optional[str],
+) -> dict:
+    """Persist comp rows to the DB, skipping any row whose address is missing.
+
+    Validation point: this is the LAST line of defense before INSERT. Rows
+    without a usable ``address`` (NULL / empty / whitespace-only) are dropped
+    here and logged. The schema-level NOT NULL + non-empty validator on the
+    SaleComp / LeaseComp models is the second layer of defense.
+
+    Returns a dict with::
+        {"inserted_ids": [...], "skipped_count": N, "skipped_rows": [row_index, ...]}
+    """
+    session = Session()
+    try:
+        Model = LeaseComp if (file_type or "").lower() in ("lease", "both") else SaleComp
+        numeric_cols = {
+            c.name for c in Model.__table__.columns
+            if isinstance(c.type, (Float, Integer, Numeric))
+        }
+        inserted_ids: list[int] = []
+        skipped_rows: list[int] = []
+
+        for row_idx, row in concat_df.iterrows():
+            # ---- Defense in depth, layer 1: address required ----
+            addr_val = row.get("address") if "address" in row.index else None
+            if not _has_address(addr_val):
+                skipped_rows.append(row_idx)
+                log.warning(
+                    "Skipping comp row (missing address) source_file=%s row_idx=%s",
+                    source_file, row_idx,
+                )
+                continue
+
+            record = Model()
+            for col in Model.__table__.columns:
+                if col.name in ("id", "created_at") or col.name not in row.index:
+                    continue
+                val = row[col.name]
+                try:
+                    is_na = pd.isna(val)
+                except Exception:
+                    is_na = False
+                if is_na:
+                    continue
+                if col.name in numeric_cols:
+                    val = _coerce_numeric(val)
+                    if val is None:
+                        continue
+                setattr(record, col.name, val)
+            if source_file is not None:
+                record.source_file = source_file
+            session.add(record)
+            session.flush()
+            inserted_ids.append(record.id)
+
+        session.commit()
+        return {
+            "inserted_ids": inserted_ids,
+            "skipped_count": len(skipped_rows),
+            "skipped_rows": skipped_rows,
+        }
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 @router.get("", response_class=HTMLResponse)
@@ -393,45 +489,19 @@ async def save_to_db(request: Request):
         final_mappings[seg.segment_key] = seg.mapping_result.mappings
         edited_dfs[seg.segment_key] = seg.cleaned_df
 
-    # DB saver function
+    # DB saver function — closes over file_type + filename, delegates to
+    # _save_rows_to_db which performs the missing-address validation.
+    file_type = segments[0].fingerprint.file_type if segments else "sale"
+    save_stats: dict = {"skipped_count": 0}
+
     def db_saver(concat_df: pd.DataFrame) -> list[int]:
-        session = Session()
-        try:
-            file_type = segments[0].fingerprint.file_type if segments else "sale"
-            Model = LeaseComp if file_type.lower() in ("lease", "both") else SaleComp
-            numeric_cols = {
-                c.name for c in Model.__table__.columns
-                if isinstance(c.type, (Float, Integer, Numeric))
-            }
-            ids = []
-            for _, row in concat_df.iterrows():
-                record = Model()
-                for col in Model.__table__.columns:
-                    if col.name in ("id", "created_at") or col.name not in row.index:
-                        continue
-                    val = row[col.name]
-                    try:
-                        is_na = pd.isna(val)
-                    except Exception:
-                        is_na = False
-                    if is_na:
-                        continue
-                    if col.name in numeric_cols:
-                        val = _coerce_numeric(val)
-                        if val is None:
-                            continue
-                    setattr(record, col.name, val)
-                record.source_file = job["filename"]
-                session.add(record)
-                session.flush()
-                ids.append(record.id)
-            session.commit()
-            return ids
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+        result = _save_rows_to_db(
+            concat_df,
+            file_type=file_type,
+            source_file=job.get("filename"),
+        )
+        save_stats["skipped_count"] = result["skipped_count"]
+        return result["inserted_ids"]
 
     try:
         inserted_ids = persist_with_learning(
@@ -446,12 +516,21 @@ async def save_to_db(request: Request):
         )
         # Cleanup
         _jobs.pop(job_id, None)
+        skipped = save_stats.get("skipped_count", 0)
+        skipped_banner = ""
+        if skipped:
+            skipped_banner = (
+                f'<div class="text-amber-700 text-sm mt-2">'
+                f'Skipped {skipped} row(s) with missing address — '
+                f'address is required for geocoding and matching.</div>'
+            )
         return HTMLResponse(f'''
             <div class="bg-green-50 border border-green-200 rounded-lg p-6 text-center">
                 <div class="text-green-700 font-semibold text-lg mb-2">
                     Successfully saved {len(inserted_ids)} records
                 </div>
                 <p class="text-green-600 text-sm mb-4">Data has been added to the database.</p>
+                {skipped_banner}
                 <a href="/database" class="btn-primary inline-block">View in Database</a>
             </div>
         ''')

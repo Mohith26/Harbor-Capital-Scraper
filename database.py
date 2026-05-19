@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, func
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, CheckConstraint, func
+from sqlalchemy.orm import declarative_base, sessionmaker, validates
 
 load_dotenv()
 
@@ -12,10 +12,27 @@ def _get_db_url():
 Base = declarative_base()
 from learning.schemas import LearningBase
 
+
+def _validate_address(value):
+    """Reject NULL / empty / whitespace-only addresses at the ORM layer.
+
+    Address is required for every comp — without it the row cannot be
+    geocoded, mapped, or matched in Comp Finder. This is the schema-level
+    half of the defense-in-depth check; the upload save path also performs
+    its own check and reports skipped rows to the user.
+    """
+    if value is None or not str(value).strip():
+        raise ValueError("address is required and must not be empty or whitespace-only")
+    return value
+
+
 class SaleComp(Base):
     __tablename__ = 'sale_comps'
+    __table_args__ = (
+        CheckConstraint("length(trim(address)) > 0", name='ck_sale_comps_address_not_blank'),
+    )
     id = Column(Integer, primary_key=True)
-    address = Column(String)
+    address = Column(String, nullable=False)
     latitude = Column(Float)
     longitude = Column(Float)
     sale_price = Column(Float)
@@ -34,10 +51,18 @@ class SaleComp(Base):
     zip_code = Column(String)
     created_at = Column(DateTime, server_default=func.now())
 
+    @validates('address')
+    def _check_address(self, key, value):
+        return _validate_address(value)
+
+
 class LeaseComp(Base):
     __tablename__ = 'lease_comps'
+    __table_args__ = (
+        CheckConstraint("length(trim(address)) > 0", name='ck_lease_comps_address_not_blank'),
+    )
     id = Column(Integer, primary_key=True)
-    address = Column(String)
+    address = Column(String, nullable=False)
     latitude = Column(Float)
     longitude = Column(Float)
     tenant_name = Column(String)
@@ -59,6 +84,10 @@ class LeaseComp(Base):
     city = Column(String)
     zip_code = Column(String)
     created_at = Column(DateTime, server_default=func.now())
+
+    @validates('address')
+    def _check_address(self, key, value):
+        return _validate_address(value)
 
 DB_URL = _get_db_url()
 
