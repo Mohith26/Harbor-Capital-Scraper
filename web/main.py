@@ -25,7 +25,7 @@ def _load_image_b64(relative_path: str) -> str:
         return ""
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    EXEMPT_PATHS = {"/login", "/static", "/health", "/api"}
+    EXEMPT_PATHS = {"/login", "/static", "/health", "/version", "/api"}
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -112,6 +112,20 @@ async def logout(request: Request):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+@app.get("/version")
+async def version():
+    """Report the running build's git commit so deploys are verifiable via curl.
+
+    Railway injects RAILWAY_GIT_COMMIT_SHA into every deployment; falls back to
+    a build-baked GIT_COMMIT_SHA env var, else "unknown".
+    """
+    return {
+        "commit": os.environ.get("RAILWAY_GIT_COMMIT_SHA")
+        or os.environ.get("GIT_COMMIT_SHA", "unknown"),
+        "branch": os.environ.get("RAILWAY_GIT_BRANCH", "unknown"),
+        "deploy_id": os.environ.get("RAILWAY_DEPLOYMENT_ID", "unknown"),
+    }
 
 @app.get("/")
 async def root():

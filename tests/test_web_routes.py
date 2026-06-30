@@ -19,3 +19,13 @@ def test_legacy_nav_aliases_redirect(monkeypatch):
     assert stats.headers["location"] == "/analytics"
     assert finder.status_code == 303
     assert finder.headers["location"] == "/finder"
+
+
+def test_version_endpoint_is_public_and_reports_commit(monkeypatch):
+    from fastapi.testclient import TestClient
+    from web.main import app
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abc123sha")
+    client = TestClient(app)
+    resp = client.get("/version")
+    assert resp.status_code == 200          # public (not redirected to /login)
+    assert resp.json()["commit"] == "abc123sha"
