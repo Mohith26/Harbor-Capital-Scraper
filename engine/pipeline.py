@@ -12,6 +12,7 @@ from engine.types import MappingResult
 from engine.cleaning import clean_header
 from engine.mapping import (
     classify_file_type,
+    dedupe_mappings_by_target,
     generate_standardized_df_with_hints,
     LEASE_SCHEMA,
     SALE_SCHEMA,
@@ -23,9 +24,81 @@ from engine.fingerprint import (
     tier3_broker_lookup,
 )
 
+import os
+
+from engine.mapping import (
+    BASE_OVERRIDES,
+    LEASE_OVERRIDES,
+    SALE_OVERRIDES,
+    _find_override,
+)
+from engine.llm_mapping import llm_map_columns
+from engine.verify_mapping import verify_mapping
+from engine.mapping_examples import build_examples
+
+# raw_hash -> (mappings, confidence) — avoids re-paying the LLM for an identical file shape
+_LLM_MAPPING_CACHE: dict[str, tuple[dict, dict]] = {}
+
+# Headers verifier-flagged or below this confidence are surfaced for analyst review (not auto-accepted)
+_LLM_AUTO_ACCEPT_THRESHOLD = 0.75
+
 
 def _schema_for(file_type: str) -> dict:
     return LEASE_SCHEMA if file_type.upper() in ("LEASE", "BOTH") else SALE_SCHEMA
+
+
+def _llm_mapper_enabled() -> bool:
+    return os.environ.get("COMP_LLM_MAPPER", "1") != "0"
+
+
+def _exact_override_mappings(raw_headers: list[str], file_type: str) -> dict[str, str]:
+    """Headers that resolve to a target via an EXACT deterministic override (score >= 100)."""
+    overrides = dict(BASE_OVERRIDES)
+    overrides.update(LEASE_OVERRIDES if file_type in ("LEASE", "BOTH") else SALE_OVERRIDES)
+    result: dict[str, str] = {}
+    for raw in raw_headers:
+        cleaned = clean_header(raw)
+        for target in set(overrides.values()):
+            if _find_override(cleaned, overrides, target) >= 100.0:
+                result[raw] = target
+                break
+    return result
+
+
+def _llm_fallback(df, schema, file_type, store, raw_hash):
+    """Tier-4 LLM mapping. Returns (out_df, mappings, confidence, source) or None to fall through."""
+    if not _llm_mapper_enabled():
+        return None
+
+    raw_headers = [str(c) for c in df.columns]
+
+    if raw_hash in _LLM_MAPPING_CACHE:
+        mappings, confidence = _LLM_MAPPING_CACHE[raw_hash]
+    else:
+        # Exact-override prefilter: resolve trivial headers deterministically, send the rest to the LLM
+        override_map = _exact_override_mappings(raw_headers, file_type)
+        unresolved = [h for h in raw_headers if h not in override_map]
+        sample_rows = df[unresolved].head(5).to_dict("records") if unresolved else []
+        examples = build_examples(store, file_type)
+        try:
+            llm = llm_map_columns(unresolved, sample_rows, schema, file_type, examples)
+        except Exception:
+            return None  # fall through to embeddings/heuristic
+
+        mappings = dict(override_map)
+        mappings.update(llm["mappings"])
+        confidence = {h: 1.0 for h in override_map}
+        confidence.update(llm["confidence"])
+
+        verdict = verify_mapping(llm["mappings"], sample_rows, schema)
+        for header, adj in verdict["adjusted_confidence"].items():
+            confidence[header] = adj
+        _LLM_MAPPING_CACHE[raw_hash] = (mappings, confidence)
+
+    mappings = dedupe_mappings_by_target(mappings, raw_headers, confidence)
+    out_df = _apply_mappings(df, mappings)
+    source = "llm+corrections" if build_examples(store, file_type) else "llm"
+    return out_df, mappings, confidence, source
 
 
 def run_mapping_stage(
@@ -47,11 +120,15 @@ def run_mapping_stage(
     # Tier 1: exact hash match
     hit = tier1_exact_lookup(store, fp)
     if hit is not None:
-        out_df = _apply_mappings(df, hit.mappings)
+        mappings = dedupe_mappings_by_target(
+            _filter_to_present(hit.mappings, raw_headers),
+            raw_headers,
+        )
+        out_df = _apply_mappings(df, mappings)
         return MappingResult(
             fingerprint=fp,
-            mappings=hit.mappings,
-            confidence={h: hit.confidence for h in hit.mappings},
+            mappings=mappings,
+            confidence={h: hit.confidence for h in mappings},
             source="exact",
             similarity=1.0,
             cleaned_df=out_df,
@@ -60,7 +137,10 @@ def run_mapping_stage(
     # Tier 2: fuzzy Jaccard ≥ 0.80
     hit = tier2_fuzzy_lookup(store, fp, threshold=0.80)
     if hit is not None:
-        mappings = _filter_to_present(hit.mappings, raw_headers)
+        mappings = dedupe_mappings_by_target(
+            _filter_to_present(hit.mappings, raw_headers),
+            raw_headers,
+        )
         out_df = _apply_mappings(df, mappings)
         return MappingResult(
             fingerprint=fp,
@@ -75,7 +155,10 @@ def run_mapping_stage(
     if broker_name:
         hit = tier3_broker_lookup(store, fp, broker_name=broker_name, threshold=0.60)
         if hit is not None:
-            mappings = _filter_to_present(hit.mappings, raw_headers)
+            mappings = dedupe_mappings_by_target(
+                _filter_to_present(hit.mappings, raw_headers),
+                raw_headers,
+            )
             out_df = _apply_mappings(df, mappings)
             return MappingResult(
                 fingerprint=fp,
@@ -86,12 +169,29 @@ def run_mapping_stage(
                 cleaned_df=out_df,
             )
 
-    # Fallback: correction-weighted embedding
+    # Tier 4: LLM mapper (gpt-4o + few-shot + verifier); falls through on error/kill-switch
+    llm_result = _llm_fallback(df, schema, file_type, store, fp.raw_hash)
+    if llm_result is not None:
+        out_df, mappings, confidence, source = llm_result
+        return MappingResult(
+            fingerprint=fp,
+            mappings=mappings,
+            confidence=confidence,
+            source=source,
+            similarity=0.0,
+            cleaned_df=out_df,
+        )
+
+    # Fallback: correction-weighted embedding (offline-safe: degrades to heuristic)
     out_df, mappings, confidence = generate_standardized_df_with_hints(
         df, schema, file_type=file_type, store=store
     )
+    mapping_source = out_df.attrs.get("mapping_source")
+    mappings = dedupe_mappings_by_target(mappings, raw_headers, confidence)
+    out_df = _apply_mappings(df, mappings)
     has_corrections = _has_any_corrections(store, file_type, raw_headers)
     source = "embedding+corrections" if has_corrections else "embedding"
+    source = mapping_source or source
     return MappingResult(
         fingerprint=fp,
         mappings=mappings,
@@ -159,7 +259,15 @@ def run_geocoding_stage(
     return out
 
 
-def run_vision_pdf_stage(pdf_path: str, filename: str) -> "SegmentResult":
+def run_vision_pdf_stage(
+    pdf_path: str,
+    filename: str,
+    max_pages: int | None = None,
+    total_timeout_seconds: int | None = 120,
+    raster_timeout_seconds: int | None = 20,
+    openai_timeout_seconds: int | None = 45,
+    dpi: int = 150,
+) -> "SegmentResult":
     """Extract rows from a PDF via GPT-4o vision and return as a SegmentResult.
 
     Uses identity mapping (every column = schema column, no fingerprinting tier).
@@ -167,7 +275,14 @@ def run_vision_pdf_stage(pdf_path: str, filename: str) -> "SegmentResult":
     from engine.vision_pdf import extract_pdf_to_rows, _pdf_content_hash
     from engine.types import SegmentResult, Fingerprint, MappingResult
 
-    df, file_type = extract_pdf_to_rows(pdf_path)
+    df, file_type = extract_pdf_to_rows(
+        pdf_path,
+        max_pages=max_pages,
+        total_timeout_seconds=total_timeout_seconds,
+        raster_timeout_seconds=raster_timeout_seconds,
+        openai_timeout_seconds=openai_timeout_seconds,
+        dpi=dpi,
+    )
     pdf_hash = _pdf_content_hash(pdf_path)
     mappings = {c: c for c in df.columns}
 

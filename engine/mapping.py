@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cosine
-from difflib import get_close_matches
+from difflib import SequenceMatcher, get_close_matches
 
 from engine.openai_client import _client
 from engine.cleaning import clean_header, get_column_profile
@@ -153,6 +153,52 @@ def _find_override(cleaned_header, overrides, target_col):
     return 0.0
 
 
+def dedupe_mappings_by_target(
+    mappings: dict[str, str],
+    raw_headers: list[str] | None = None,
+    confidence: dict[str, float] | None = None,
+    allow_duplicate_targets: tuple[str, ...] = ("notes",),
+) -> dict[str, str]:
+    """Keep at most one source column per target field.
+
+    The highest-confidence source wins; ties fall back to the input header order.
+    `notes` remains multi-source because the upload flow concatenates note fields.
+    """
+    if not mappings:
+        return {}
+
+    raw_order = {str(h): i for i, h in enumerate(raw_headers or [])}
+    allowed = set(allow_duplicate_targets or ())
+    chosen: dict[str, tuple[tuple[float, int], str]] = {}
+    deduped: dict[str, str] = {}
+
+    for fallback_order, (raw, target) in enumerate(mappings.items()):
+        if not target or target in ("---", "unmapped"):
+            continue
+        if target in allowed:
+            deduped[raw] = target
+            continue
+
+        try:
+            score = float((confidence or {}).get(raw, 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+        order = raw_order.get(str(raw), fallback_order)
+        specificity = len(clean_header(raw))
+        rank = (score, specificity, -order)
+        current = chosen.get(target)
+        if current is None or rank > current[0]:
+            chosen[target] = (rank, raw)
+
+    ordered = sorted(
+        chosen.items(),
+        key=lambda item: raw_order.get(str(item[1][1]), len(raw_order)),
+    )
+    for target, (_, raw) in ordered:
+        deduped[raw] = target
+    return deduped
+
+
 def _get_schema_embeddings(schema_dict):
     """Get embeddings for schema descriptions, with caching."""
     cache_key = tuple(sorted(schema_dict.keys()))
@@ -160,6 +206,90 @@ def _get_schema_embeddings(schema_dict):
         descs = [schema_dict[k]['desc'] for k in schema_dict]
         _schema_embedding_cache[cache_key] = get_embeddings(descs)
     return _schema_embedding_cache[cache_key]
+
+
+def _token_set(text: str) -> set[str]:
+    return {tok for tok in clean_header(text).split() if tok}
+
+
+def _lexical_header_score(cleaned_header: str, target_col: str, target_desc: str) -> float:
+    """Local mapping score used when embeddings are unavailable."""
+    header_tokens = _token_set(cleaned_header)
+    schema_tokens = _token_set(f"{target_col} {target_desc}")
+    if not header_tokens or not schema_tokens:
+        return 0.0
+
+    overlap = len(header_tokens & schema_tokens) / len(header_tokens | schema_tokens)
+    target_ratio = SequenceMatcher(None, cleaned_header, clean_header(target_col)).ratio()
+    desc_ratio = SequenceMatcher(None, cleaned_header, clean_header(target_desc)).ratio() * 0.55
+    return max(overlap, target_ratio, desc_ratio)
+
+
+def _generate_standardized_df_heuristic(
+    df: pd.DataFrame,
+    schema_dict: dict,
+    file_type: str,
+    store=None,
+    threshold: float = 0.34,
+):
+    """Build editable mappings without external embedding services."""
+    raw_headers = [str(c) for c in df.columns]
+    normalized = [clean_header(h) or "unknown column" for h in raw_headers]
+    schema_cols = list(schema_dict.keys())
+
+    overrides = dict(BASE_OVERRIDES)
+    overrides.update(LEASE_OVERRIDES if file_type in ("LEASE", "lease", "BOTH", "both") else SALE_OVERRIDES)
+
+    mappings: dict[str, str] = {}
+    confidence: dict[str, float] = {}
+    for raw, cleaned in zip(raw_headers, normalized):
+        best_target = None
+        best_score = 0.0
+        profile_col = df[raw]
+        if isinstance(profile_col, pd.DataFrame):
+            profile_col = profile_col.iloc[:, 0]
+        input_type = get_column_profile(profile_col)
+
+        for target_col in schema_cols:
+            override_score = _find_override(cleaned, overrides, target_col)
+            if override_score > 0:
+                score = 1.0
+            else:
+                score = _lexical_header_score(cleaned, target_col, schema_dict[target_col]["desc"])
+                target_type = schema_dict[target_col]["type"]
+                if target_type == input_type:
+                    score += 0.10
+                elif target_type in ("numeric_money", "numeric_clean") and input_type == "text":
+                    score -= 0.08
+                elif target_type == "date" and input_type != "date":
+                    score -= 0.08
+
+            if store is not None:
+                corrections = store.get_corrections_for_context(
+                    file_type=file_type, raw_header=cleaned
+                )
+                if target_col in corrections:
+                    score += HINT_BIAS * min(corrections[target_col], 5) / 5.0
+
+            if score > best_score:
+                best_score = score
+                best_target = target_col
+
+        if best_target and best_score >= threshold:
+            mappings[raw] = best_target
+            confidence[raw] = float(round(min(best_score, 1.0), 3))
+
+    _apply_hard_overrides(raw_headers, normalized, file_type, schema_cols, mappings, confidence)
+    mappings = dedupe_mappings_by_target(mappings, raw_headers, confidence)
+
+    out = pd.DataFrame()
+    for raw, target in mappings.items():
+        col_data = df[raw]
+        if isinstance(col_data, pd.DataFrame):
+            col_data = col_data.iloc[:, 0]
+        out[target] = col_data.values
+    out.attrs["mapping_source"] = "heuristic"
+    return out, mappings, confidence
 
 
 def classify_file_type(headers, filename="", sheet_name=None):
@@ -212,9 +342,21 @@ def generate_standardized_df(df, schema_dict, file_type, threshold=0.55):
     else:
         overrides.update(SALE_OVERRIDES)
 
-    # Get embeddings
-    head_vecs = get_embeddings(clean_headers)
-    target_vecs = _get_schema_embeddings(schema_dict)
+    # Get embeddings; fall back to local heuristics when credentials/services are unavailable.
+    try:
+        head_vecs = get_embeddings(clean_headers)
+        target_vecs = _get_schema_embeddings(schema_dict)
+    except Exception:
+        out, raw_mappings, raw_confidence = _generate_standardized_df_heuristic(
+            df,
+            schema_dict,
+            file_type=file_type,
+            store=None,
+            threshold=0.34,
+        )
+        target_mappings = {target: raw for raw, target in raw_mappings.items()}
+        target_confidence = {target: raw_confidence.get(raw, 0.0) for raw, target in raw_mappings.items()}
+        return out, target_confidence, target_mappings
 
     n_targets = len(target_cols)
     n_inputs = len(input_headers)
@@ -321,18 +463,34 @@ HINT_BIAS = 0.10  # cost reduction per confirmed correction (capped at 5 hits)
 def _apply_hard_overrides(raw_headers, normalized, file_type, schema_cols, mappings, confidence):
     """Apply BASE_OVERRIDES + file-type overrides on top of existing mappings.
 
-    Walks every (raw_header, schema_col) pair; when _find_override returns a
-    positive score it forces mappings[raw_header] = schema_col at confidence 1.0.
+    Hard override aliases still compete per target: if both "Rate" and
+    "Rate PSF" point to rate_psf, only the more specific match survives.
     """
     overrides = dict(BASE_OVERRIDES)
     overrides.update(LEASE_OVERRIDES if file_type in ("LEASE", "lease") else SALE_OVERRIDES)
+
+    best_by_target: dict[str, tuple[float, int, str]] = {}
     for i, raw in enumerate(raw_headers):
         cleaned = normalized[i]
+        best_for_raw: tuple[float, str] | None = None
         for target_col in schema_cols:
-            if _find_override(cleaned, overrides, target_col):
-                mappings[raw] = target_col
-                confidence[raw] = 1.0
-                break
+            score = _find_override(cleaned, overrides, target_col)
+            if score and (best_for_raw is None or score > best_for_raw[0]):
+                best_for_raw = (score, target_col)
+        if best_for_raw is None:
+            continue
+        score, target_col = best_for_raw
+        current = best_by_target.get(target_col)
+        if current is None or (score, -i) > (current[0], -current[1]):
+            best_by_target[target_col] = (score, i, raw)
+
+    for target_col, (_, _, raw) in best_by_target.items():
+        for existing_raw, existing_target in list(mappings.items()):
+            if existing_raw == raw or existing_target == target_col:
+                mappings.pop(existing_raw, None)
+                confidence.pop(existing_raw, None)
+        mappings[raw] = target_col
+        confidence[raw] = 1.0
 
 
 def generate_standardized_df_with_hints(
@@ -357,16 +515,27 @@ def generate_standardized_df_with_hints(
 
     schema_cols = list(schema_dict.keys())
 
-    header_embeds = get_embeddings(normalized)
-    schema_embeds = _get_schema_embeddings(schema_dict)
+    try:
+        header_embeds = get_embeddings(normalized)
+        schema_embeds = _get_schema_embeddings(schema_dict)
+    except Exception:
+        return _generate_standardized_df_heuristic(
+            df,
+            schema_dict,
+            file_type=file_type,
+            store=store,
+            threshold=0.34,
+        )
 
-    header_arr = np.array(header_embeds)
-    schema_arr = np.array(schema_embeds)
+    header_arr = np.nan_to_num(np.array(header_embeds, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+    schema_arr = np.nan_to_num(np.array(schema_embeds, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
 
     # cosine similarity → cost (1 - sim)
     norms_h = np.linalg.norm(header_arr, axis=1, keepdims=True) + 1e-12
     norms_s = np.linalg.norm(schema_arr, axis=1, keepdims=True) + 1e-12
-    sim = (header_arr / norms_h) @ (schema_arr / norms_s).T   # shape (n_headers, n_schema)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        sim = (header_arr / norms_h) @ (schema_arr / norms_s).T   # shape (n_headers, n_schema)
+    sim = np.nan_to_num(sim, nan=0.0, posinf=1.0, neginf=-1.0)
     cost = 1.0 - sim
 
     # Apply hint bias — reduce cost for correction-confirmed assignments
@@ -399,6 +568,7 @@ def generate_standardized_df_with_hints(
 
     # Hard overrides take precedence over embedding assignment
     _apply_hard_overrides(raw_headers, normalized, file_type, schema_cols, mappings, confidence)
+    mappings = dedupe_mappings_by_target(mappings, raw_headers, confidence)
 
     # Build output DataFrame
     out = pd.DataFrame()

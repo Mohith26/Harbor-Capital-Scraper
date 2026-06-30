@@ -116,3 +116,13 @@ async def health():
 @app.get("/")
 async def root():
     return RedirectResponse("/database", status_code=303)
+
+
+@app.get("/stats")
+async def stats_alias():
+    return RedirectResponse("/analytics", status_code=303)
+
+
+@app.get("/comp-finder")
+async def comp_finder_alias():
+    return RedirectResponse("/finder", status_code=303)

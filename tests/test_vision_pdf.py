@@ -14,14 +14,19 @@ def test_extract_pdf_returns_dataframe_from_vision_response():
     )))]
 
     with patch("engine.vision_pdf._client") as mock_client, \
+         patch("engine.vision_pdf.pdfinfo_from_path") as mock_info, \
          patch("engine.vision_pdf.convert_from_path") as mock_convert:
+        mock_info.return_value = {"Pages": 1}
         mock_convert.return_value = [MagicMock()]  # one fake page image
-        mock_client.return_value.chat.completions.create.return_value = fake_resp
+        client = mock_client.return_value
+        client.with_options.return_value = client
+        client.chat.completions.create.return_value = fake_resp
         df, file_type = extract_pdf_to_rows("fake.pdf")
 
     assert file_type == "sale"
     assert len(df) == 1
-    assert df.iloc[0]["property_name"] == "X"
+    assert df.iloc[0]["address"] == "123 A St, Houston, TX"
+    assert df.iloc[0]["building_size"] == 5000
 
 
 def test_extract_pdf_handles_multipage_and_concats():
@@ -37,11 +42,37 @@ def test_extract_pdf_handles_multipage_and_concats():
     )))]
 
     with patch("engine.vision_pdf._client") as mock_client, \
+         patch("engine.vision_pdf.pdfinfo_from_path") as mock_info, \
          patch("engine.vision_pdf.convert_from_path") as mock_convert:
-        mock_convert.return_value = [MagicMock(), MagicMock()]
-        mock_client.return_value.chat.completions.create.side_effect = [page_resp_1, page_resp_2]
+        mock_info.return_value = {"Pages": 2}
+        mock_convert.side_effect = [[MagicMock()], [MagicMock()]]
+        client = mock_client.return_value
+        client.with_options.return_value = client
+        client.chat.completions.create.side_effect = [page_resp_1, page_resp_2]
         df, file_type = extract_pdf_to_rows("fake.pdf")
 
     assert file_type == "lease"
     assert len(df) == 2
-    assert set(df["property_name"]) == {"A", "B"}
+    assert set(df["address"]) == {"A", "B"}
+    assert set(df["leased_sf"]) == {1000, 2000}
+
+
+def test_extract_pdf_converts_page_by_page_with_max_pages():
+    fake_resp = MagicMock()
+    fake_resp.choices = [MagicMock(message=MagicMock(content='{"file_type": "lease", "rows": []}'))]
+
+    with patch("engine.vision_pdf._client") as mock_client, \
+         patch("engine.vision_pdf.pdfinfo_from_path") as mock_info, \
+         patch("engine.vision_pdf.convert_from_path") as mock_convert:
+        mock_info.return_value = {"Pages": 5}
+        mock_convert.side_effect = [[MagicMock()], [MagicMock()]]
+        client = mock_client.return_value
+        client.with_options.return_value = client
+        client.chat.completions.create.return_value = fake_resp
+
+        df, _ = extract_pdf_to_rows("fake.pdf", max_pages=2)
+
+    assert mock_convert.call_count == 2
+    assert mock_convert.call_args_list[0].kwargs["first_page"] == 1
+    assert mock_convert.call_args_list[1].kwargs["first_page"] == 2
+    assert df.attrs["warnings"] == ["Processing first 2 of 5 PDF pages."]

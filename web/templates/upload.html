@@ -5,11 +5,15 @@
 <div class="max-w-4xl mx-auto">
     <!-- Drop Zone -->
     <div id="upload-zone" x-data="{dragging: false}"
+         role="button" tabindex="0"
+         aria-label="Upload a comp file"
          class="drop-zone" :class="dragging && 'dragover'"
          @dragover.prevent="dragging = true"
          @dragleave.prevent="dragging = false"
          @drop.prevent="dragging = false; handleDrop($event)"
-         @click="$refs.fileInput.click()">
+         @click="$refs.fileInput.click()"
+         @keydown.enter.prevent="$refs.fileInput.click()"
+         @keydown.space.prevent="$refs.fileInput.click()">
         <svg class="w-12 h-12 mx-auto mb-3 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/>
         </svg>

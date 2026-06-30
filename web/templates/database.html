@@ -20,6 +20,7 @@
                class="form-input pl-8 w-64 text-sm" id="search-input"
                hx-get="/database/table" hx-trigger="keyup changed delay:300ms"
                hx-target="#table-data" hx-include="this"
+               hx-vals='{"type": "{{ comp_type }}"}'
                name="search" value="{{ filters.get('search', '') }}"
                data-db-search-autocomplete
                data-comp-type="{{ comp_type }}"
@@ -70,7 +71,7 @@
 <div class="mt-4" x-data="{view: 'table'}">
     <div class="flex gap-2 mb-3">
         <button class="type-toggle-btn" :class="view === 'table' && 'active'" @click="view = 'table'">Table</button>
-        <button class="type-toggle-btn" :class="view === 'map' && 'active'" @click="view = 'map'; loadMap()">Map</button>
+        <button class="type-toggle-btn" :class="view === 'map' && 'active'" @click="view = 'map'; $nextTick(() => loadMap())">Map</button>
     </div>
 
     <!-- Table View -->
@@ -94,6 +95,7 @@
     <!-- Map View -->
     <div x-show="view === 'map'" style="display: none;">
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+            <div id="database-map-status" class="text-sm text-gray-500 mb-2"></div>
             <div id="database-map" style="height: 500px; border-radius: 8px;"></div>
         </div>
     </div>
@@ -127,25 +129,53 @@ function deleteSelected() {
     fetch('/database/records', {
         method: 'DELETE',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ids: ids, type: '{{ comp_type }}'})
-    }).then(() => { switchType('{{ comp_type }}'); });
+        body: JSON.stringify({ids: ids, type: currentDbType()})
+    }).then(() => { switchType(currentDbType()); });
 }
 
 var dbMap = null;
+function currentDbType() {
+    return new URLSearchParams(window.location.search).get('type') || '{{ comp_type }}';
+}
+
 function loadMap() {
-    fetch('/database/map-data?type={{ comp_type }}')
-        .then(function(r) { return r.json(); })
+    var mapEl = document.getElementById('database-map');
+    var statusEl = document.getElementById('database-map-status');
+    if (typeof destroyMap === 'function') {
+        destroyMap('database-map');
+    } else if (dbMap) {
+        try { dbMap.remove(); } catch (e) {}
+    }
+    dbMap = null;
+    if (mapEl) mapEl.innerHTML = '';
+    if (statusEl) statusEl.textContent = 'Loading map...';
+    var params = _collectFilterParams();
+    fetch('/database/map-data?' + params.toString())
+        .then(function(r) {
+            if (!r.ok) throw new Error('Map data request failed: ' + r.status);
+            return r.json();
+        })
         .then(function(points) {
-            if (dbMap) { dbMap.remove(); dbMap = null; }
+            if (!Array.isArray(points)) throw new Error('Map data response was not a list');
+            if (mapEl) mapEl.innerHTML = '';
             dbMap = initMap('database-map', [29.76, -95.37], 10);
-            addMarkers(dbMap, points);
-            setTimeout(function() { dbMap.invalidateSize(); }, 100);
+            var markers = addMarkers(dbMap, points);
+            if (statusEl) {
+                statusEl.textContent = markers.length
+                    ? 'Showing ' + markers.length + ' mapped propert' + (markers.length === 1 ? 'y.' : 'ies.')
+                    : 'No properties with coordinates match the current view/filters.';
+            }
+            setTimeout(function() { dbMap.invalidateSize(); }, 150);
+        })
+        .catch(function(err) {
+            if (statusEl) statusEl.textContent = 'Map failed to load. Please try again.';
+            if (window.console) console.error(err);
         });
 }
 
 function _collectFilterParams() {
     var params = new URLSearchParams();
-    params.set('type', '{{ comp_type }}');
+    params.set('type', currentDbType());
     var panel = document.getElementById('filter-panel-body');
     if (!panel) return params;
     ['city', 'zip_code'].forEach(function(group) {
@@ -172,11 +202,14 @@ function applyFilters() {
     htmx.ajax('GET', '/database/table?' + qs, {target: '#table-data', swap: 'innerHTML'});
     htmx.ajax('GET', '/database/metrics?' + qs, {target: '#metrics-container', swap: 'innerHTML'});
     history.replaceState(null, '', '/database?' + qs);
+    if (dbMap) {
+        setTimeout(function() { loadMap(); }, 0);
+    }
     document.dispatchEvent(new CustomEvent('toggle-filters'));
 }
 
 function clearFilters() {
-    window.location.href = '/database?type={{ comp_type }}';
+    window.location.href = '/database?type=' + encodeURIComponent(currentDbType());
 }
 
 function removeFilter(key) {

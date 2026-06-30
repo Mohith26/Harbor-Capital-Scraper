@@ -1,7 +1,11 @@
 """Tests for generate_standardized_df_with_hints in engine/mapping.py."""
 import pandas as pd
 import pytest
-from engine.mapping import generate_standardized_df_with_hints, LEASE_SCHEMA
+from engine.mapping import (
+    _apply_hard_overrides,
+    generate_standardized_df_with_hints,
+    LEASE_SCHEMA,
+)
 from learning.fakes import FakeLearningStore
 
 
@@ -75,3 +79,40 @@ def test_hint_returns_raw_header_keyed_mappings():
     )
     for k in mappings:
         assert k in df.columns, f"mapping key '{k}' not a raw header"
+
+
+def test_hard_overrides_keep_best_source_per_target():
+    raw_headers = ["Rate", "Rate PSF"]
+    normalized = ["rate", "rate psf"]
+    mappings = {"Rate": "tenant_name"}
+    confidence = {"Rate": 0.5}
+
+    _apply_hard_overrides(
+        raw_headers,
+        normalized,
+        "LEASE",
+        list(LEASE_SCHEMA.keys()),
+        mappings,
+        confidence,
+    )
+
+    assert mappings["Rate PSF"] == "rate_psf"
+    assert list(mappings.values()).count("rate_psf") == 1
+
+
+def test_hard_overrides_choose_exact_target_before_schema_order():
+    raw_headers = ["Rate Type"]
+    normalized = ["rate type"]
+    mappings = {}
+    confidence = {}
+
+    _apply_hard_overrides(
+        raw_headers,
+        normalized,
+        "LEASE",
+        list(LEASE_SCHEMA.keys()),
+        mappings,
+        confidence,
+    )
+
+    assert mappings["Rate Type"] == "lease_type"

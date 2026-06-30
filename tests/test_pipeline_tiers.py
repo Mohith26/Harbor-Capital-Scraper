@@ -26,6 +26,30 @@ def test_exact_tier_skips_embeddings():
     assert result.mappings.get("Rent PSF") == "rate_psf"
 
 
+def test_exact_tier_dedupes_duplicate_target_mappings():
+    store = FakeLearningStore()
+    headers = ["Property Name", "Rate", "Rate PSF", "SF"]
+    df = pd.DataFrame({h: ["x"] for h in headers})
+
+    fp = compute_fingerprint(headers, "lease.xlsx", None, "LEASE")
+    store.record_accepted_mapping(
+        fp,
+        {
+            "Property Name": "address",
+            "Rate": "rate_psf",
+            "Rate PSF": "rate_psf",
+            "SF": "leased_sf",
+        },
+        confirmed_by="user@test",
+    )
+
+    result = run_mapping_stage(df, filename="lease.xlsx", sheet_name=None, store=store)
+
+    assert result.source == "exact"
+    assert list(result.mappings.values()).count("rate_psf") == 1
+    assert result.mappings.get("Rate PSF") == "rate_psf"
+
+
 def test_no_match_falls_back_to_embeddings():
     """Empty store causes fallback to embedding pipeline."""
     store = FakeLearningStore()
@@ -38,6 +62,32 @@ def test_no_match_falls_back_to_embeddings():
     assert "Rent PSF" in result.mappings
 
 
+def test_missing_embeddings_falls_back_to_heuristic_mapping(monkeypatch):
+    """Uploads stay editable when OpenAI embeddings are unavailable."""
+    import engine.mapping
+
+    def _missing_embeddings(_texts):
+        raise RuntimeError("missing credentials")
+
+    monkeypatch.setattr(engine.mapping, "get_embeddings", _missing_embeddings)
+    store = FakeLearningStore()
+    df = pd.DataFrame({
+        "Property": ["123 Main St"],
+        "Tenant": ["Acme"],
+        "Rent PSF": [12.5],
+        "Lease Date": ["2024-01-01"],
+        "SF": [10000],
+    })
+
+    result = run_mapping_stage(df, filename="lease.csv", sheet_name=None, store=store)
+
+    assert result.source == "heuristic"
+    assert result.mappings["Property"] == "address"
+    assert result.mappings["Tenant"] == "tenant_name"
+    assert result.mappings["Rent PSF"] == "rate_psf"
+    assert result.mappings["SF"] == "leased_sf"
+
+
 def test_result_is_mapping_result_type():
     """run_mapping_stage returns a MappingResult with all required fields."""
     from engine.types import MappingResult
@@ -48,4 +98,4 @@ def test_result_is_mapping_result_type():
     assert result.fingerprint is not None
     assert isinstance(result.mappings, dict)
     assert isinstance(result.confidence, dict)
-    assert result.source in {"exact", "fuzzy", "broker", "embedding", "embedding+corrections"}
+    assert result.source in {"exact", "fuzzy", "broker", "embedding", "embedding+corrections", "heuristic"}

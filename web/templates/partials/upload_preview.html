@@ -1,19 +1,115 @@
+<style>
+    .upload-segment-tabs {
+        display: flex;
+        align-items: stretch;
+        flex-wrap: wrap;
+        gap: 0;
+        border-bottom: 1px solid #e5e7eb;
+        padding-top: 6px;
+        width: 100%;
+    }
+    .upload-segment-tab-wrap {
+        position: relative;
+        flex: 1 1 96px;
+        min-width: 78px;
+        max-width: 132px;
+    }
+    .upload-segment-tab {
+        width: 100%;
+        min-height: 76px;
+        padding: 9px 28px 10px 12px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        text-align: center;
+        white-space: normal;
+        line-height: 1.25;
+        font-size: 13px;
+        font-weight: 500;
+        color: #666;
+        cursor: pointer;
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid transparent;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .upload-segment-tab:hover { color: #333; background: #fafafa; }
+    .upload-segment-tab.active { color: #F5A623; border-bottom-color: #F5A623; }
+    .upload-segment-tab.voided { color: #9ca3af; background: #f9fafb; }
+    .upload-segment-menu-trigger {
+        position: absolute;
+        top: 8px;
+        right: 6px;
+        width: 22px;
+        height: 22px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: #8a8f98;
+        cursor: pointer;
+    }
+    .upload-segment-menu-trigger:hover { background: #f3f4f6; color: #333; }
+    .upload-segment-menu-trigger svg {
+        width: 4px;
+        height: 16px;
+        fill: currentColor;
+        display: block;
+    }
+    .upload-segment-menu {
+        position: absolute;
+        top: calc(100% + 4px);
+        right: 6px;
+        z-index: 20;
+        min-width: 120px;
+        padding: 4px;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        background: #fff;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+    }
+</style>
 <script>window._previewState = {{ preview_state|tojson|safe }};</script>
 <div class="space-y-6" x-data="uploadPreview(window._previewState)">
     <div class="flex items-center justify-between">
         <div>
             <h3 class="font-semibold text-sm text-gray-700">{{ filename }}</h3>
-            <p class="text-xs text-gray-500" x-text="segments.length + ' segment' + (segments.length > 1 ? 's' : '') + ' detected'"></p>
+            <p class="text-xs text-gray-500" x-text="segmentSummary()"></p>
         </div>
     </div>
 
     <!-- Segment tabs -->
     <template x-if="segments.length > 1">
-        <div class="flex gap-1 border-b border-gray-200">
+        <div class="upload-segment-tabs">
             <template x-for="(seg, idx) in segments" :key="idx">
-                <button class="chart-tab" :class="activeSegment === idx && 'active'"
-                        @click="activeSegment = idx"
-                        x-text="(seg.sheet_name || 'Segment') + ' ' + (idx + 1)"></button>
+                <div class="upload-segment-tab-wrap">
+                    <button class="upload-segment-tab" :class="{'active': activeSegment === idx, 'voided': seg.voided}"
+                            @click="activeSegment = idx; menuSegment = null"
+                            x-text="tabLabel(seg, idx)"></button>
+                    <button type="button"
+                            x-show="activeSegment === idx"
+                            class="upload-segment-menu-trigger"
+                            aria-label="Sheet actions"
+                            @click.stop="menuSegment = menuSegment === idx ? null : idx">
+                        <svg viewBox="0 0 4 16" aria-hidden="true">
+                            <circle cx="2" cy="3" r="1.4"></circle>
+                            <circle cx="2" cy="8" r="1.4"></circle>
+                            <circle cx="2" cy="13" r="1.4"></circle>
+                        </svg>
+                    </button>
+                    <div x-show="menuSegment === idx"
+                         @click.away="menuSegment = null"
+                         x-transition
+                         class="upload-segment-menu">
+                        <button type="button"
+                                class="w-full text-left px-3 py-2 text-xs font-semibold rounded hover:bg-red-50"
+                                :class="seg.voided ? 'text-gray-700 hover:bg-gray-50' : 'text-red-700'"
+                                @click="toggleVoid(idx); menuSegment = null"
+                                x-text="seg.voided ? 'Restore Sheet' : 'Void Sheet'"></button>
+                    </div>
+                </div>
             </template>
         </div>
     </template>
@@ -22,93 +118,112 @@
         <div x-show="activeSegment === segIdx">
             <!-- Mapping source badge -->
             <div class="flex items-center gap-2 mb-3">
-                <span class="text-xs px-2 py-1 rounded-full"
-                      :class="{
-                          'bg-green-100 text-green-700': seg.source === 'exact',
-                          'bg-blue-100 text-blue-700': seg.source === 'fuzzy',
-                          'bg-purple-100 text-purple-700': seg.source === 'broker',
-                          'bg-yellow-100 text-yellow-700': !['exact','fuzzy','broker'].includes(seg.source),
-                      }"
-                      x-text="seg.source + ' mapping (' + seg.row_count + ' rows)'"></span>
-                <span class="text-xs text-gray-500" x-text="seg.file_type.toUpperCase()"></span>
-            </div>
-
-            <!-- Schema field chips (draggable) -->
-            <div class="bg-amber-50 rounded-lg border border-amber-200 p-3 mb-3">
-                <div class="text-xs font-semibold text-amber-800 mb-2">
-                    Drag a field onto a column header to map it — or use the dropdowns below.
+                <div class="flex items-center gap-2">
+                    <span class="text-xs px-2 py-1 rounded-full"
+                          :class="{
+                              'bg-gray-100 text-gray-500': seg.voided,
+                              'bg-green-100 text-green-700': !seg.voided && seg.source === 'exact',
+                              'bg-blue-100 text-blue-700': !seg.voided && seg.source === 'fuzzy',
+                              'bg-purple-100 text-purple-700': !seg.voided && seg.source === 'broker',
+                              'bg-yellow-100 text-yellow-700': !seg.voided && !['exact','fuzzy','broker'].includes(seg.source),
+                          }"
+                          x-text="seg.voided ? 'voided sheet (' + seg.row_count + ' rows)' : seg.source + ' mapping (' + seg.row_count + ' rows)'"></span>
+                    <span class="text-xs text-gray-500" x-text="seg.file_type.toUpperCase()"></span>
                 </div>
-                <div class="flex flex-wrap gap-1.5">
-                    <span class="inline-block px-2 py-1 bg-gray-100 border border-gray-400 rounded text-xs font-medium text-gray-600 cursor-grab select-none hover:bg-gray-200"
-                          draggable="true"
-                          @dragstart="dragField = '__unmapped__'"
-                          @dragend="dragField = null">
-                        ✕ Unmapped
-                    </span>
-                    <template x-for="field in schemaFields" :key="field">
-                        <span class="inline-block px-2 py-1 bg-white border border-amber-300 rounded text-xs font-medium cursor-grab select-none hover:bg-amber-100"
-                              :class="isFieldAssigned(field) ? 'opacity-50 text-gray-500' : 'text-[#333]'"
-                              draggable="true"
-                              @dragstart="dragField = field"
-                              @dragend="dragField = null"
-                              x-text="field + (isFieldAssigned(field) ? ' ✓' : '')"></span>
+            </div>
+            <template x-if="seg.warnings && seg.warnings.length">
+                <div class="bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg p-3 mb-3 text-xs">
+                    <template x-for="warning in seg.warnings" :key="warning">
+                        <div x-text="warning"></div>
                     </template>
                 </div>
-            </div>
+            </template>
+            <template x-if="seg.voided">
+                <div class="bg-gray-50 border border-gray-200 text-gray-600 rounded-lg p-4 mb-4 text-sm">
+                    This sheet is voided and will not be mapped, geocoded, saved, or used for learning.
+                </div>
+            </template>
 
-            <!-- Raw data preview with drop zones -->
-            <div class="bg-white rounded-lg border border-gray-200 overflow-x-auto mb-4">
-                <table class="text-xs w-full">
-                    <thead>
-                        <tr class="bg-gray-50">
-                            <template x-for="header in seg.raw_headers" :key="header">
-                                <th class="px-3 py-2 text-left font-medium text-gray-600 whitespace-nowrap"
-                                    :class="{'bg-amber-100': dragOverHeader === header + '::' + segIdx}"
-                                    @dragover.prevent="dragOverHeader = header + '::' + segIdx"
-                                    @dragleave="dragOverHeader = null"
-                                    @drop.prevent="setMapping(segIdx, header, dragField); dragOverHeader = null; dragField = null">
-                                    <span x-text="header"></span>
-                                    <template x-if="seg.mappings[header] && seg.mappings[header] !== '---'">
-                                        <span class="badge-mapped ml-1" x-text="seg.mappings[header]"></span>
-                                    </template>
-                                    <template x-if="!seg.mappings[header] || seg.mappings[header] === '---'">
-                                        <span class="badge-unmapped ml-1">unmapped</span>
-                                    </template>
-                                </th>
-                            </template>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <template x-for="(row, rowIdx) in seg.preview_rows" :key="rowIdx">
-                            <tr class="border-t border-gray-100">
-                                <template x-for="header in seg.raw_headers" :key="header">
-                                    <td class="px-3 py-1.5 text-gray-700 whitespace-nowrap" x-text="row[header] || ''"></td>
-                                </template>
-                            </tr>
-                        </template>
-                    </tbody>
-                </table>
-            </div>
-
-            <!-- Fallback dropdowns -->
-            <details class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
-                <summary class="text-sm font-semibold cursor-pointer">Column Mapping (dropdown editor)</summary>
-                <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
-                    <template x-for="header in seg.raw_headers" :key="header">
-                        <div class="flex flex-col gap-1">
-                            <label class="text-xs text-gray-500 truncate" :title="header" x-text="header"></label>
-                            <select class="form-input text-xs py-1"
-                                    :value="seg.mappings[header] || '---'"
-                                    @change="setMapping(segIdx, header, $event.target.value)">
-                                <option value="---">-- skip --</option>
-                                <template x-for="field in schemaFields" :key="field">
-                                    <option :value="field" x-text="field"></option>
-                                </template>
-                            </select>
+            <template x-if="!seg.voided">
+                <div>
+                    <!-- Schema field chips (draggable) -->
+                    <div class="bg-amber-50 rounded-lg border border-amber-200 p-3 mb-3">
+                        <div class="text-xs font-semibold text-amber-800 mb-2">
+                            Drag a field onto a column header to map it — or use the dropdowns below.
                         </div>
-                    </template>
+                        <div class="flex flex-wrap gap-1.5">
+                            <span class="inline-block px-2 py-1 bg-gray-100 border border-gray-400 rounded text-xs font-medium text-gray-600 cursor-grab select-none hover:bg-gray-200"
+                                  draggable="true"
+                                  @dragstart="dragField = '__unmapped__'"
+                                  @dragend="dragField = null">
+                                ✕ Unmapped
+                            </span>
+                            <template x-for="field in schemaFieldsFor(segIdx)" :key="field">
+                                <span class="inline-block px-2 py-1 bg-white border border-amber-300 rounded text-xs font-medium cursor-grab select-none hover:bg-amber-100"
+                                      :class="isFieldAssigned(segIdx, field) ? 'opacity-50 text-gray-500' : 'text-[#333]'"
+                                      draggable="true"
+                                      @dragstart="dragField = field"
+                                      @dragend="dragField = null"
+                                      x-text="field + (isFieldAssigned(segIdx, field) ? ' ✓' : '')"></span>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Raw data preview with drop zones -->
+                    <div class="bg-white rounded-lg border border-gray-200 overflow-x-auto mb-4">
+                        <table class="text-xs w-full">
+                            <thead>
+                                <tr class="bg-gray-50">
+                                    <template x-for="header in seg.raw_headers" :key="header">
+                                        <th class="px-3 py-2 text-left font-medium text-gray-600 whitespace-nowrap"
+                                            :class="{'bg-amber-100': dragOverHeader === header + '::' + segIdx}"
+                                            @dragover.prevent="dragOverHeader = header + '::' + segIdx"
+                                            @dragleave="dragOverHeader = null"
+                                            @drop.prevent="setMapping(segIdx, header, dragField); dragOverHeader = null; dragField = null">
+                                            <span x-text="header"></span>
+                                            <template x-if="seg.mappings[header] && seg.mappings[header] !== '---'">
+                                                <span class="badge-mapped ml-1" x-text="seg.mappings[header]"></span>
+                                            </template>
+                                            <template x-if="!seg.mappings[header] || seg.mappings[header] === '---'">
+                                                <span class="badge-unmapped ml-1">unmapped</span>
+                                            </template>
+                                        </th>
+                                    </template>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="(row, rowIdx) in seg.preview_rows" :key="rowIdx">
+                                    <tr class="border-t border-gray-100">
+                                        <template x-for="header in seg.raw_headers" :key="header">
+                                            <td class="px-3 py-1.5 text-gray-700 whitespace-nowrap" x-text="row[header] || ''"></td>
+                                        </template>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Fallback dropdowns -->
+                    <details class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+                        <summary class="text-sm font-semibold cursor-pointer">Column Mapping (dropdown editor)</summary>
+                        <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
+                            <template x-for="header in seg.raw_headers" :key="header">
+                                <div class="flex flex-col gap-1">
+                                    <label class="text-xs text-gray-500 truncate" :title="header" x-text="header"></label>
+                                    <select class="form-input text-xs py-1"
+                                            :value="seg.mappings[header] || '---'"
+                                            @change="setMapping(segIdx, header, $event.target.value)">
+                                        <option value="---">-- skip --</option>
+                                        <template x-for="field in schemaFieldsFor(segIdx)" :key="field">
+                                            <option :value="field" x-text="field"></option>
+                                        </template>
+                                    </select>
+                                </div>
+                            </template>
+                        </div>
+                    </details>
                 </div>
-            </details>
+            </template>
         </div>
     </template>
 
@@ -125,9 +240,22 @@
 
     <!-- Action Buttons -->
     <div class="flex gap-3">
-        <button class="btn-primary" @click="startGeocode()">Geocode & Save</button>
+        <button class="btn-primary"
+                @click="startGeocode()"
+                :disabled="geocoding || activeSegments().length === 0"
+                :class="(geocoding || activeSegments().length === 0) ? 'opacity-60 cursor-not-allowed' : ''">
+            <span x-text="geocoding ? 'Geocoding & Saving...' : 'Geocode & Save'"></span>
+        </button>
         <button class="btn-outline" @click="cancel()">Cancel</button>
     </div>
+    <template x-if="activeSegments().length === 0">
+        <div class="bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg p-3 text-sm">
+            Restore at least one sheet before saving.
+        </div>
+    </template>
+    <template x-if="errorMessage">
+        <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm" x-text="errorMessage"></div>
+    </template>
 
     <!-- Geocoding Progress -->
     <div x-show="geocoding" style="display: none;">
@@ -145,18 +273,49 @@
 function uploadPreview(initial) {
     return {
         segments: initial.segments,
-        schemaFields: initial.schemaFields,
+        schemaFields: initial.schemaFields || [],
         jobId: initial.jobId,
         activeSegment: 0,
+        menuSegment: null,
         dragField: null,
         dragOverHeader: null,
         brokerName: initial.brokerName || '',
         geocoding: false,
         geocodePct: 0,
         geocodeStatus: 'Starting...',
+        errorMessage: '',
+
+        activeSegments() {
+            return this.segments.filter(s => !s.voided);
+        },
+
+        segmentSummary() {
+            const total = this.segments.length;
+            const voided = total - this.activeSegments().length;
+            const base = total + ' segment' + (total !== 1 ? 's' : '') + ' detected';
+            return voided ? base + ' - ' + voided + ' voided' : base;
+        },
+
+        tabLabel(seg, idx) {
+            if (seg.voided) return 'Voided (' + (idx + 1) + ')';
+            return (seg.sheet_name || 'Segment') + ' ' + (idx + 1);
+        },
+
+        toggleVoid(segIdx) {
+            const seg = this.segments[segIdx];
+            seg.voided = !seg.voided;
+            this.dragField = null;
+            this.dragOverHeader = null;
+            if (this.activeSegments().length > 0) this.errorMessage = '';
+        },
+
+        voidedSegmentKeys() {
+            return this.segments.filter(s => s.voided).map(s => s.segment_key);
+        },
 
         setMapping(segIdx, header, field) {
             const seg = this.segments[segIdx];
+            if (seg.voided) return;
             if (!seg.mappings) seg.mappings = {};
 
             // Unmapped chip clears this column's mapping
@@ -180,14 +339,24 @@ function uploadPreview(initial) {
             seg.mappings[header] = field;
         },
 
-        isFieldAssigned(field) {
+        schemaFieldsFor(segIdx) {
+            const seg = this.segments[segIdx];
+            return (seg && seg.schema_fields && seg.schema_fields.length) ? seg.schema_fields : this.schemaFields;
+        },
+
+        isFieldAssigned(segIdx, field) {
             if (field === 'notes') return false;  // notes allows multiple, never mark as assigned
-            const seg = this.segments[this.activeSegment];
+            const seg = this.segments[segIdx];
             if (!seg || !seg.mappings) return false;
             return Object.values(seg.mappings).includes(field);
         },
 
         startGeocode() {
+            this.errorMessage = '';
+            if (this.activeSegments().length === 0) {
+                this.errorMessage = 'Restore at least one sheet before saving.';
+                return;
+            }
             this.geocoding = true;
             this.geocodePct = 0;
             this.geocodeStatus = 'Submitting mappings...';
@@ -197,26 +366,42 @@ function uploadPreview(initial) {
                 job_id: this.jobId,
                 broker_name: this.brokerName,
                 final_mappings: Object.fromEntries(this.segments.map(s => [s.segment_key, s.mappings || {}])),
+                voided_segment_keys: this.voidedSegmentKeys(),
             };
 
             fetch('/upload/apply-mappings', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(mappingsPayload),
-            }).then(r => r.json()).then(data => {
-                if (data.error) { alert('Error: ' + data.error); this.geocoding = false; return; }
+            }).then(r => {
+                if (!r.ok) throw new Error('Mapping update failed (' + r.status + ').');
+                return r.json();
+            }).then(data => {
+                if (data.error) { this.errorMessage = data.error; this.geocoding = false; return; }
                 // 2. Kick off geocoding
                 this.geocodeStatus = 'Geocoding...';
                 const fd = new FormData();
                 fd.append('job_id', this.jobId);
                 fd.append('broker_name', this.brokerName);
                 return fetch('/upload/geocode', { method: 'POST', body: fd });
-            }).then(r => r && r.json()).then(data => {
+            }).then(r => {
+                if (!r) return null;
+                if (!r.ok) throw new Error('Geocoding request failed (' + r.status + ').');
+                return r.json();
+            }).then(data => {
                 if (!data) return;
+                if (data.error) { this.errorMessage = data.error; this.geocoding = false; return; }
                 // 3. Listen to SSE
                 const es = new EventSource('/upload/geocode-stream?job_id=' + this.jobId);
                 es.onmessage = (e) => {
                     const d = JSON.parse(e.data);
+                    if (d.error) {
+                        es.close();
+                        this.geocoding = false;
+                        this.geocodeStatus = d.error;
+                        this.errorMessage = 'Geocoding failed: ' + d.error;
+                        return;
+                    }
                     this.geocodePct = d.pct;
                     this.geocodeStatus = d.current + '/' + d.total + ' — ' + (d.address || '');
                     if (d.done) {
@@ -226,13 +411,25 @@ function uploadPreview(initial) {
                         const sf = new FormData();
                         sf.append('job_id', this.jobId);
                         fetch('/upload/save', { method: 'POST', body: sf })
-                            .then(r => r.text())
-                            .then(html => { document.getElementById('upload-preview').innerHTML = html; });
+                            .then(r => {
+                                if (!r.ok) throw new Error('Save failed (' + r.status + ').');
+                                return r.text();
+                            })
+                            .then(html => { document.getElementById('upload-preview').innerHTML = html; })
+                            .catch(err => {
+                                this.geocoding = false;
+                                this.errorMessage = err.message || String(err);
+                            });
                     }
+                };
+                es.onerror = () => {
+                    es.close();
+                    this.geocoding = false;
+                    this.errorMessage = 'Lost connection while geocoding. Please try again.';
                 };
             }).catch(err => {
                 this.geocoding = false;
-                alert('Error: ' + err);
+                this.errorMessage = err.message || String(err);
             });
         },
 

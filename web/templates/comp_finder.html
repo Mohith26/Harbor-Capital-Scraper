@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block page_title %}Comp Finder{% endblock %}
 
+{% block head_extra %}
+{% if GOOGLE_API_KEY %}
+<script async defer src="https://maps.googleapis.com/maps/api/js?key={{ GOOGLE_API_KEY|urlencode }}&libraries=places&callback=initGooglePlacesAutocomplete"></script>
+{% endif %}
+{% endblock %}
+
 {% block content %}
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
     <!-- Search Form (left column) -->
@@ -10,8 +16,8 @@
             <form hx-post="/finder/search" hx-target="#results-container" hx-indicator="#search-spinner">
                 <!-- Comp Type -->
                 <div class="mb-3">
-                    <label class="form-label">Type</label>
-                    <select name="comp_type" class="form-input text-sm">
+                    <label class="form-label" for="finder-comp-type">Type</label>
+                    <select id="finder-comp-type" name="comp_type" class="form-input text-sm">
                         <option value="sales" {% if comp_type == 'sales' %}selected{% endif %}>Sales</option>
                         <option value="leases" {% if comp_type == 'leases' %}selected{% endif %}>Leases</option>
                     </select>
@@ -19,34 +25,34 @@
 
                 <!-- Address -->
                 <div class="mb-3">
-                    <label class="form-label">Subject Property Address</label>
-                    <input type="text" name="address" class="form-input text-sm" placeholder="Enter full address..." required data-address-autocomplete>
+                    <label class="form-label" for="finder-address">Subject Property Address</label>
+                    <input id="finder-address" type="text" name="address" class="form-input text-sm" placeholder="Enter full address..." required data-address-autocomplete>
                 </div>
 
                 <!-- Optional Fields -->
                 <div class="grid grid-cols-2 gap-3 mb-3">
                     <div>
-                        <label class="form-label">Building Size (SF)</label>
-                        <input type="number" name="building_size" class="form-input text-sm" placeholder="Optional">
+                        <label class="form-label" for="finder-building-size">Building Size (SF)</label>
+                        <input id="finder-building-size" type="number" name="building_size" class="form-input text-sm" placeholder="Optional">
                     </div>
                     <div>
-                        <label class="form-label">Year Built</label>
-                        <input type="number" name="year_built" class="form-input text-sm" placeholder="Optional">
+                        <label class="form-label" for="finder-year-built">Year Built</label>
+                        <input id="finder-year-built" type="number" name="year_built" class="form-input text-sm" placeholder="Optional">
                     </div>
                     <div>
-                        <label class="form-label">City</label>
-                        <input type="text" name="city" class="form-input text-sm" placeholder="Optional">
+                        <label class="form-label" for="finder-city">City</label>
+                        <input id="finder-city" type="text" name="city" class="form-input text-sm" placeholder="Optional">
                     </div>
                     <div>
-                        <label class="form-label">Zip Code</label>
-                        <input type="text" name="zip_code" class="form-input text-sm" placeholder="Optional">
+                        <label class="form-label" for="finder-zip-code">Zip Code</label>
+                        <input id="finder-zip-code" type="text" name="zip_code" class="form-input text-sm" placeholder="Optional">
                     </div>
                 </div>
 
                 <!-- Max Radius -->
                 <div class="mb-3">
-                    <label class="form-label">Max Radius (miles)</label>
-                    <input type="number" name="max_radius" class="form-input text-sm" value="10" step="0.5">
+                    <label class="form-label" for="finder-max-radius">Max Radius (miles)</label>
+                    <input id="finder-max-radius" type="number" name="max_radius" class="form-input text-sm" value="10" step="0.5">
                 </div>
 
                 <!-- AI Toggle -->

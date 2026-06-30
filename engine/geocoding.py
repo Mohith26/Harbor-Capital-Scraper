@@ -30,7 +30,7 @@ def _extract_address_components(result):
     return city, zip_code, state
 
 
-def fetch_google_data(raw_text, api_key):
+def fetch_google_data(raw_text, api_key, timeout=8):
     """Geocode an address using the Google Maps Geocoding API.
     Restricts results to Texas. Returns dict with latitude, longitude, etc."""
     if not isinstance(raw_text, str) or not raw_text.strip():
@@ -54,7 +54,7 @@ def fetch_google_data(raw_text, api_key):
             "components": "country:US|administrative_area:TX",
             "bounds": "25.84,-106.65|36.50,-93.51",
         }
-        res = requests.get(url, params=params).json()
+        res = requests.get(url, params=params, timeout=timeout).json()
 
         top = None
         if res['status'] == 'OK':
@@ -65,7 +65,7 @@ def fetch_google_data(raw_text, api_key):
             simplified = re.sub(r'\s+', ' ', simplified)
             if simplified != addr:
                 params['address'] = simplified
-                res = requests.get(url, params=params).json()
+                res = requests.get(url, params=params, timeout=timeout).json()
                 if res['status'] == 'OK':
                     top = res['results'][0]
 

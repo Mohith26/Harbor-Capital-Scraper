@@ -51,7 +51,7 @@ class MappingResult:
     fingerprint: Fingerprint
     mappings: dict[str, str]  # raw_header -> target_column
     confidence: dict[str, float]  # raw_header -> similarity score
-    source: str  # "exact" | "fuzzy" | "broker" | "embedding" | "embedding+corrections" | "vision_pdf"
+    source: str  # "exact" | "fuzzy" | "broker" | "embedding" | "embedding+corrections" | "heuristic" | "vision_pdf"
     similarity: float  # Jaccard score when source in {fuzzy, broker}, else 0
     cleaned_df: pd.DataFrame
 

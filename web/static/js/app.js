@@ -25,7 +25,11 @@ function initGrid(containerId, columnDefs, rowData, options) {
         defaultColDef: {
             sortable: true, filter: true, resizable: true, minWidth: 100,
         },
-        rowSelection: 'multiple',
+        rowSelection: {
+            mode: 'multiRow',
+            checkboxes: true,
+            headerCheckbox: true,
+        },
         animateRows: false,
         pagination: true,
         paginationPageSize: 50,
@@ -93,11 +97,21 @@ function renderChart(divId, traces, layoutOverrides) {
 // ===== Leaflet Helpers =====
 let _maps = {};
 
-function initMap(divId, center, zoom) {
-    if (_maps[divId]) {
-        _maps[divId].remove();
+function destroyMap(divId) {
+    const map = _maps[divId];
+    if (map) {
+        try { map.remove(); } catch (e) {}
+        delete _maps[divId];
     }
-    const map = L.map(divId).setView(center || [29.76, -95.37], zoom || 10);
+    const container = document.getElementById(divId);
+    if (container && container._leaflet_id) {
+        try { delete container._leaflet_id; } catch (e) { container._leaflet_id = null; }
+    }
+}
+
+function initMap(divId, center, zoom) {
+    destroyMap(divId);
+    const map = L.map(divId, { preferCanvas: true }).setView(center || [29.76, -95.37], zoom || 10);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap contributors',
         maxZoom: 19,
@@ -109,8 +123,10 @@ function initMap(divId, center, zoom) {
 function addMarkers(map, points, options) {
     const markers = [];
     points.forEach(function(pt) {
-        if (pt.lat && pt.lng) {
-            const marker = L.circleMarker([pt.lat, pt.lng], {
+        const lat = Number(pt.lat);
+        const lng = Number(pt.lng);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const marker = L.circleMarker([lat, lng], {
                 radius: options?.radius || 6,
                 fillColor: options?.color || HC_COLORS.amber,
                 color: '#fff',
@@ -180,8 +196,63 @@ async function _fetchDbAutocomplete(q, opts) {
     }
 }
 
+// Texas bounds used to bias Google Places suggestions without excluding nearby results.
+const HC_TEXAS_BOUNDS = {
+    south: 25.8,
+    west: -106.7,
+    north: 36.6,
+    east: -93.5,
+};
+
+function _googlePlacesReady() {
+    return !!(
+        window.google &&
+        window.google.maps &&
+        window.google.maps.places &&
+        window.google.maps.places.AutocompleteService
+    );
+}
+
+function _fetchGoogleJsAutocomplete(q) {
+    if (!_googlePlacesReady()) return Promise.resolve([]);
+
+    if (!window._hcGoogleAutocompleteService) {
+        window._hcGoogleAutocompleteService = new google.maps.places.AutocompleteService();
+    }
+
+    const bounds = new google.maps.LatLngBounds(
+        { lat: HC_TEXAS_BOUNDS.south, lng: HC_TEXAS_BOUNDS.west },
+        { lat: HC_TEXAS_BOUNDS.north, lng: HC_TEXAS_BOUNDS.east }
+    );
+
+    return new Promise(resolve => {
+        window._hcGoogleAutocompleteService.getPlacePredictions({
+            input: q,
+            bounds: bounds,
+            componentRestrictions: { country: 'us' },
+            strictBounds: false,
+            types: ['address'],
+        }, (predictions, status) => {
+            if (status !== google.maps.places.PlacesServiceStatus.OK || !predictions) {
+                resolve([]);
+                return;
+            }
+            resolve(predictions.map(p => ({
+                description: p.description || '',
+                place_id: p.place_id || '',
+            })));
+        });
+    });
+}
+
+function initGooglePlacesAutocomplete(root) {
+    _initAllAutocompletes(root || document);
+}
+window.initGooglePlacesAutocomplete = initGooglePlacesAutocomplete;
+
 function initAddressAutocomplete(input) {
-    if (!input || input._autocompleteInitialized) return;
+    if (!input) return;
+    if (input._autocompleteInitialized) return;
     input._autocompleteInitialized = true;
     input.removeAttribute('readonly');
     input.removeAttribute('disabled');
@@ -196,6 +267,7 @@ function initAddressAutocomplete(input) {
     let debounceTimer = null;
     let currentPredictions = [];
     let selectedIdx = -1;
+    let requestSeq = 0;
 
     const positionDropdown = () => {
         const rect = input.getBoundingClientRect();
@@ -205,6 +277,7 @@ function initAddressAutocomplete(input) {
     };
 
     const hideDropdown = () => { dropdown.style.display = 'none'; selectedIdx = -1; };
+    input._hideAddressAutocompleteDropdown = hideDropdown;
 
     const renderDropdown = () => {
         if (!currentPredictions.length) { hideDropdown(); return; }
@@ -238,17 +311,21 @@ function initAddressAutocomplete(input) {
 
     input.addEventListener('input', () => {
         const q = input.value.trim();
+        const seq = ++requestSeq;
         clearTimeout(debounceTimer);
         if (q.length < 2) { hideDropdown(); return; }
         debounceTimer = setTimeout(async () => {
-            // Fetch Google Places and DB-backed addresses in parallel
-            const [googleRes, dbRes] = await Promise.all([
+            // Fetch all available sources. DB results keep suggestions working even
+            // when the Google key is restricted from a specific Places API surface.
+            const [googleJsRes, googleProxyRes, dbRes] = await Promise.all([
+                q.length >= 3 ? _fetchGoogleJsAutocomplete(q) : Promise.resolve([]),
                 q.length >= 3 ? _fetchAutocomplete(q) : Promise.resolve([]),
                 _fetchDbAutocomplete(q, { fields: 'address', type: 'all' }),
             ]);
+            if (seq !== requestSeq) return;
             const merged = [];
             const seen = new Set();
-            googleRes.forEach(p => {
+            googleJsRes.concat(googleProxyRes).forEach(p => {
                 const key = (p.description || '').toLowerCase();
                 if (key && !seen.has(key)) { seen.add(key); merged.push({ description: p.description, source: 'google' }); }
             });
@@ -390,9 +467,5 @@ document.addEventListener('htmx:afterSwap', (e) => { if (e.detail.target) _initA
 function switchType(type) {
     const params = new URLSearchParams(window.location.search);
     params.set('type', type);
-    const qs = params.toString();
-    htmx.ajax('GET', '/database/table?' + qs, { target: '#table-data', swap: 'innerHTML' });
-    htmx.ajax('GET', '/database/metrics?' + qs, { target: '#metrics-container', swap: 'innerHTML' });
-    // Update URL without reload
-    history.replaceState(null, '', '/database?' + qs);
+    window.location.href = '/database?' + params.toString();
 }

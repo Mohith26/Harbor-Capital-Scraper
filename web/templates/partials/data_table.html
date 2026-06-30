@@ -24,10 +24,7 @@
         if (['raw_address_data', 'latitude', 'longitude', 'source_file_url'].indexOf(col) >= 0) {
             def.hide = true;
         }
-        // Checkbox for ID column
         if (col === 'id') {
-            def.checkboxSelection = true;
-            def.headerCheckboxSelection = true;
             def.width = 80;
         }
         return def;
@@ -41,7 +38,11 @@
             container.innerHTML = '<div class="text-center text-sm text-gray-400 py-12">No comps in the database yet. Upload a file to get started.</div>';
         } else {
             initGrid('ag-grid-container', colDefs, data, {
-                rowSelection: 'multiple',
+                rowSelection: {
+                    mode: 'multiRow',
+                    checkboxes: true,
+                    headerCheckbox: true,
+                },
                 pagination: true,
                 paginationPageSize: 50,
             });
