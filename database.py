@@ -49,6 +49,12 @@ class SaleComp(Base):
     source_file_url = Column(String)
     city = Column(String)
     zip_code = Column(String)
+    costar_property_id = Column(String)
+    costar_url = Column(String)
+    costar_specs = Column(Text)            # JSON blob of CoStar-derived specs
+    costar_status = Column(String, default='pending', server_default='pending')
+    costar_candidates = Column(Text)       # JSON list of candidate matches (when ambiguous)
+    costar_enriched_at = Column(DateTime)
     created_at = Column(DateTime, server_default=func.now())
 
     @validates('address')
@@ -83,6 +89,12 @@ class LeaseComp(Base):
     source_file_url = Column(String)
     city = Column(String)
     zip_code = Column(String)
+    costar_property_id = Column(String)
+    costar_url = Column(String)
+    costar_specs = Column(Text)            # JSON blob of CoStar-derived specs
+    costar_status = Column(String, default='pending', server_default='pending')
+    costar_candidates = Column(Text)       # JSON list of candidate matches (when ambiguous)
+    costar_enriched_at = Column(DateTime)
     created_at = Column(DateTime, server_default=func.now())
 
     @validates('address')

@@ -21,11 +21,31 @@
             };
         }
         // Hide certain columns
-        if (['raw_address_data', 'latitude', 'longitude', 'source_file_url'].indexOf(col) >= 0) {
+        if (['raw_address_data', 'latitude', 'longitude', 'source_file_url',
+             'costar_specs', 'costar_candidates', 'costar_enriched_at'].indexOf(col) >= 0) {
             def.hide = true;
         }
         if (col === 'id') {
             def.width = 80;
+        }
+        // CoStar enrichment: deep-link + status badge
+        if (col === 'costar_url') {
+            def.headerName = 'CoStar';
+            def.cellRenderer = function(params) {
+                if (!params.value) return '';
+                return '<a href="' + params.value + '" target="_blank" rel="noopener" '
+                     + 'style="color:#2563eb;text-decoration:underline;">View ↗</a>';
+            };
+        }
+        if (col === 'costar_status') {
+            def.headerName = 'CoStar Status';
+            def.cellRenderer = function(params) {
+                var v = params.value || 'pending';
+                var colors = {enriched:'#16a34a', ambiguous:'#d97706', not_found:'#6b7280',
+                              pending:'#3b82f6', error:'#dc2626'};
+                return '<span style="color:' + (colors[v] || '#6b7280')
+                     + ';font-weight:600;text-transform:capitalize;">' + v + '</span>';
+            };
         }
         return def;
     });

@@ -4,12 +4,26 @@ import io
 import json
 import math
 import pandas as pd
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import APIRouter, Request, Form
+from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from sqlalchemy import or_
-from database import Session, SaleComp, LeaseComp
+from database import Session, SaleComp, LeaseComp, DB_URL
+from web.costar_view import select_costar_candidate
 
 router = APIRouter(prefix="/database", tags=["database"])
+
+
+@router.post("/{comp_type}/{comp_id}/costar-candidate")
+async def pick_costar_candidate(comp_type: str, comp_id: int, pid: str = Form(...)):
+    """Analyst resolves an ambiguous CoStar match by choosing a candidate pid.
+
+    Sets the chosen pid and flips status back to 'pending' so the next LOCAL
+    `costar enrich` run scrapes that specific property. The cloud app never
+    scrapes CoStar itself.
+    """
+    ct = "lease" if (comp_type or "").lower().startswith("lease") else "sale"
+    select_costar_candidate(DB_URL, ct, comp_id, pid)
+    return RedirectResponse(url="/database", status_code=303)
 
 def _load_data(session, comp_type: str) -> pd.DataFrame:
     Model = SaleComp if comp_type == "sales" else LeaseComp
