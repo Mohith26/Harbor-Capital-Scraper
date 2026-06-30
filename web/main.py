@@ -58,12 +58,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Harbor Capital Comp Database", lifespan=lifespan)
 
 
+# TEMPORARY diagnostic token — gates traceback exposure for a prod-only 500 we
+# cannot reproduce locally. Remove once /database + /analytics are fixed.
+_DIAG_TOKEN = "diag-3b9f7a1c-temp"
+
+
 @app.exception_handler(Exception)
 async def unhandled_exc_handler(request: Request, exc: Exception):
     tb = traceback.format_exc()
     print(f"[500] {request.method} {request.url.path}\n{tb}", file=sys.stderr)
-    # In dev, show trace; in prod keep generic to avoid leaking internals
-    if os.environ.get("DEBUG") == "1":
+    # In dev, show trace; in prod keep generic to avoid leaking internals.
+    # Secret-gated escape hatch for diagnosing prod-only failures.
+    if os.environ.get("DEBUG") == "1" or request.query_params.get("__diag") == _DIAG_TOKEN:
         return PlainTextResponse(tb, status_code=500)
     return PlainTextResponse("Internal Server Error", status_code=500)
 
