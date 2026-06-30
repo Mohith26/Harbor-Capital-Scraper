@@ -87,3 +87,49 @@ def test_pipeline_accuracy_regression():
     assert avg_f1 >= 0.85, (
         f"Average F1 {avg_f1:.3f} < 0.85 — pipeline accuracy regressed"
     )
+
+
+# --- LLM mapper regression on the real messy lease comp CSV (Task 6) ---
+import os
+import pandas as pd
+import engine.pipeline as pipeline
+from engine.pipeline import run_mapping_stage
+from learning.fakes import FakeLearningStore
+
+_LEASE_CSV = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "Additional Comps - HC.xlsx - Lease (1).csv",
+)
+
+
+@pytest.mark.skipif(not os.path.exists(_LEASE_CSV), reason="sample CSV not present")
+def test_llm_maps_messy_lease_headers(monkeypatch):
+    monkeypatch.setenv("COMP_LLM_MAPPER", "1")
+    pipeline._LLM_MAPPING_CACHE.clear()
+    # Header row is the 2nd line; skip the title row
+    df = pd.read_csv(_LEASE_CSV, skiprows=1).dropna(axis=1, how="all")
+
+    def fake_llm(headers, sample_rows, schema, file_type, examples=None):
+        m = {}
+        for h in headers:
+            hl = str(h).lower()
+            if "base rent" in hl:
+                m[h] = "rate_psf"
+            elif "area leased" in hl:
+                m[h] = "leased_sf"
+            elif hl == "tenant":
+                m[h] = "tenant_name"
+            elif "address" in hl:
+                m[h] = "address"
+        return {"mappings": m, "confidence": {h: 0.95 for h in m},
+                "unmapped": [h for h in headers if h not in m], "reasoning": "test"}
+
+    monkeypatch.setattr(pipeline, "llm_map_columns", fake_llm)
+    monkeypatch.setattr(pipeline, "verify_mapping",
+                        lambda m, rows, schema: {"adjusted_confidence": {}, "flags": []})
+
+    result = run_mapping_stage(df, "Additional Comps Lease.csv", "Lease", FakeLearningStore())
+    targets = set(result.mappings.values())
+    assert "rate_psf" in targets
+    assert "leased_sf" in targets
+    assert "tenant_name" in targets
