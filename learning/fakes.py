@@ -67,6 +67,14 @@ class FakeLearningStore:
         key = (file_type, raw_header, target_column)
         self._corrections[key] = self._corrections.get(key, 0) + 1
 
+    def get_all_corrections(self, file_type: str) -> list[dict]:
+        rows = [
+            {"raw_header": rh, "target_column": tc, "hit_count": count}
+            for (ft, rh, tc), count in self._corrections.items()
+            if ft == file_type
+        ]
+        return sorted(rows, key=lambda r: r["hit_count"], reverse=True)
+
     # ---- Geocoding ----
     def get_geocode_override(self, raw_text: str) -> Optional[dict]:
         return self._geocode_overrides.get(raw_text)
@@ -160,6 +168,7 @@ class EmptyLearningStore:
     def record_accepted_mapping(self, fingerprint, mappings, confirmed_by, broker_id=None): pass
     def get_corrections_for_context(self, file_type, raw_header): return {}
     def upsert_correction(self, file_type, raw_header, target_column, confirmed_by): pass
+    def get_all_corrections(self, file_type): return []
     def get_geocode_override(self, raw_text): return None
     def get_geocode_alias(self, raw_text): return None
     def insert_geocode_alias(self, raw_text, canonical_address, lat, lng): pass

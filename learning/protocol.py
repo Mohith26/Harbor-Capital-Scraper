@@ -54,6 +54,12 @@ class LearningStore(Protocol):
         """Atomic: increment hit_count on (file_type, raw_header, target_column)."""
         ...
 
+    def get_all_corrections(self, file_type: str) -> list[dict]:
+        """Return every correction for a file_type as
+        [{"raw_header": str, "target_column": str, "hit_count": int}],
+        sorted by hit_count descending. Empty list when none."""
+        ...
+
     # ---- Geocoding ----
     def get_geocode_override(self, raw_text: str) -> Optional[dict]:
         """Return {"formatted_address": str, "latitude": float, "longitude": float} or None."""
