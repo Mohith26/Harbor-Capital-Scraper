@@ -7,6 +7,21 @@ from learning.fakes import FakeLearningStore
 from learning.corrections import persist_with_learning
 
 
+def test_get_all_corrections_returns_sorted_by_hit_count():
+    store = FakeLearningStore()
+    store.upsert_correction("LEASE", "asking rate", "rate_psf", "u@test")
+    store.upsert_correction("LEASE", "asking rate", "rate_psf", "u@test")  # hit_count=2
+    store.upsert_correction("LEASE", "deal sf", "leased_sf", "u@test")     # hit_count=1
+    store.upsert_correction("SALE", "pp", "sale_price", "u@test")          # other file_type
+
+    rows = store.get_all_corrections("LEASE")
+
+    assert {"raw_header": "asking rate", "target_column": "rate_psf", "hit_count": 2} in rows
+    assert {"raw_header": "deal sf", "target_column": "leased_sf", "hit_count": 1} in rows
+    assert all(r["raw_header"] != "pp" for r in rows)  # SALE excluded
+    assert [r["hit_count"] for r in rows] == sorted([r["hit_count"] for r in rows], reverse=True)
+
+
 def _make_segment(segment_key, headers, mappings, source="embedding"):
     fp = compute_fingerprint(headers, "f.xlsx", segment_key.split("::")[0], "lease")
     df = pd.DataFrame({h: ["v"] for h in headers})

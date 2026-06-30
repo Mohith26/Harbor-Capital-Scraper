@@ -146,6 +146,18 @@ class SqliteLearningStore:
             ).scalars().all()
             return {r.target_column: r.hit_count for r in rows}
 
+    def get_all_corrections(self, file_type: str) -> list[dict]:
+        with self._session() as s:
+            rows = s.execute(
+                select(ColumnMappingCorrection)
+                .where(ColumnMappingCorrection.file_type == file_type)
+                .order_by(ColumnMappingCorrection.hit_count.desc())
+            ).scalars().all()
+            return [
+                {"raw_header": r.raw_header, "target_column": r.target_column, "hit_count": r.hit_count}
+                for r in rows
+            ]
+
     def upsert_correction(
         self,
         file_type: str,
