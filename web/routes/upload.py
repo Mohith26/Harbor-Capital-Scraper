@@ -538,6 +538,10 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         "jobId": job_id,
         "segments": segments_data,
         "schemaFields": schema_fields,
+        "schemaFieldsByType": {
+            "sale": list(SALE_SCHEMA.keys()),
+            "lease": list(LEASE_SCHEMA.keys()),
+        },
         "brokerName": broker_name,
     }
     return templates.TemplateResponse(request, "partials/upload_preview.html", {
@@ -567,6 +571,7 @@ async def apply_mappings(request: Request):
     if not job:
         return {"error": "Session expired. Please re-upload."}
     final_mappings = body.get("final_mappings", {})
+    final_types = body.get("final_types", {}) or {}
     voided_segment_keys = set(body.get("voided_segment_keys") or [])
     broker_name = body.get("broker_name", "")
     raw_dfs = job.get("raw_dfs", {})
@@ -576,6 +581,13 @@ async def apply_mappings(request: Request):
         return {"error": "All sheets are voided. Restore at least one sheet before saving."}
 
     for seg in active_segments:
+        # Per-segment type override (user toggled SALE <-> LEASE in the preview).
+        # Applied BEFORE the cleaned_df is rebuilt so rate logic, dedupe identity,
+        # source_type, table routing, and learning all use the corrected type.
+        requested_type = str(final_types.get(seg.segment_key, "")).lower()
+        if requested_type in ("sale", "lease"):
+            seg.fingerprint.file_type = requested_type
+
         if seg.segment_key not in final_mappings:
             continue
         new_maps = final_mappings[seg.segment_key]
