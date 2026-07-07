@@ -128,7 +128,14 @@
                               'bg-yellow-100 text-yellow-700': !seg.voided && !['exact','fuzzy','broker'].includes(seg.source),
                           }"
                           x-text="seg.voided ? 'voided sheet (' + seg.row_count + ' rows)' : seg.source + ' mapping (' + seg.row_count + ' rows)'"></span>
-                    <span class="text-xs text-gray-500" x-text="seg.file_type.toUpperCase()"></span>
+                    <select class="form-input text-xs py-0.5 px-1 w-auto"
+                            x-show="!seg.voided"
+                            :value="seg.file_type ? seg.file_type.toLowerCase() : 'sale'"
+                            @change="changeSegmentType(segIdx, $event.target.value)">
+                        <option value="sale">SALE</option>
+                        <option value="lease">LEASE</option>
+                    </select>
+                    <span class="text-xs text-gray-500" x-show="seg.voided" x-text="seg.file_type.toUpperCase()"></span>
                 </div>
             </div>
             <template x-if="seg.warnings && seg.warnings.length">
@@ -274,6 +281,7 @@ function uploadPreview(initial) {
     return {
         segments: initial.segments,
         schemaFields: initial.schemaFields || [],
+        schemaFieldsByType: initial.schemaFieldsByType || {},
         jobId: initial.jobId,
         activeSegment: 0,
         menuSegment: null,
@@ -344,6 +352,23 @@ function uploadPreview(initial) {
             return (seg && seg.schema_fields && seg.schema_fields.length) ? seg.schema_fields : this.schemaFields;
         },
 
+        changeSegmentType(segIdx, newType) {
+            const seg = this.segments[segIdx];
+            if (!seg || seg.voided) return;
+            const t = (newType || '').toLowerCase();
+            if (t !== 'sale' && t !== 'lease') return;
+            seg.file_type = t;
+            const fields = this.schemaFieldsByType[t] || [];
+            if (fields.length) seg.schema_fields = fields.slice();
+            // Drop mappings whose target isn't valid for the new type
+            if (seg.mappings) {
+                const valid = new Set(seg.schema_fields || []);
+                for (const header of Object.keys(seg.mappings)) {
+                    if (!valid.has(seg.mappings[header])) delete seg.mappings[header];
+                }
+            }
+        },
+
         isFieldAssigned(segIdx, field) {
             if (field === 'notes') return false;  // notes allows multiple, never mark as assigned
             const seg = this.segments[segIdx];
@@ -366,6 +391,7 @@ function uploadPreview(initial) {
                 job_id: this.jobId,
                 broker_name: this.brokerName,
                 final_mappings: Object.fromEntries(this.segments.map(s => [s.segment_key, s.mappings || {}])),
+                final_types: Object.fromEntries(this.segments.map(s => [s.segment_key, s.file_type])),
                 voided_segment_keys: this.voidedSegmentKeys(),
             };
 

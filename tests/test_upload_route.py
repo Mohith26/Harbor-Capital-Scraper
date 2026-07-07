@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from engine.types import Fingerprint, MappingResult, SegmentResult
 from web.routes.upload import (
@@ -6,6 +7,14 @@ from web.routes.upload import (
     _dedupe_segments_within_sheets,
     _schema_fields_for_type,
 )
+
+
+def _resolve_destination_model(seg):
+    """Mirror the SaleComp/LeaseComp routing used by the save path, which keys
+    entirely off ``seg.fingerprint.file_type``."""
+    from database import LeaseComp, SaleComp
+
+    return LeaseComp if seg.fingerprint.file_type.lower() in ("lease", "both") else SaleComp
 
 
 def _segment(segment_key, sheet_name, file_type, df):
@@ -93,3 +102,115 @@ def test_dedupe_preserves_distinct_lease_tenants_at_same_address():
 
     assert deduped == 0
     assert len(seg.cleaned_df) == 2
+
+
+@pytest.mark.parametrize("start_type,new_type", [("LEASE", "sale"), ("SALE", "lease")])
+def test_apply_mappings_type_override_flips_destination_model(monkeypatch, start_type, new_type):
+    """A per-segment type override in the upload payload must re-route the segment
+    to the opposite comp table before save.
+
+    Mirrors the real 'IOS Sale Comps' bug: an inner sheet literally named
+    'Lease Comps' is auto-tagged LEASE even though its columns are sale columns
+    (CLOSE DATE / BUYER / SELLER / SALE PRICE). Toggling the type must flip the
+    destination model.
+    """
+    from fastapi.testclient import TestClient
+
+    import web.main
+    from database import LeaseComp, SaleComp
+    from web.main import app
+    from web.routes.upload import _jobs
+
+    # AuthMiddleware gates /upload — supply a fake authenticated session.
+    monkeypatch.setattr(
+        web.main,
+        "get_auth_session",
+        lambda request: {"username": "qa", "name": "QA", "role": "admin"},
+    )
+
+    raw_df = pd.DataFrame([{"ADDRESS": "123 Main St", "PRICE": "$10,000,000"}])
+    seg = _segment("Sheet::0", "Sheet", start_type, raw_df)
+    job_id = "job-type-flip"
+    _jobs[job_id] = {
+        "segments": [seg],
+        "raw_dfs": {seg.segment_key: raw_df.copy()},
+        "tmp_path": None,
+        "filename": "IOS Sale Comps - 2022-2023.xlsx",
+        "status": "mapped",
+        "broker": None,
+    }
+
+    expected_before = LeaseComp if start_type.lower() == "lease" else SaleComp
+    expected_after = LeaseComp if new_type == "lease" else SaleComp
+
+    try:
+        assert _resolve_destination_model(seg) is expected_before
+
+        client = TestClient(app)
+        resp = client.post(
+            "/upload/apply-mappings",
+            json={
+                "job_id": job_id,
+                "final_mappings": {seg.segment_key: {"ADDRESS": "address"}},
+                "final_types": {seg.segment_key: new_type},
+                "voided_segment_keys": [],
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+        updated = _jobs[job_id]["segments"][0]
+        # The override lands on the fingerprint...
+        assert updated.fingerprint.file_type == new_type
+        # ...which is the sole routing key, so the destination model flips.
+        assert _resolve_destination_model(updated) is expected_after
+        assert expected_after is not expected_before
+    finally:
+        _jobs.pop(job_id, None)
+
+
+def test_apply_mappings_without_final_types_preserves_original_type(monkeypatch):
+    """Omitting ``final_types`` (older client payloads) must not alter routing."""
+    from fastapi.testclient import TestClient
+
+    import web.main
+    from database import SaleComp
+    from web.main import app
+    from web.routes.upload import _jobs
+
+    monkeypatch.setattr(
+        web.main,
+        "get_auth_session",
+        lambda request: {"username": "qa", "name": "QA", "role": "admin"},
+    )
+
+    raw_df = pd.DataFrame([{"ADDRESS": "123 Main St", "SALE PRICE": "$10,000,000"}])
+    seg = _segment("Sheet::0", "Sheet", "SALE", raw_df)
+    job_id = "job-no-types"
+    _jobs[job_id] = {
+        "segments": [seg],
+        "raw_dfs": {seg.segment_key: raw_df.copy()},
+        "tmp_path": None,
+        "filename": "comps.xlsx",
+        "status": "mapped",
+        "broker": None,
+    }
+
+    try:
+        client = TestClient(app)
+        resp = client.post(
+            "/upload/apply-mappings",
+            json={
+                "job_id": job_id,
+                "final_mappings": {seg.segment_key: {"ADDRESS": "address"}},
+                "voided_segment_keys": [],
+            },
+        )
+
+        assert resp.status_code == 200
+        updated = _jobs[job_id]["segments"][0]
+        assert updated.fingerprint.file_type == "SALE"
+        assert _resolve_destination_model(updated) is SaleComp
+    finally:
+        _jobs.pop(job_id, None)
