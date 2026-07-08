@@ -274,3 +274,40 @@ def test_attach_audit_flags_handles_missing_raw_df(monkeypatch):
     up._attach_audit_flags(job, segments_data)
 
     assert segments_data[0]["audit_flags"] == []  # skipped: no raw df to sample
+
+
+def test_attach_audit_flags_multi_segment_and_no_mapped_headers(monkeypatch):
+    import web.routes.upload as up
+
+    raw_a = pd.DataFrame([{"CLOSE DATE": "5/1/22"}])
+    seg_a = _segment("A::0", "A", "SALE", raw_a)
+    raw_b = pd.DataFrame([{"OTHER": "x"}])
+    seg_b = _segment("B::0", "B", "SALE", raw_b)
+    raw_c = pd.DataFrame([{"REAL": "y"}])
+    seg_c = _segment("C::0", "C", "SALE", raw_c)
+    seg_c.mapping_result.mappings = {"GHOST": "buyer"}  # header absent from raw_c -> no mapped headers
+
+    job = {
+        "segments": [seg_a, seg_b, seg_c],
+        "raw_dfs": {
+            seg_a.segment_key: raw_a.copy(),
+            seg_b.segment_key: raw_b.copy(),
+            seg_c.segment_key: raw_c.copy(),
+        },
+    }
+    segments_data = [
+        {"segment_key": "A::0", "voided": False},
+        {"segment_key": "B::0", "voided": False},
+        {"segment_key": "C::0", "voided": False},
+    ]
+
+    def _fake_audit(mappings, sample_rows, file_type):
+        return [{"header": list(mappings)[0], "reason": "r", "suggested_field": None}]
+
+    monkeypatch.setattr(up, "audit_segment", _fake_audit)
+
+    up._attach_audit_flags(job, segments_data)
+
+    assert segments_data[0]["audit_flags"] == [{"header": "CLOSE DATE", "reason": "r", "suggested_field": None}]
+    assert segments_data[1]["audit_flags"] == [{"header": "OTHER", "reason": "r", "suggested_field": None}]
+    assert segments_data[2]["audit_flags"] == []

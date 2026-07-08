@@ -418,14 +418,15 @@ def _attach_audit_flags(job: dict, segments_data: list[dict]) -> None:
         raw_df = raw_dfs.get(entry.get("segment_key"))
         if seg is None or raw_df is None:
             return []
-        mappings = seg.mapping_result.mappings or {}
-        mapped_headers = [h for h in mappings if h in raw_df.columns]
-        if not mapped_headers:
-            return []
-        sample_rows = raw_df[mapped_headers].head(5).to_dict("records")
         try:
+            mappings = seg.mapping_result.mappings or {}
+            mapped_headers = [h for h in mappings if h in raw_df.columns]
+            if not mapped_headers:
+                return []
+            sample_rows = raw_df[mapped_headers].head(5).to_dict("records")
             return audit_segment(mappings, sample_rows, seg.fingerprint.file_type)
         except Exception:
+            log.debug("mapping audit failed for segment %s", entry.get("segment_key"), exc_info=True)
             return []
 
     if not segments_data:

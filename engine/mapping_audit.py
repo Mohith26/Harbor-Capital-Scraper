@@ -6,10 +6,13 @@ there is no API key, or on any error.
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from engine.mapping import LEASE_SCHEMA, SALE_SCHEMA
 from engine.verify_mapping import verify_mapping
+
+log = logging.getLogger(__name__)
 
 _MAX_SAMPLE_ROWS = 5
 
@@ -39,6 +42,7 @@ def audit_segment(
     try:
         verdict = verify_mapping(mappings, list(sample_rows or [])[:_MAX_SAMPLE_ROWS], schema)
     except Exception:
+        log.debug("mapping audit verify_mapping failed (file_type=%s)", file_type, exc_info=True)
         return []
 
     valid_targets = set(schema.keys())
