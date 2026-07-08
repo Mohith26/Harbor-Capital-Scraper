@@ -10,3 +10,6 @@ venv/
 .venv/
 *.egg-info/
 .pytest_cache/
+
+# Superpowers SDD process scratch (ledger, task briefs/reports)
+.superpowers/
