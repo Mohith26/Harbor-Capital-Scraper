@@ -1,31 +1,91 @@
-import engine.verify_mapping as verify_mod
-from engine.verify_mapping import verify_mapping
-from engine.mapping import SALE_SCHEMA
+import engine.verify_mapping as vm
+
+_SCHEMA = {
+    "tenant_name": {"desc": "tenant", "type": "text"},
+    "closing_date": {"desc": "closing date", "type": "date"},
+}
 
 
-def test_verify_flags_value_type_mismatch(monkeypatch):
+def test_verify_mapping_parses_suggested_field(monkeypatch):
     monkeypatch.setattr(
-        verify_mod, "_chat_json",
-        lambda prompt, model="gpt-4o": {
-            "adjusted_confidence": {"Size": 0.2},
-            "flags": [{"header": "Size", "reason": "values look like square footage, not a sale price"}],
+        vm,
+        "_chat_json",
+        lambda prompt, model=None: {
+            "adjusted_confidence": {"CLOSE DATE": 0.1},
+            "flags": [
+                {"header": "CLOSE DATE", "reason": "values are dates", "suggested_field": "closing_date"}
+            ],
         },
     )
-    result = verify_mapping(
-        mappings={"Size": "sale_price"},
-        sample_rows=[{"Size": "19,500"}],
-        schema=SALE_SCHEMA,
+
+    out = vm.verify_mapping({"CLOSE DATE": "tenant_name"}, [{"CLOSE DATE": "5/1/22"}], _SCHEMA)
+
+    assert out["flags"] == [
+        {"header": "CLOSE DATE", "reason": "values are dates", "suggested_field": "closing_date"}
+    ]
+    assert out["adjusted_confidence"] == {"CLOSE DATE": 0.1}
+
+
+def test_verify_mapping_missing_suggested_field_is_none(monkeypatch):
+    monkeypatch.setattr(
+        vm,
+        "_chat_json",
+        lambda prompt, model=None: {"flags": [{"header": "CLOSE DATE", "reason": "dates"}]},
     )
-    assert result["flags"][0]["header"] == "Size"
-    assert result["adjusted_confidence"]["Size"] == 0.2
+
+    out = vm.verify_mapping({"CLOSE DATE": "tenant_name"}, [], _SCHEMA)
+
+    assert out["flags"][0]["suggested_field"] is None
 
 
-def test_verify_failure_degrades_gracefully(monkeypatch):
-    def boom(prompt, model="gpt-4o"):
+def test_verify_mapping_drops_flags_for_unknown_headers(monkeypatch):
+    monkeypatch.setattr(
+        vm,
+        "_chat_json",
+        lambda prompt, model=None: {
+            "flags": [{"header": "GHOST", "reason": "x", "suggested_field": "closing_date"}]
+        },
+    )
+
+    out = vm.verify_mapping({"CLOSE DATE": "tenant_name"}, [], _SCHEMA)
+
+    assert out["flags"] == []
+
+
+def test_verify_mapping_llm_error_is_noop(monkeypatch):
+    def _raise(*a, **k):
         raise RuntimeError("api down")
-    monkeypatch.setattr(verify_mod, "_chat_json", boom)
 
-    result = verify_mapping({"A": "sale_price"}, [{"A": 1}], SALE_SCHEMA)
-    # On verifier failure: no flags, no confidence change (caller keeps mapper confidence)
-    assert result["flags"] == []
-    assert result["adjusted_confidence"] == {}
+    monkeypatch.setattr(vm, "_chat_json", _raise)
+
+    out = vm.verify_mapping({"CLOSE DATE": "tenant_name"}, [], _SCHEMA)
+
+    assert out == {"adjusted_confidence": {}, "flags": []}
+
+
+def test_verify_mapping_non_string_suggested_field_is_none(monkeypatch):
+    monkeypatch.setattr(
+        vm,
+        "_chat_json",
+        lambda prompt, model=None: {
+            "flags": [{"header": "CLOSE DATE", "reason": "dates", "suggested_field": 123}]
+        },
+    )
+
+    out = vm.verify_mapping({"CLOSE DATE": "tenant_name"}, [], _SCHEMA)
+
+    assert out["flags"][0]["suggested_field"] is None
+
+
+def test_verify_mapping_whitespace_suggested_field_is_none(monkeypatch):
+    monkeypatch.setattr(
+        vm,
+        "_chat_json",
+        lambda prompt, model=None: {
+            "flags": [{"header": "CLOSE DATE", "reason": "dates", "suggested_field": "   "}]
+        },
+    )
+
+    out = vm.verify_mapping({"CLOSE DATE": "tenant_name"}, [], _SCHEMA)
+
+    assert out["flags"][0]["suggested_field"] is None

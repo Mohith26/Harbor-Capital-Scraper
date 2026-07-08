@@ -214,3 +214,120 @@ def test_apply_mappings_without_final_types_preserves_original_type(monkeypatch)
         assert _resolve_destination_model(updated) is SaleComp
     finally:
         _jobs.pop(job_id, None)
+
+
+def test_attach_audit_flags_populates_segments_data(monkeypatch):
+    import web.routes.upload as up
+
+    raw_df = pd.DataFrame([{"CLOSE DATE": "5/1/22", "PRICE": "$10,000,000"}])
+    seg = _segment("Sheet::0", "Sheet", "SALE", raw_df)
+    job = {"segments": [seg], "raw_dfs": {seg.segment_key: raw_df.copy()}}
+    segments_data = [{"segment_key": seg.segment_key, "voided": False}]
+
+    monkeypatch.setattr(
+        up,
+        "audit_segment",
+        lambda mappings, sample_rows, file_type: [
+            {"header": "CLOSE DATE", "reason": "dates", "suggested_field": "closing_date"}
+        ],
+    )
+
+    up._attach_audit_flags(job, segments_data)
+
+    assert segments_data[0]["audit_flags"] == [
+        {"header": "CLOSE DATE", "reason": "dates", "suggested_field": "closing_date"}
+    ]
+
+
+def test_attach_audit_flags_degrades_to_empty_on_error(monkeypatch):
+    import web.routes.upload as up
+
+    raw_df = pd.DataFrame([{"A": "x"}])
+    seg = _segment("Sheet::0", "Sheet", "SALE", raw_df)
+    job = {"segments": [seg], "raw_dfs": {seg.segment_key: raw_df.copy()}}
+    segments_data = [{"segment_key": seg.segment_key, "voided": False}]
+
+    def _boom(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(up, "audit_segment", _boom)
+
+    up._attach_audit_flags(job, segments_data)
+
+    assert segments_data[0]["audit_flags"] == []
+
+
+def test_attach_audit_flags_handles_missing_raw_df(monkeypatch):
+    import web.routes.upload as up
+
+    raw_df = pd.DataFrame([{"A": "x"}])
+    seg = _segment("Sheet::0", "Sheet", "SALE", raw_df)
+    job = {"segments": [seg], "raw_dfs": {}}  # no raw df for this segment
+    segments_data = [{"segment_key": seg.segment_key, "voided": False}]
+
+    monkeypatch.setattr(
+        up,
+        "audit_segment",
+        lambda *a, **k: [{"header": "A", "reason": "r", "suggested_field": None}],
+    )
+
+    up._attach_audit_flags(job, segments_data)
+
+    assert segments_data[0]["audit_flags"] == []  # skipped: no raw df to sample
+
+
+def test_attach_audit_flags_multi_segment_and_no_mapped_headers(monkeypatch):
+    import web.routes.upload as up
+
+    raw_a = pd.DataFrame([{"CLOSE DATE": "5/1/22"}])
+    seg_a = _segment("A::0", "A", "SALE", raw_a)
+    raw_b = pd.DataFrame([{"OTHER": "x"}])
+    seg_b = _segment("B::0", "B", "SALE", raw_b)
+    raw_c = pd.DataFrame([{"REAL": "y"}])
+    seg_c = _segment("C::0", "C", "SALE", raw_c)
+    seg_c.mapping_result.mappings = {"GHOST": "buyer"}  # header absent from raw_c -> no mapped headers
+
+    job = {
+        "segments": [seg_a, seg_b, seg_c],
+        "raw_dfs": {
+            seg_a.segment_key: raw_a.copy(),
+            seg_b.segment_key: raw_b.copy(),
+            seg_c.segment_key: raw_c.copy(),
+        },
+    }
+    segments_data = [
+        {"segment_key": "A::0", "voided": False},
+        {"segment_key": "B::0", "voided": False},
+        {"segment_key": "C::0", "voided": False},
+    ]
+
+    def _fake_audit(mappings, sample_rows, file_type):
+        return [{"header": list(mappings)[0], "reason": "r", "suggested_field": None}]
+
+    monkeypatch.setattr(up, "audit_segment", _fake_audit)
+
+    up._attach_audit_flags(job, segments_data)
+
+    assert segments_data[0]["audit_flags"] == [{"header": "CLOSE DATE", "reason": "r", "suggested_field": None}]
+    assert segments_data[1]["audit_flags"] == [{"header": "OTHER", "reason": "r", "suggested_field": None}]
+    assert segments_data[2]["audit_flags"] == []
+
+
+def test_attach_audit_flags_degrades_when_segment_malformed(monkeypatch):
+    import web.routes.upload as up
+
+    raw_df = pd.DataFrame([{"A": "x"}])
+    seg = _segment("Sheet::0", "Sheet", "SALE", raw_df)
+    seg.mapping_result = None  # accessing .mapping_result.mappings will raise inside _flags_for
+    job = {"segments": [seg], "raw_dfs": {seg.segment_key: raw_df.copy()}}
+    segments_data = [{"segment_key": seg.segment_key, "voided": False}]
+
+    # audit_segment must never even be reached; if it is, fail loudly
+    def _boom(*a, **k):
+        raise AssertionError("audit_segment should not be reached for a malformed segment")
+
+    monkeypatch.setattr(up, "audit_segment", _boom)
+
+    up._attach_audit_flags(job, segments_data)
+
+    assert segments_data[0]["audit_flags"] == []

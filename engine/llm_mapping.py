@@ -13,6 +13,7 @@ from engine.openai_client import _client
 from engine.mapping_examples import format_examples
 
 _MODEL = "gpt-4o"
+_LLM_TIMEOUT_SECONDS = 30
 _MAX_SAMPLE_ROWS = 5
 
 
@@ -24,6 +25,7 @@ def _chat_json(prompt: str, model: str = _MODEL) -> dict:
         response_format={"type": "json_object"},
         temperature=0,
         max_tokens=1500,
+        timeout=_LLM_TIMEOUT_SECONDS,
     )
     return json.loads(resp.choices[0].message.content)
 

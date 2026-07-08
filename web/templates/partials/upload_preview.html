@@ -153,6 +153,29 @@
 
             <template x-if="!seg.voided">
                 <div>
+                    <!-- Mapping audit warnings (advisory) -->
+                    <template x-if="auditFlagsFor(segIdx).length">
+                        <div class="bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-3 mb-3 text-xs">
+                            <div class="font-semibold mb-2"
+                                 x-text="'⚠ ' + auditFlagsFor(segIdx).length + ' possible mapping issue' + (auditFlagsFor(segIdx).length === 1 ? '' : 's') + ' found — review before saving'"></div>
+                            <template x-for="flag in auditFlagsFor(segIdx)" :key="flag.header">
+                                <div class="flex items-center flex-wrap gap-2 py-1 border-t border-amber-200 first:border-t-0">
+                                    <span class="font-medium" x-text="flag.header"></span>
+                                    <span class="text-amber-700">&rarr; <span x-text="seg.mappings[flag.header] || 'unmapped'"></span></span>
+                                    <span class="text-amber-800" x-text="'— ' + flag.reason"></span>
+                                    <template x-if="flag.suggested_field">
+                                        <button type="button"
+                                                class="btn-outline text-xs py-0.5 px-2"
+                                                @click="applyAuditSuggestion(segIdx, flag.header, flag.suggested_field)"
+                                                x-text="'Change to ' + flag.suggested_field"></button>
+                                    </template>
+                                    <button type="button" class="text-amber-600 underline"
+                                            @click="dismissAuditFlag(segIdx, flag.header)">dismiss</button>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+
                     <!-- Schema field chips (draggable) -->
                     <div class="bg-amber-50 rounded-lg border border-amber-200 p-3 mb-3">
                         <div class="text-xs font-semibold text-amber-800 mb-2">
@@ -193,6 +216,10 @@
                                             </template>
                                             <template x-if="!seg.mappings[header] || seg.mappings[header] === '---'">
                                                 <span class="badge-unmapped ml-1">unmapped</span>
+                                            </template>
+                                            <template x-if="auditFlagForHeader(segIdx, header)">
+                                                <span class="ml-1 text-amber-600 cursor-help"
+                                                      :title="auditFlagForHeader(segIdx, header).reason">&#9888;</span>
                                             </template>
                                         </th>
                                     </template>
@@ -358,6 +385,7 @@ function uploadPreview(initial) {
             const t = (newType || '').toLowerCase();
             if (t !== 'sale' && t !== 'lease') return;
             seg.file_type = t;
+            seg.audit_flags = [];  // flags were for the old schema; stale after a type change
             const fields = this.schemaFieldsByType[t] || [];
             if (fields.length) seg.schema_fields = fields.slice();
             // Drop mappings whose target isn't valid for the new type
@@ -367,6 +395,26 @@ function uploadPreview(initial) {
                     if (!valid.has(seg.mappings[header])) delete seg.mappings[header];
                 }
             }
+        },
+
+        auditFlagsFor(segIdx) {
+            const seg = this.segments[segIdx];
+            return (seg && seg.audit_flags) ? seg.audit_flags : [];
+        },
+
+        auditFlagForHeader(segIdx, header) {
+            return this.auditFlagsFor(segIdx).find(f => f.header === header) || null;
+        },
+
+        applyAuditSuggestion(segIdx, header, field) {
+            this.setMapping(segIdx, header, field);
+            this.dismissAuditFlag(segIdx, header);
+        },
+
+        dismissAuditFlag(segIdx, header) {
+            const seg = this.segments[segIdx];
+            if (!seg || !seg.audit_flags) return;
+            seg.audit_flags = seg.audit_flags.filter(f => f.header !== header);
         },
 
         isFieldAssigned(segIdx, field) {
