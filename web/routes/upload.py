@@ -426,7 +426,7 @@ def _attach_audit_flags(job: dict, segments_data: list[dict]) -> None:
             sample_rows = raw_df[mapped_headers].head(5).to_dict("records")
             return audit_segment(mappings, sample_rows, seg.fingerprint.file_type)
         except Exception:
-            log.debug("mapping audit failed for segment %s", entry.get("segment_key"), exc_info=True)
+            log.warning("mapping audit failed for segment %s", entry.get("segment_key"), exc_info=True)
             return []
 
     if not segments_data:
@@ -565,7 +565,10 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
 
     # Audit layer: check each segment's mapping against its data before the
     # analyst edits (advisory, best-effort, degrades to no flags).
-    _attach_audit_flags(_jobs[job_id], segments_data)
+    try:
+        _attach_audit_flags(_jobs[job_id], segments_data)
+    except Exception:
+        log.warning("mapping audit layer failed; continuing without flags", exc_info=True)
 
     # Determine schema fields for mapping dropdowns
     first_type = segments_data[0]["file_type"] if segments_data else "sale"

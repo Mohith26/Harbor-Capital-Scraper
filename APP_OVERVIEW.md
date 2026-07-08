@@ -47,3 +47,15 @@ The newest feature. Enter details about a subject property (address, size, price
 
 ## Tech Stack
 Streamlit + Supabase (PostgreSQL) + OpenAI + Google Maps API, deployed on Railway.
+
+## Mapping audit layer (COMP_MAPPING_AUDIT)
+
+After a file is column-mapped, a separate gpt-4o pass audits whether each segment's
+mapped columns match the sample data and surfaces advisory, one-click-fixable flags
+in the upload preview before the analyst edits.
+
+- Env var `COMP_MAPPING_AUDIT` — default ON. Set to `0` to disable (the preview then
+  renders exactly as before, with no flags).
+- Cost/latency: adds ONE gpt-4o call per detected segment on every upload (including
+  exact-template hits that were previously $0). Calls run concurrently and are bounded
+  by a 30s per-call timeout; any failure degrades to "no flags" and never blocks saving.

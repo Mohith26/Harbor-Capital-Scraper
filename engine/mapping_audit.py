@@ -42,7 +42,7 @@ def audit_segment(
     try:
         verdict = verify_mapping(mappings, list(sample_rows or [])[:_MAX_SAMPLE_ROWS], schema)
     except Exception:
-        log.debug("mapping audit verify_mapping failed (file_type=%s)", file_type, exc_info=True)
+        log.warning("mapping audit verify_mapping failed (file_type=%s)", file_type, exc_info=True)
         return []
 
     valid_targets = set(schema.keys())

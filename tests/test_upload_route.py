@@ -311,3 +311,23 @@ def test_attach_audit_flags_multi_segment_and_no_mapped_headers(monkeypatch):
     assert segments_data[0]["audit_flags"] == [{"header": "CLOSE DATE", "reason": "r", "suggested_field": None}]
     assert segments_data[1]["audit_flags"] == [{"header": "OTHER", "reason": "r", "suggested_field": None}]
     assert segments_data[2]["audit_flags"] == []
+
+
+def test_attach_audit_flags_degrades_when_segment_malformed(monkeypatch):
+    import web.routes.upload as up
+
+    raw_df = pd.DataFrame([{"A": "x"}])
+    seg = _segment("Sheet::0", "Sheet", "SALE", raw_df)
+    seg.mapping_result = None  # accessing .mapping_result.mappings will raise inside _flags_for
+    job = {"segments": [seg], "raw_dfs": {seg.segment_key: raw_df.copy()}}
+    segments_data = [{"segment_key": seg.segment_key, "voided": False}]
+
+    # audit_segment must never even be reached; if it is, fail loudly
+    def _boom(*a, **k):
+        raise AssertionError("audit_segment should not be reached for a malformed segment")
+
+    monkeypatch.setattr(up, "audit_segment", _boom)
+
+    up._attach_audit_flags(job, segments_data)
+
+    assert segments_data[0]["audit_flags"] == []

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from engine.llm_mapping import _chat_json
 
 _MODEL = "gpt-4o"
+log = logging.getLogger(__name__)
 
 
 def _build_prompt(mappings, sample_rows, schema) -> str:
@@ -37,6 +39,7 @@ def verify_mapping(mappings: dict[str, str], sample_rows: list[dict], schema: di
     try:
         raw = _chat_json(_build_prompt(mappings, sample_rows, schema), model=_MODEL)
     except Exception:
+        log.debug("verify_mapping degraded to no-op (LLM call failed)", exc_info=True)
         return {"adjusted_confidence": {}, "flags": []}
 
     adjusted = {
