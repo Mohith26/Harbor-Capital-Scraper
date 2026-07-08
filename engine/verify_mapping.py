@@ -23,7 +23,9 @@ def _build_prompt(mappings, sample_rows, schema) -> str:
         "a monthly rate mapped where an annual rate is expected, or two headers mapped to the "
         "same field).\n\n"
         'Return ONLY JSON: {"adjusted_confidence": {"<raw_header>": 0.0-1.0}, '
-        '"flags": [{"header": "<raw_header>", "reason": "<why it is suspicious>"}]}. '
+        '"flags": [{"header": "<raw_header>", "reason": "<why it is suspicious>", '
+        '"suggested_field": "<the target_field the VALUES actually look like, chosen '
+        'ONLY from the target schema above, or null if unclear>"}]}. '
         "Only include headers you are adjusting or flagging."
     )
 
@@ -42,9 +44,17 @@ def verify_mapping(mappings: dict[str, str], sample_rows: list[dict], schema: di
         for h, v in (raw.get("adjusted_confidence") or {}).items()
         if h in mappings
     }
-    flags = [
-        {"header": f.get("header", ""), "reason": f.get("reason", "")}
-        for f in (raw.get("flags") or [])
-        if f.get("header") in mappings
-    ]
+    flags = []
+    for f in (raw.get("flags") or []):
+        header = f.get("header", "")
+        if header not in mappings:
+            continue
+        suggested = f.get("suggested_field")
+        if not isinstance(suggested, str) or not suggested.strip():
+            suggested = None
+        flags.append({
+            "header": header,
+            "reason": f.get("reason", ""),
+            "suggested_field": suggested,
+        })
     return {"adjusted_confidence": adjusted, "flags": flags}
