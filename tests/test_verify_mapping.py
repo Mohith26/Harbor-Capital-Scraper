@@ -61,3 +61,31 @@ def test_verify_mapping_llm_error_is_noop(monkeypatch):
     out = vm.verify_mapping({"CLOSE DATE": "tenant_name"}, [], _SCHEMA)
 
     assert out == {"adjusted_confidence": {}, "flags": []}
+
+
+def test_verify_mapping_non_string_suggested_field_is_none(monkeypatch):
+    monkeypatch.setattr(
+        vm,
+        "_chat_json",
+        lambda prompt, model=None: {
+            "flags": [{"header": "CLOSE DATE", "reason": "dates", "suggested_field": 123}]
+        },
+    )
+
+    out = vm.verify_mapping({"CLOSE DATE": "tenant_name"}, [], _SCHEMA)
+
+    assert out["flags"][0]["suggested_field"] is None
+
+
+def test_verify_mapping_whitespace_suggested_field_is_none(monkeypatch):
+    monkeypatch.setattr(
+        vm,
+        "_chat_json",
+        lambda prompt, model=None: {
+            "flags": [{"header": "CLOSE DATE", "reason": "dates", "suggested_field": "   "}]
+        },
+    )
+
+    out = vm.verify_mapping({"CLOSE DATE": "tenant_name"}, [], _SCHEMA)
+
+    assert out["flags"][0]["suggested_field"] is None
