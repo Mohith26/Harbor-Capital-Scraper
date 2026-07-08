@@ -8,6 +8,7 @@ import math
 import logging
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import pandas as pd
@@ -22,6 +23,7 @@ from engine.pipeline import run_mapping_stage, run_geocoding_stage, run_vision_p
 from engine.brokers import resolve_broker
 from engine.cleaning import apply_rate_logic
 from engine.mapping import SALE_SCHEMA, LEASE_SCHEMA, dedupe_mappings_by_target
+from engine.mapping_audit import audit_segment
 from learning.corrections import persist_with_learning
 from utils import normalize_address
 from web.config import settings
@@ -397,6 +399,43 @@ def _rate_header_for_mapping(mappings: dict[str, str]) -> Optional[str]:
     return next((raw for raw, target in mappings.items() if target == "rate_psf"), None)
 
 
+_AUDIT_MAX_WORKERS = 8
+
+
+def _attach_audit_flags(job: dict, segments_data: list[dict]) -> None:
+    """Audit each segment's mapping against its raw sample values (advisory).
+
+    Sets ``entry["audit_flags"]`` on every segments_data entry to a list of
+    {"header", "reason", "suggested_field"} dicts (``[]`` when clean or degraded).
+    Best-effort and non-fatal: a per-segment failure yields ``[]`` for that
+    segment. Segments are audited concurrently to bound wall-clock latency.
+    """
+    seg_by_key = {s.segment_key: s for s in job.get("segments", [])}
+    raw_dfs = job.get("raw_dfs", {})
+
+    def _flags_for(entry: dict) -> list[dict]:
+        seg = seg_by_key.get(entry.get("segment_key"))
+        raw_df = raw_dfs.get(entry.get("segment_key"))
+        if seg is None or raw_df is None:
+            return []
+        mappings = seg.mapping_result.mappings or {}
+        mapped_headers = [h for h in mappings if h in raw_df.columns]
+        if not mapped_headers:
+            return []
+        sample_rows = raw_df[mapped_headers].head(5).to_dict("records")
+        try:
+            return audit_segment(mappings, sample_rows, seg.fingerprint.file_type)
+        except Exception:
+            return []
+
+    if not segments_data:
+        return
+    with ThreadPoolExecutor(max_workers=min(_AUDIT_MAX_WORKERS, len(segments_data))) as pool:
+        results = list(pool.map(_flags_for, segments_data))
+    for entry, flags in zip(segments_data, results):
+        entry["audit_flags"] = flags
+
+
 @router.get("", response_class=HTMLResponse)
 async def upload_page(request: Request):
     templates = request.app.state.templates
@@ -522,6 +561,10 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
 
     except Exception as e:
         return HTMLResponse(f'<div class="text-red-600 p-4">Error processing file: {e}</div>')
+
+    # Audit layer: check each segment's mapping against its data before the
+    # analyst edits (advisory, best-effort, degrades to no flags).
+    _attach_audit_flags(_jobs[job_id], segments_data)
 
     # Determine schema fields for mapping dropdowns
     first_type = segments_data[0]["file_type"] if segments_data else "sale"

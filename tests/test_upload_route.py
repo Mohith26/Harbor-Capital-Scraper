@@ -214,3 +214,63 @@ def test_apply_mappings_without_final_types_preserves_original_type(monkeypatch)
         assert _resolve_destination_model(updated) is SaleComp
     finally:
         _jobs.pop(job_id, None)
+
+
+def test_attach_audit_flags_populates_segments_data(monkeypatch):
+    import web.routes.upload as up
+
+    raw_df = pd.DataFrame([{"CLOSE DATE": "5/1/22", "PRICE": "$10,000,000"}])
+    seg = _segment("Sheet::0", "Sheet", "SALE", raw_df)
+    job = {"segments": [seg], "raw_dfs": {seg.segment_key: raw_df.copy()}}
+    segments_data = [{"segment_key": seg.segment_key, "voided": False}]
+
+    monkeypatch.setattr(
+        up,
+        "audit_segment",
+        lambda mappings, sample_rows, file_type: [
+            {"header": "CLOSE DATE", "reason": "dates", "suggested_field": "closing_date"}
+        ],
+    )
+
+    up._attach_audit_flags(job, segments_data)
+
+    assert segments_data[0]["audit_flags"] == [
+        {"header": "CLOSE DATE", "reason": "dates", "suggested_field": "closing_date"}
+    ]
+
+
+def test_attach_audit_flags_degrades_to_empty_on_error(monkeypatch):
+    import web.routes.upload as up
+
+    raw_df = pd.DataFrame([{"A": "x"}])
+    seg = _segment("Sheet::0", "Sheet", "SALE", raw_df)
+    job = {"segments": [seg], "raw_dfs": {seg.segment_key: raw_df.copy()}}
+    segments_data = [{"segment_key": seg.segment_key, "voided": False}]
+
+    def _boom(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(up, "audit_segment", _boom)
+
+    up._attach_audit_flags(job, segments_data)
+
+    assert segments_data[0]["audit_flags"] == []
+
+
+def test_attach_audit_flags_handles_missing_raw_df(monkeypatch):
+    import web.routes.upload as up
+
+    raw_df = pd.DataFrame([{"A": "x"}])
+    seg = _segment("Sheet::0", "Sheet", "SALE", raw_df)
+    job = {"segments": [seg], "raw_dfs": {}}  # no raw df for this segment
+    segments_data = [{"segment_key": seg.segment_key, "voided": False}]
+
+    monkeypatch.setattr(
+        up,
+        "audit_segment",
+        lambda *a, **k: [{"header": "A", "reason": "r", "suggested_field": None}],
+    )
+
+    up._attach_audit_flags(job, segments_data)
+
+    assert segments_data[0]["audit_flags"] == []  # skipped: no raw df to sample
