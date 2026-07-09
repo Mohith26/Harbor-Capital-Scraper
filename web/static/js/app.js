@@ -214,35 +214,47 @@ function _googlePlacesReady() {
 }
 
 function _fetchGoogleJsAutocomplete(q) {
-    if (!_googlePlacesReady()) return Promise.resolve([]);
+    // Legacy google.maps.places.AutocompleteService is unavailable to newer Google
+    // customers and THROWS on construction. This source must never throw/reject —
+    // it runs alongside the server proxy and DB sources, and a throw here would
+    // otherwise discard all of them. Degrade to [] on any failure.
+    try {
+        if (!_googlePlacesReady()) return Promise.resolve([]);
 
-    if (!window._hcGoogleAutocompleteService) {
-        window._hcGoogleAutocompleteService = new google.maps.places.AutocompleteService();
-    }
+        if (!window._hcGoogleAutocompleteService) {
+            window._hcGoogleAutocompleteService = new google.maps.places.AutocompleteService();
+        }
 
-    const bounds = new google.maps.LatLngBounds(
-        { lat: HC_TEXAS_BOUNDS.south, lng: HC_TEXAS_BOUNDS.west },
-        { lat: HC_TEXAS_BOUNDS.north, lng: HC_TEXAS_BOUNDS.east }
-    );
+        const bounds = new google.maps.LatLngBounds(
+            { lat: HC_TEXAS_BOUNDS.south, lng: HC_TEXAS_BOUNDS.west },
+            { lat: HC_TEXAS_BOUNDS.north, lng: HC_TEXAS_BOUNDS.east }
+        );
 
-    return new Promise(resolve => {
-        window._hcGoogleAutocompleteService.getPlacePredictions({
-            input: q,
-            bounds: bounds,
-            componentRestrictions: { country: 'us' },
-            strictBounds: false,
-            types: ['address'],
-        }, (predictions, status) => {
-            if (status !== google.maps.places.PlacesServiceStatus.OK || !predictions) {
+        return new Promise(resolve => {
+            try {
+                window._hcGoogleAutocompleteService.getPlacePredictions({
+                    input: q,
+                    bounds: bounds,
+                    componentRestrictions: { country: 'us' },
+                    strictBounds: false,
+                    types: ['address'],
+                }, (predictions, status) => {
+                    if (status !== google.maps.places.PlacesServiceStatus.OK || !predictions) {
+                        resolve([]);
+                        return;
+                    }
+                    resolve(predictions.map(p => ({
+                        description: p.description || '',
+                        place_id: p.place_id || '',
+                    })));
+                });
+            } catch (e) {
                 resolve([]);
-                return;
             }
-            resolve(predictions.map(p => ({
-                description: p.description || '',
-                place_id: p.place_id || '',
-            })));
         });
-    });
+    } catch (e) {
+        return Promise.resolve([]);
+    }
 }
 
 function initGooglePlacesAutocomplete(root) {
@@ -317,11 +329,13 @@ function initAddressAutocomplete(input) {
         debounceTimer = setTimeout(async () => {
             // Fetch all available sources. DB results keep suggestions working even
             // when the Google key is restricted from a specific Places API surface.
-            const [googleJsRes, googleProxyRes, dbRes] = await Promise.all([
+            // allSettled (not all): one source failing must never discard the others.
+            const _settled = await Promise.allSettled([
                 q.length >= 3 ? _fetchGoogleJsAutocomplete(q) : Promise.resolve([]),
                 q.length >= 3 ? _fetchAutocomplete(q) : Promise.resolve([]),
                 _fetchDbAutocomplete(q, { fields: 'address', type: 'all' }),
             ]);
+            const [googleJsRes, googleProxyRes, dbRes] = _settled.map(r => r.status === 'fulfilled' ? r.value : []);
             if (seq !== requestSeq) return;
             const merged = [];
             const seen = new Set();
