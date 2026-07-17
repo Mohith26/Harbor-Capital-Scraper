@@ -88,8 +88,20 @@ function initCompMap() {
     setTimeout(function() { map.invalidateSize(); }, 200);
 }
 
-function exportCompResults(format) {
-    // Build CSV/XLSX from results
-    alert('Export as ' + format + ' — implement with server endpoint if needed');
+async function exportCompResults(format) {
+    if (!_compResults || !_compResults.length) { alert('No results to export'); return; }
+    const compType = '{{ comp_type }}';
+    const response = await fetch('/finder/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format: format, results: _compResults, comp_type: compType }),
+    });
+    if (!response.ok) { alert('Export failed'); return; }
+    const blob = await response.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'comp_finder_' + compType + '.' + (format === 'xlsx' ? 'xlsx' : 'csv');
+    a.click();
+    URL.revokeObjectURL(a.href);
 }
 </script>
