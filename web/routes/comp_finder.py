@@ -1,14 +1,41 @@
 """Comp Finder page — search and ranked results."""
+import io
 import json
 import math
 import pandas as pd
 from fastapi import APIRouter, Request, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from database import Session, SaleComp, LeaseComp
 from web.config import settings
 from web.dependencies import get_learning_store
 
 router = APIRouter(prefix="/finder", tags=["finder"])
+
+# Human-readable column layout for exported ranked results, per comp type.
+_EXPORT_COLUMNS = {
+    "sales": [
+        ("rank", "Rank"),
+        ("address", "Address"),
+        ("score", "Match %"),
+        ("price", "Sale Price"),
+        ("size", "Building Size (SF)"),
+        ("psf", "Price/SF"),
+        ("date", "Closing Date"),
+        ("lat", "Latitude"),
+        ("lng", "Longitude"),
+    ],
+    "leases": [
+        ("rank", "Rank"),
+        ("address", "Address"),
+        ("score", "Match %"),
+        ("rate", "Rate/Mo"),
+        ("size", "Leased SF"),
+        ("term", "Term (mo)"),
+        ("date", "Commencement Date"),
+        ("lat", "Latitude"),
+        ("lng", "Longitude"),
+    ],
+}
 
 
 def _safe_val(v):
@@ -150,3 +177,48 @@ async def search_comps(request: Request):
         "results_json": json.dumps(results),
         "subject_json": json.dumps(subject),
     })
+
+
+@router.post("/export")
+async def export_comp_results(request: Request):
+    """Export the ranked Comp Finder results as CSV or Excel.
+
+    The client posts the results it already has on screen (computed by
+    ``/finder/search``) so we don't have to re-run geocoding and scoring.
+    Body: ``{"format": "csv"|"xlsx", "results": [...], "comp_type": "sales"|"leases"}``.
+    """
+    body = await request.json()
+    fmt = (body.get("format") or "csv").lower()
+    results = body.get("results") or []
+    comp_type = "leases" if str(body.get("comp_type", "sales")).startswith("lease") else "sales"
+
+    if not results:
+        return StreamingResponse(
+            io.BytesIO(b"No results to export"),
+            media_type="text/plain",
+            status_code=400,
+        )
+
+    df = pd.DataFrame(results)
+    # Order/label columns for the chosen comp type; only keep ones present.
+    columns = [(key, label) for key, label in _EXPORT_COLUMNS[comp_type] if key in df.columns]
+    df = df[[key for key, _ in columns]].rename(columns=dict(columns))
+
+    filename = f"comp_finder_{comp_type}"
+    if fmt == "xlsx":
+        buffer = io.BytesIO()
+        df.to_excel(buffer, index=False, engine="xlsxwriter")
+        buffer.seek(0)
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}.xlsx"},
+        )
+
+    buffer = io.StringIO()
+    df.to_csv(buffer, index=False)
+    return StreamingResponse(
+        io.BytesIO(buffer.getvalue().encode()),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}.csv"},
+    )
