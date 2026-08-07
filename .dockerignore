@@ -1,0 +1,56 @@
+# Virtualenvs and caches - these were previously copied into the image,
+# adding ~320MB for no reason.
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# VCS and tooling
+.git/
+.gitignore
+.github/
+.devcontainer/
+.superpowers/
+.streamlit/
+
+# Tests and fixtures (not needed at runtime)
+tests/
+tools/
+pytest.ini
+
+# Local databases
+*.db
+comps.db
+learning_local.db
+
+# Sample/working spreadsheets committed to the repo
+*.csv
+*.xlsx
+
+# Brand assets: web/main.py base64-inlines two logos at startup, so keep the
+# @300w variants and drop the large masters.
+Logo Masters/**/@600w/
+Logo Masters/**/@1200w/
+Logo Masters/**/@2000w/
+Logo Masters/**/*.svg
+Logo Masters/**/*.eps
+Logo Masters/**/*.pdf
+*.png
+
+# Docs and notes
+docs/
+APP_OVERVIEW.md
+*.md
+
+# Cloudflare/node tooling
+node_modules/
+.wrangler/
+
+# Local env
+.env
+.env.*
+.DS_Store

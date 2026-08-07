@@ -6,8 +6,19 @@ from sqlalchemy.orm import declarative_base, sessionmaker, validates
 load_dotenv()
 
 def _get_db_url():
-    """Get database URL from environment variable. No Streamlit dependency."""
-    return os.environ.get("SUPABASE_DB_URL", "sqlite:///comps.db")
+    """Resolve the database URL from the environment.
+
+    Resolution order:
+      1. ``DATABASE_URL`` / ``SUPABASE_DB_URL`` if set explicitly.
+      2. Cloudflare D1 (``sqlite+d1://``) when ``D1_DATABASE_ID`` is present.
+      3. A local SQLite file, for development and tests.
+    """
+    explicit = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+    if explicit:
+        return explicit
+    if os.environ.get("D1_DATABASE_ID"):
+        return "sqlite+d1://"
+    return "sqlite:///comps.db"
 
 Base = declarative_base()
 from learning.schemas import LearningBase
@@ -24,6 +35,23 @@ def _validate_address(value):
     if value is None or not str(value).strip():
         raise ValueError("address is required and must not be empty or whitespace-only")
     return value
+
+
+class UserSession(Base):
+    """Persistent login sessions.
+
+    These used to live in a module-level dict, which meant every process
+    restart silently logged everyone out.  That is fatal on Cloudflare
+    Containers, which sleep after a few minutes idle, so sessions are stored
+    in the database instead.
+    """
+    __tablename__ = 'user_sessions'
+    token = Column(String, primary_key=True)
+    username = Column(String, nullable=False)
+    name = Column(String)
+    role = Column(String)
+    login_time = Column(Float, nullable=False)
+    expires_at = Column(Float, nullable=False)
 
 
 class SaleComp(Base):
@@ -103,6 +131,8 @@ class LeaseComp(Base):
 
 DB_URL = _get_db_url()
 
+USING_D1 = DB_URL.startswith("sqlite+d1")
+
 engine_kwargs = {}
 if DB_URL.startswith("postgresql"):
     engine_kwargs["pool_pre_ping"] = True
@@ -111,6 +141,15 @@ if DB_URL.startswith("postgresql"):
     if "sslmode" not in DB_URL:
         separator = "&" if "?" in DB_URL else "?"
         DB_URL = f"{DB_URL}{separator}sslmode=require"
+elif USING_D1:
+    # Importing the package registers the ``sqlite+d1`` dialect.
+    import d1  # noqa: F401
+
+    # Each statement is an independent HTTPS call, so pooling buys nothing and
+    # a stale pooled "connection" would just hide errors.
+    from sqlalchemy.pool import NullPool
+
+    engine_kwargs["poolclass"] = NullPool
 
 engine = create_engine(DB_URL, **engine_kwargs)
 
@@ -118,13 +157,20 @@ engine = create_engine(DB_URL, **engine_kwargs)
 _tables_created = False
 def ensure_tables():
     global _tables_created
-    if not _tables_created:
-        try:
-            Base.metadata.create_all(engine)
-            LearningBase.metadata.create_all(engine)
-            _tables_created = True
-        except Exception as e:
-            print(f"Warning: Could not create tables: {e}")
+    if _tables_created:
+        return
+    if USING_D1:
+        # D1's schema is managed out-of-band by `migrations/` + `wrangler d1
+        # execute`, and SQLAlchemy's reflection round-trips are expensive over
+        # HTTP, so skip create_all entirely.
+        _tables_created = True
+        return
+    try:
+        Base.metadata.create_all(engine)
+        LearningBase.metadata.create_all(engine)
+        _tables_created = True
+    except Exception as e:
+        print(f"Warning: Could not create tables: {e}")
 
 try:
     ensure_tables()

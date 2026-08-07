@@ -1,8 +1,23 @@
+"""Legacy Supabase Storage helpers.
+
+Only the retired Streamlit entrypoint (``app.py``) ever imported this; the
+FastAPI app in ``web/`` never calls it, and ``source_file_url`` is empty for
+every row in the database.  The ``supabase`` dependency was therefore dropped,
+so the client is imported lazily and raises a clear error if this code is ever
+reached again.
+"""
+
 import os
 from uuid import uuid4
-from supabase import create_client
 
 BUCKET_NAME = "comp-files"
+
+
+def create_client(*args, **kwargs):  # pragma: no cover - intentionally inert
+    raise RuntimeError(
+        "Supabase Storage was removed during the Cloudflare migration. "
+        "This code path is unused; wire up R2 if file storage is needed again."
+    )
 
 def _get_secret(key, default=""):
     try:

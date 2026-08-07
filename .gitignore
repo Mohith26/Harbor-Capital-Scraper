@@ -13,3 +13,7 @@ venv/
 
 # Superpowers SDD process scratch (ledger, task briefs/reports)
 .superpowers/
+
+.dev.vars
+.wrangler/
+node_modules/

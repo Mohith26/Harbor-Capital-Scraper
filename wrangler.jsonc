@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "harbor-comps",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "enabled": true
+  },
+
+  "containers": [
+    {
+      "class_name": "CompDatabaseContainer",
+      "image": "./Dockerfile",
+      "instance_type": "standard-1",
+      "max_instances": 2
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "COMP_DATABASE",
+        "class_name": "CompDatabaseContainer"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CompDatabaseContainer"]
+    }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "COMPS_DB",
+      "database_name": "harbor-comps",
+      "database_id": "a4b00be2-2e66-4063-9565-209efde9c3ac"
+    }
+  ],
+
+  "routes": [
+    {
+      "pattern": "comps.harborcap.dev",
+      "custom_domain": true
+    }
+  ]
+}

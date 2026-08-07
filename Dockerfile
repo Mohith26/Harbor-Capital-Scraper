@@ -1,6 +1,12 @@
-FROM python:3.11-slim
+# Cloudflare Containers run linux/amd64 only, so pin the platform explicitly -
+# otherwise a build on an Apple Silicon Mac produces an arm64 image that the
+# platform refuses.
+FROM --platform=linux/amd64 python:3.11-slim
 
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8501
 
 WORKDIR /app
 
