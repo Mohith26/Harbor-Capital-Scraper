@@ -110,7 +110,7 @@ function previewText(doc, { maxChars = 120000 } = {}) {
 }
 
 function sheetByName(doc, name) {
-  return doc.sheets.find((s) => s.name === name) || doc.sheets.find((s) => s.name.trim().toLowerCase() === String(name).trim().toLowerCase());
+  return doc.sheets.find((s) => s.name === name) || doc.sheets.find((s) => s.name.trim().toLowerCase() === String(name).trim().toLowerCase()) || (doc.sheets.length === 1 ? doc.sheets[0] : null) || (/^page\s*\d+/i.test(String(name)) ? doc.sheets.find((s) => s.name.replace(/\s+/g, "") === String(name).toLowerCase().replace(/\s+/g, "")) : null);
 }
 
 function rowLine(r) {

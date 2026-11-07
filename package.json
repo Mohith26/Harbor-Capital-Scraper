@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
+    "postal-mime": "^2.7.6",
     "unpdf": "^2.1.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },

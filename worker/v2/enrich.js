@@ -18,7 +18,7 @@
 
 import { addrSimilarity, haversineMi, bbox, parseAddress } from "./geo.js";
 
-export const SOURCE_CONF = { manual: 1.0, broker_sheet: 0.85, cad: 0.8, costar: 0.8, web: 0.6, aerial: 0.5, parcel: 0.75 };
+export const SOURCE_CONF = { manual: 1.0, broker_sheet: 0.85, om: 0.84, cad: 0.8, costar: 0.8, web: 0.6, aerial: 0.5, parcel: 0.75 };
 // Per-field overrides: CAD is authoritative for land and vintage, weaker for building SF on multi-building parcels.
 const FIELD_CONF = {
   cad: { land_acres: 0.92, year_built: 0.85, building_sf: 0.7 },

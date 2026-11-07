@@ -18,15 +18,17 @@ import { matchCostar, costarObservations, parcelObservations, resolveFeatures } 
 // When the analyst gives a subject address but not its specs, look the building
 // up (our DB -> CoStar index -> county appraisal) and use its size / vintage /
 // clear height / product as soft targets. Explicit values always win.
-async function describeSubject(db, loc, parsed) {
-  if (!loc || loc.kind !== "address" || !["rooftop", "interpolated", "parcel", "source"].includes(loc.quality)) return null;
+export async function describeSubject(db, loc, parsed) {
+  if (!loc || !["address", "pin"].includes(loc.kind) || (loc.kind === "address" && !["rooftop", "interpolated", "parcel", "source"].includes(loc.quality))) return null;
   const probe = { latitude: loc.lat, longitude: loc.lng, address: parsed.subject?.address || null };
   const obs = [];
   const b = bbox(loc.lat, loc.lng, 0.05);
   const own = await db.prepare("SELECT * FROM v2_properties WHERE latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ? LIMIT 5").bind(b.minLat, b.maxLat, b.minLng, b.maxLng).all().catch(() => ({ results: [] }));
+  let ownId = null;
   for (const p of own.results || []) {
     if (haversineMi(loc.lat, loc.lng, p.latitude, p.longitude) > 0.03) continue;
-    for (const f of ["building_sf", "year_built", "clear_height_ft", "property_subtype", "loading", "construction", "land_acres"]) if (p[f] != null) obs.push({ field: f, value: p[f], source: "broker_sheet", source_ref: `comp DB property #${p.id}` });
+    ownId = ownId || p.id;
+    for (const f of ["building_sf", "year_built", "clear_height_ft", "property_subtype", "loading", "construction", "land_acres", "dock_doors", "drive_in_doors", "cranes", "power", "building_class", "tenancy", "yard_acres", "rail_served"]) if (p[f] != null) obs.push({ field: f, value: p[f], source: "broker_sheet", source_ref: `comp DB property #${p.id}` });
   }
   const cs = await matchCostar(db, probe).catch(() => null);
   if (cs) obs.push(...costarObservations(cs.row));
@@ -35,7 +37,7 @@ async function describeSubject(db, loc, parsed) {
   if (!obs.length) return null;
   const { best } = resolveFeatures(obs);
   const v = (f) => best[f]?.value ?? null;
-  return { building_sf: v("building_sf"), year_built: v("year_built"), clear_height_ft: v("clear_height_ft"), property_subtype: v("property_subtype"), loading: v("loading"), construction: v("construction"), land_acres: v("land_acres"), sources: [...new Set(Object.values(best).map((x) => x.source))] };
+  return { property_id: ownId, detail: Object.fromEntries(Object.entries(best).map(([k, x]) => [k, { value: x.value, source: x.source, ref: x.source_ref || null }])), building_sf: v("building_sf"), year_built: v("year_built"), clear_height_ft: v("clear_height_ft"), property_subtype: v("property_subtype"), loading: v("loading"), construction: v("construction"), land_acres: v("land_acres"), sources: [...new Set(Object.values(best).map((x) => x.source))] };
 }
 
 // Harbor vocabulary -> gazetteer aliases (from Slack usage). Values are
@@ -305,6 +307,56 @@ function linearScore(v, target, span) {
   return Math.max(0, 1 - Math.abs(v - target) / span);
 }
 
+// Product tags (see tags.js). Defining tags decide whether a comp is the same
+// kind of building; related tags count partly; a comp with no defining tag is
+// "type unknown" (kept, scored lower); a different defining tag is a mismatch.
+export const TAG_GROUPS = {
+  crane: ["crane", "manufacturing", "heavy_power"], manufacturing: ["manufacturing", "crane", "heavy_power"], heavy_power: ["heavy_power", "manufacturing", "crane"],
+  ios: ["ios", "yard", "truck_terminal"], truck_terminal: ["truck_terminal", "ios", "cross_dock"],
+  shallow_bay: ["shallow_bay", "multi_tenant", "flex", "service"], multi_tenant: ["multi_tenant", "shallow_bay", "flex", "service"], flex: ["flex", "shallow_bay", "service"], service: ["service", "shallow_bay", "flex"],
+  bulk: ["bulk", "cross_dock"], cold_storage: ["cold_storage"],
+};
+const DEFINING = new Set(Object.keys(TAG_GROUPS));
+export function tagScore(want, haveStr) {
+  const w = (want || []).filter((x) => DEFINING.has(x));
+  if (!w.length) return null;
+  const have = new Set(String(haveStr || "").split("|").filter(Boolean));
+  if (w.some((x) => have.has(x))) return 1;
+  if (w.some((x) => TAG_GROUPS[x].some((y) => have.has(y)))) return 0.72;
+  if (![...have].some((x) => DEFINING.has(x))) return 0.42;
+  return 0.1;
+}
+function queryTags(parsed, q) {
+  const t = new Set();
+  const s = String(q || "").toLowerCase();
+  const sub = parsed.property_subtype || [];
+  if (/crane/.test(s) || parsed.needs?.cranes) t.add("crane");
+  if (parsed.needs?.heavy_power || /heavy power/.test(s)) t.add("heavy_power");
+  if (sub.includes("manufacturing")) t.add("manufacturing");
+  if (sub.includes("ios") || /\bios\b|outdoor storage/.test(s)) t.add("ios");
+  if (/truck terminal/.test(s)) t.add("truck_terminal");
+  if (sub.includes("shallow_bay") || /shallow[- ]bay|small[- ]bay/.test(s)) t.add("shallow_bay");
+  if (sub.includes("multi_tenant")) t.add("multi_tenant");
+  if (sub.includes("flex")) t.add("flex");
+  if (sub.includes("bulk_distribution") || /big[- ]box|\bbulk\b/.test(s)) t.add("bulk");
+  if (sub.includes("cold_storage")) t.add("cold_storage");
+  for (const l of parsed.loading || []) t.add({ rear: "rear_load", front: "front_load", cross_dock: "cross_dock" }[l]);
+  if (parsed.needs?.yard) t.add("yard");
+  if (parsed.needs?.rail) t.add("rail");
+  t.delete(undefined);
+  return [...t];
+}
+
+// SF a sale actually priced: price / price-per-SF when both are known (the
+// building record can hold a different size, e.g. one building of a park).
+export function saleSf(c) {
+  if (c.sale_price > 0 && c.price_psf > 0 && c.sale_type !== "portfolio") {
+    const v = c.sale_price / c.price_psf;
+    if (v > 500 && v < 5e7) return Math.round(v);
+  }
+  return c.building_sf ?? c.leased_sf ?? null;
+}
+
 const BASE_WEIGHTS = { location: 0.27, size: 0.2, recency: 0.15, product: 0.15, clear_height: 0.07, vintage: 0.07, features: 0.06, data: 0.03 };
 
 export function scoreComp(c, parsed, loc, nowYear) {
@@ -323,7 +375,7 @@ export function scoreComp(c, parsed, loc, nowYear) {
     }
   }
   // size
-  const sf = c.record_kind === "lease" ? c.leased_sf ?? c.building_sf : c.record_kind === "listing" ? c.available_sf ?? c.building_sf : c.building_sf ?? c.leased_sf;
+  const sf = c.record_kind === "lease" ? c.leased_sf ?? c.building_sf : c.record_kind === "listing" ? c.available_sf ?? c.building_sf : saleSf(c);
   parts.size = rangeScore(sf, parsed.size_sf || {});
   if (parsed.land_acres && (parsed.land_acres.target || parsed.land_acres.min)) {
     const la = rangeScore(c.land_acres, parsed.land_acres);
@@ -337,10 +389,12 @@ export function scoreComp(c, parsed, loc, nowYear) {
     parts.recency = age <= 1 ? 1 : age <= 2 ? 1 - 0.2 * (age - 1) : age <= 3 ? 0.8 - 0.3 * (age - 2) : Math.max(0.05, 0.5 - 0.12 * (age - 3));
   }
   // product
-  const pt = productScore(parsed.property_subtype, c.property_subtype, c.record_kind === "lease" ? c.leased_sf ?? c.building_sf : c.record_kind === "listing" ? c.available_sf ?? c.building_sf : c.building_sf);
+  const pt = productScore(parsed.property_subtype, c.property_subtype, c.record_kind === "lease" ? c.leased_sf ?? c.building_sf : c.record_kind === "listing" ? c.available_sf ?? c.building_sf : saleSf(c));
   const cls = parsed.building_class && parsed.building_class.length ? (c.building_class ? (parsed.building_class.includes(c.building_class) ? 1 : 0.3) : 0.5) : null;
   const st = parsed.sale_type && parsed.sale_type.length && c.record_kind === "sale" ? (c.sale_type ? (parsed.sale_type.includes(c.sale_type) ? 1 : 0.35) : 0.5) : null;
-  const pparts = [pt, cls, st].filter((x) => x != null);
+  const tg = tagScore(parsed.tags_want, c.product_tags);
+  if (tg != null) c._tagState = tg >= 0.99 ? "match" : tg >= 0.7 ? "related" : tg >= 0.4 ? "unknown" : "conflict";
+  const pparts = (tg != null ? [tg, cls, st] : [pt, cls, st]).filter((x) => x != null);
   parts.product = pparts.length ? pparts.reduce((a, b) => a + b, 0) / pparts.length : null;
   // clear height / vintage
   const chT = parsed.clear_height_ft?.target ?? parsed.clear_height_ft?.min ?? null;
@@ -355,6 +409,7 @@ export function scoreComp(c, parsed, loc, nowYear) {
   const n = parsed.needs || {};
   if (n.rail) f.push(c.rail_served ? 1 : c.rail_served === 0 ? 0.1 : 0.4);
   if (n.yard) f.push(c.yard_acres || c.property_subtype === "ios" || /yard|ios|outdoor/i.test(c.notes || "") ? 1 : 0.35);
+  for (const ft of (parsed.tags_want || []).filter((x) => ["rear_load", "front_load", "cross_dock", "yard", "rail"].includes(x))) f.push(String(c.product_tags || "").includes(`|${ft}|`) ? 1 : 0.4);
   if (n.cranes || n.heavy_power) f.push(/crane|amp|kva|heavy power|480/i.test(`${c.power || ""} ${c.cranes || ""} ${c.notes || ""}`) || c.property_subtype === "manufacturing" ? 1 : 0.35);
   parts.features = f.length ? f.reduce((a, b) => a + b, 0) / f.length : null;
   // data completeness (has the numbers an analyst needs)
@@ -382,7 +437,7 @@ function passesHard(c, parsed, loc, sinceYear) {
   if (c.status !== "active") return false;
   if (sinceYear != null && c.txn_year != null && c.txn_year < sinceYear) return false;
   if (strict.has("since") && sinceYear != null && c.txn_year == null) return false;
-  const sf = c.record_kind === "lease" ? c.leased_sf ?? c.building_sf : c.building_sf ?? c.leased_sf;
+  const sf = c.record_kind === "lease" ? c.leased_sf ?? c.building_sf : saleSf(c);
   const sz = parsed.size_sf || {};
   if ((strict.has("size_sf") || (sz.min != null && sz.max != null)) && sf != null) {
     if (sz.min != null && sf < sz.min * 0.9) return false;
@@ -390,6 +445,7 @@ function passesHard(c, parsed, loc, sinceYear) {
   }
   const la = parsed.land_acres || {};
   if (la.min != null && la.max != null && c.land_acres != null && (c.land_acres < la.min * 0.85 || c.land_acres > la.max * 1.15)) return false;
+  if (parsed.product_gate && c._tagState === "conflict") return false;
   if (strict.has("property_subtype") && parsed.property_subtype?.length && c.property_subtype && !parsed.property_subtype.includes(c.property_subtype)) return false;
   if (strict.has("building_class") && parsed.building_class?.length && c.building_class && !parsed.building_class.includes(c.building_class)) return false;
   if (parsed.needs?.cap_rate && strict.has("cap_rate") && !c.cap_rate_pct) return false;
@@ -432,9 +488,11 @@ export function summarize(rows) {
   };
 }
 
-export async function findComps(env, db, llm, { query = "", location = null, filters = {}, limit = 30, llms = null }) {
+export async function findComps(env, db, llm, { query = "", location = null, filters = {}, limit = 30, llms = null, parsed: given = null, skipSubject = false, perProperty = 3 }) {
   const t0 = Date.now();
-  const parsed = query.trim() ? await parseQuery(llm, query, llms) : { comp_types: filters.comp_types || ["sale", "lease"], subject: {}, strict: [], priorities: [] };
+  const parsed = given ? JSON.parse(JSON.stringify(given)) : query.trim() ? await parseQuery(llm, query, llms) : { comp_types: filters.comp_types || ["sale", "lease"], subject: {}, strict: [], priorities: [] };
+  if (!given && !(parsed.tags_want || []).length) parsed.tags_want = queryTags(parsed, query);
+  if (!given && parsed.product_gate == null) parsed.product_gate = true;
   // Explicit UI filters override the parse and are hard constraints.
   parsed.strict = parsed.strict || [];
   for (const [k, v] of Object.entries(filters || {})) {
@@ -451,7 +509,7 @@ export async function findComps(env, db, llm, { query = "", location = null, fil
   if (loc && filters?.radius_mi) loc.radius = Number(filters.radius_mi);
   let subject = null;
   try {
-    subject = await describeSubject(db, loc, parsed);
+    if (!skipSubject) subject = await describeSubject(db, loc, parsed);
   } catch {}
   if (subject) {
     const auto = [];
@@ -468,7 +526,7 @@ export async function findComps(env, db, llm, { query = "", location = null, fil
 
   let sql = `SELECT c.*, p.address, p.property_name, p.city, p.zip, p.county, p.market, p.submarket, p.latitude, p.longitude, p.geocode_quality,
     p.building_sf, p.land_acres, p.year_built, p.clear_height_ft, p.dock_doors, p.drive_in_doors, p.loading, p.construction, p.office_pct,
-    p.sprinkler, p.rail_served, p.yard_acres, p.building_class, p.property_subtype, p.tenancy, p.power, p.cranes, p.features_json, p.id AS pid
+    p.sprinkler, p.rail_served, p.yard_acres, p.building_class, p.property_subtype, p.tenancy, p.power, p.cranes, p.features_json, p.product_tags, p.id AS pid
     FROM v2_comps c JOIN v2_properties p ON p.id = c.property_id WHERE c.status = 'active'`;
   const binds = [];
   if (loc) {
@@ -506,7 +564,7 @@ export async function findComps(env, db, llm, { query = "", location = null, fil
   const top = [];
   for (const r of scored) {
     const n = perProp.get(r.pid) || 0;
-    if (n >= 3) continue;
+    if (n >= perProperty) continue;
     perProp.set(r.pid, n + 1);
     top.push(r);
     if (top.length >= limit) break;
@@ -540,6 +598,7 @@ function publicRow(r) {
   out.distance_mi = r._dist != null ? +r._dist.toFixed(2) : null;
   out.size_sf = r._sf ?? null;
   out.relaxed = !!r._relaxed;
+  out.tag_state = r._tagState || null;
   out.approx_location = ["city", "postal", "submarket"].includes(r.geocode_quality);
   out.flags = r.flags_json ? JSON.parse(r.flags_json).filter((f) => f.severity !== "info").map((f) => f.msg) : [];
   return out;

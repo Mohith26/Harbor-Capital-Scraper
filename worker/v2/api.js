@@ -11,7 +11,19 @@ import { findPropertyMatch, findDealMatch, commitRecord, refreshProperty, insert
 import { findComps, explainComps, geoCache, ALIASES } from "./finder.js";
 import { matchCostar, costarObservations, parcelObservations, aerialObservations, webObservations } from "./enrich.js";
 import { RECORD_KEYS, SCHEMA_PROMPT } from "./schema.js";
-import UI_HTML from "./ui.html";
+import UI_SHELL from "./ui.html";
+import UI_DEALS from "./ui-deals.html";
+import UI_LIB from "./ui-lib.html";
+import LOGO_BLACK from "./logo-black-svg.html";
+const UI_HTML = UI_SHELL.replace("<!--EXTRA_JS-->", () => UI_DEALS + "\n" + UI_LIB);
+export { LOGO_BLACK };
+import * as XLSX from "xlsx";
+import { handleDeals, checkDeals } from "./deals.js";
+import { handleLibrary, checkSaved } from "./library.js";
+import { linkPlayers, coreName } from "./players.js";
+import { productTags } from "./tags.js";
+import { rentBasis } from "./store.js";
+import { handleMcp } from "./mcp.js";
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 const bad = (msg, status = 400) => json({ error: msg }, status);
@@ -61,6 +73,14 @@ export async function handleApi(req, env, ctx) {
     if (!isService(who) && !admins.includes(who.toLowerCase())) return bad("admin only", 403);
   }
   try {
+    {
+      const who = userOf(req);
+      const r1 = await handleDeals(req, env, ctx, path, who);
+      if (r1) return r1;
+      const r2 = await handleLibrary(req, env, ctx, path, who);
+      if (r2) return r2;
+      if (path === "/api/v2/mcp") return await handleMcp(req, env, ctx, who);
+    }
     // ---------------- meta ----------------
     if (path === "/api/v2/health") {
       const c = await db.prepare("SELECT (SELECT count(*) FROM v2_comps WHERE status='active') AS comps, (SELECT count(*) FROM v2_properties) AS properties").first();
@@ -270,6 +290,19 @@ export async function handleApi(req, env, ctx) {
       return json({ records: out.length });
     }
 
+    if ((mm = m(/^\/api\/v2\/jobs\/([\w-]+)\/source$/)) && req.method === "GET") {
+      const job = await db.prepare("SELECT * FROM v2_jobs WHERE id = ?").bind(mm[1]).first();
+      if (!job) return bad("job not found", 404);
+      const { doc } = await loadDoc(env, job);
+      const ci = (s) => [...s].reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+      const sheets = (doc.sheets || []).slice(0, 16).map((s) => {
+        const rows = (s.rows || []).slice(0, 700);
+        const maxC = Math.min(40, Math.max(0, ...rows.flatMap((r) => r.cells.map((c) => (c.col === "L" ? 0 : ci(c.col))))) + 1);
+        return { name: s.name, truncated: (s.rows || []).length > 700, rows: rows.map((r) => { const c = Array(maxC).fill(""); for (const x of r.cells) { const i = x.col === "L" ? 0 : ci(x.col); if (i < maxC) c[i] = String(x.text).slice(0, 120); } return { n: r.row, c }; }) };
+      });
+      return json({ kind: doc.kind, sheets });
+    }
+
     if ((mm = m(/^\/api\/v2\/jobs\/([\w-]+)$/)) && req.method === "GET") {
       const job = await db.prepare("SELECT j.*, f.filename, f.summary FROM v2_jobs j LEFT JOIN v2_files f ON f.id = j.file_id WHERE j.id = ?").bind(mm[1]).first();
       if (!job) return bad("job not found", 404);
@@ -326,7 +359,10 @@ export async function handleApi(req, env, ctx) {
     // Bulk ingest of already-structured records (CoStar exports, legacy rows).
     // Same validation, geocoding, property matching and dedupe as uploads.
     if (path === "/api/v2/admin/ingest" && req.method === "POST") {
+      // The first CoStar loader ran too hot for D1; it is retired in favour of costar-load-2.
+      if (userOf(req) === "costar-load (automation)") return json({ error: "paused - use costar-load-2" }, 503);
       const body = await req.json();
+      const touched = new Set();
       const sourceKind = body.source_kind || "costar";
       const label = body.source_label || sourceKind;
       let fileId = body.file_id || null;
@@ -349,14 +385,77 @@ export async function handleApi(req, env, ctx) {
           let decision = "add";
           if (deal?.verdict === "duplicate") decision = "merge";
           if (deal?.verdict === "conflict") { out.conflicts++; r._flags = r._flags || []; r._flags.push({ field: "dedupe", code: "possible_duplicate", severity: "warn", msg: `possible duplicate of comp #${deal.comp.id} (${(deal.conflicts || []).join("; ")})` }); }
-          const res = await commitRecord(db, r, { property: pm && !pm.weak ? pm.property : null, deal: deal && deal.verdict === "duplicate" ? deal : null }, decision, { fileId, sourceKind, sourceLabel: raw._source_label || label, user: userOf(req) });
+          const res = await commitRecord(db, r, { property: pm && !pm.weak ? pm.property : null, deal: deal && deal.verdict === "duplicate" ? deal : null }, decision, { fileId, sourceKind, sourceLabel: raw._source_label || label, user: userOf(req), deferRefresh: true });
+          if (res.property_id) touched.add(res.property_id);
           if (res.action === "merged") out.merged++; else if (res.action === "added") out.added++; else out.skipped++;
         } catch (e) {
           out.failed++;
           if (out.errors.length < 5) out.errors.push(String(e.message || e));
         }
       }
+      for (const pid of touched) await refreshProperty(db, pid).catch(() => null);
       return json(out);
+    }
+
+    if (path === "/api/v2/admin/backfill-players" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const { results } = await db.prepare("SELECT id, buyer, seller, tenant, landlord, txn_date FROM v2_comps WHERE id > ? AND status = 'active' ORDER BY id LIMIT 150").bind(Number(body.after || 0)).all();
+      for (const c of results) await linkPlayers(db, c.id, c, c.txn_date);
+      return json({ done: results.length, last: results.length ? results[results.length - 1].id : null });
+    }
+    // Push feature observations from an outside source (OMKB OMs, CoStar archive) and re-resolve.
+    if (path === "/api/v2/admin/observations" && req.method === "POST") {
+      const body = await req.json();
+      const out = [];
+      for (const it of (body.items || []).slice(0, 60)) {
+        const obs = (it.obs || []).filter((o) => o.field && o.value != null && o.source);
+        if (!obs.length) continue;
+        if (body.replace_source) await db.prepare("DELETE FROM v2_feature_obs WHERE property_id = ? AND source = ?").bind(it.property_id, body.replace_source).run();
+        await insertObservations(db, it.property_id, obs);
+        await refreshProperty(db, it.property_id);
+        out.push(it.property_id);
+      }
+      return json({ done: out.length });
+    }
+    // Player upkeep: merge "X Properties" into "X", recompute counts and last-active dates.
+    if (path === "/api/v2/admin/players-maint" && req.method === "POST") {
+      const { results } = await db.prepare("SELECT id, name, norm, n_deals FROM v2_players").all();
+      const byCore = new Map();
+      for (const p of results) { const k = coreName(p.norm); (byCore.get(k) || byCore.set(k, []).get(k)).push(p); }
+      let merged = 0;
+      for (const [, ps] of byCore) {
+        ps.sort((a, b) => b.n_deals - a.n_deals);
+        const keep = ps[0];
+        if (ps.length < 2) continue;
+        await db.prepare("INSERT OR REPLACE INTO v2_player_aliases (alias_norm, player_id) VALUES (?, ?)").bind(`core:${coreName(keep.norm)}`, keep.id).run();
+        for (const a of ps.slice(1)) {
+          await db.batch([
+            db.prepare("INSERT OR IGNORE INTO v2_comp_players (comp_id, player_id, role) SELECT comp_id, ?, role FROM v2_comp_players WHERE player_id = ?").bind(keep.id, a.id),
+            db.prepare("DELETE FROM v2_comp_players WHERE player_id = ?").bind(a.id),
+            db.prepare("INSERT OR REPLACE INTO v2_player_aliases (alias_norm, player_id) VALUES (?, ?)").bind(a.norm, keep.id),
+            db.prepare("UPDATE v2_player_aliases SET player_id = ? WHERE player_id = ?").bind(keep.id, a.id),
+            db.prepare("UPDATE v2_players SET kinds = COALESCE(kinds,'') || COALESCE((SELECT kinds FROM v2_players WHERE id = ?), '') WHERE id = ?").bind(a.id, keep.id),
+            db.prepare("DELETE FROM v2_players WHERE id = ?").bind(a.id),
+          ]);
+          merged++;
+        }
+      }
+      await db.prepare(`UPDATE v2_players SET n_deals = (SELECT count(DISTINCT cp.comp_id) FROM v2_comp_players cp JOIN v2_comps c ON c.id = cp.comp_id WHERE cp.player_id = v2_players.id AND c.status = 'active'),
+        last_date = (SELECT max(c.txn_date_sort) FROM v2_comp_players cp JOIN v2_comps c ON c.id = cp.comp_id WHERE cp.player_id = v2_players.id AND c.status = 'active' AND c.txn_date_sort <= date('now'))`).run();
+      return json({ merged });
+    }
+    if (path === "/api/v2/admin/run-watch" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      if (body.reset_deal) await db.prepare("UPDATE v2_deals SET last_checked_at = NULL, last_seen_comp_id = ? WHERE id = ?").bind(body.seen ?? 0, body.reset_deal).run();
+      if (body.reset_saved) await db.prepare("UPDATE v2_saved SET last_run_at = NULL, last_seen_comp_id = ? WHERE id = ?").bind(body.seen ?? 0, body.reset_saved).run();
+      return json({ deals: await checkDeals(env, db), saved: await checkSaved(env, db) });
+    }
+    if (path === "/api/v2/admin/retag" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const { results } = await db.prepare("SELECT p.*, (SELECT group_concat(COALESCE(c.notes,'') || ' ' || COALESCE(c.source_label,'') || ' ' || COALESCE(c.source_sheet,''), ' ') FROM v2_comps c WHERE c.property_id = p.id AND c.status = 'active') AS txt, (SELECT group_concat(o.value, ' ') FROM v2_feature_obs o WHERE o.property_id = p.id AND (o.field LIKE '%note%' OR o.field IN ('power','cranes'))) AS obs FROM v2_properties p WHERE p.id > ? ORDER BY p.id LIMIT 300").bind(Number(body.after || 0)).all();
+      const stmts = results.map((p) => db.prepare("UPDATE v2_properties SET product_tags = ? WHERE id = ?").bind(productTags(p, `${p.txt || ""} ${p.obs || ""}`), p.id));
+      for (let i = 0; i < stmts.length; i += 50) await db.batch(stmts.slice(i, i + 50));
+      return json({ done: results.length, last: results.length ? results[results.length - 1].id : null });
     }
 
     // Re-run validation on stored comps (after rule changes).
@@ -369,6 +468,7 @@ export async function handleApi(req, env, ctx) {
         const snap = JSON.parse(c.snapshot_json || "{}");
         const prev = JSON.parse(c.flags_json || "[]").filter((f) => ["unverified", "vision", "portfolio", "possible_duplicate", "geocode_low", "geocode_failed"].includes(f.code));
         const r = validateRecord({ ...snap, record_kind: c.record_kind, _flags: prev });
+        if (r.rent_basis == null) r.rent_basis = rentBasis(r.lease_structure);
         const td = txnDateOf(r);
         stmts.push(db.prepare(`UPDATE v2_comps SET ${COMP_FIELDS.map((f) => `${f} = ?`).join(", ")}, txn_date = ?, txn_year = ?, flags_json = ?, severity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(...COMP_FIELDS.map((f) => (r[f] === undefined ? null : r[f])), td, dateToNumber(td), JSON.stringify(r._flags), r._severity, c.id));
       }
@@ -458,6 +558,14 @@ export async function handleApi(req, env, ctx) {
       if (q.get("source")) { where.push("c.source_kind = ?"); binds.push(q.get("source")); }
       if (q.get("severity")) { where.push("c.severity = ?"); binds.push(q.get("severity")); }
       if (q.get("since")) { where.push("c.txn_year >= ?"); binds.push(Number(q.get("since"))); }
+      if (q.get("tag")) for (const tg of q.get("tag").split(",")) { where.push("p.product_tags LIKE ?"); binds.push(`%|${tg}|%`); }
+      if (q.get("player")) { where.push("c.id IN (SELECT comp_id FROM v2_comp_players WHERE player_id = ?)"); binds.push(Number(q.get("player"))); }
+      if (q.get("precision")) { where.push("c.date_precision = ?"); binds.push(q.get("precision")); }
+      if (q.get("property")) { where.push("c.property_id = ?"); binds.push(Number(q.get("property"))); }
+      if (q.get("min_sf")) { where.push("COALESCE(c.leased_sf, c.available_sf, p.building_sf) >= ?"); binds.push(Number(q.get("min_sf"))); }
+      if (q.get("max_sf")) { where.push("COALESCE(c.leased_sf, c.available_sf, p.building_sf) <= ?"); binds.push(Number(q.get("max_sf"))); }
+      if (q.get("since_date")) { where.push("c.txn_date_sort >= ?"); binds.push(q.get("since_date")); }
+      if (q.get("ids")) { const ids = q.get("ids").split(",").map(Number).filter(Boolean).slice(0, 90); where.push(`c.id IN (${ids.map(() => "?").join(",") || "-1"})`); binds.push(...ids); }
       if (q.get("q")) {
         where.push("(p.address LIKE ? OR p.property_name LIKE ? OR c.tenant LIKE ? OR c.buyer LIKE ? OR c.seller LIKE ? OR p.city LIKE ? OR p.submarket LIKE ? OR c.source_label LIKE ?)");
         const like = `%${q.get("q")}%`;
@@ -470,8 +578,8 @@ export async function handleApi(req, env, ctx) {
       }
       const limit = Math.min(Number(q.get("limit") || 500), 5000);
       const offset = Number(q.get("offset") || 0);
-      const order = { newest: "c.txn_year DESC", oldest: "c.txn_year ASC", price: "c.price_psf DESC", rent: "c.rent_psf_yr DESC", size: "COALESCE(c.leased_sf, p.building_sf) DESC" }[q.get("sort") || "newest"] || "c.txn_year DESC";
-      const sql = `SELECT c.id, c.record_kind, c.property_id, c.source_kind, c.source_label, c.txn_date, c.txn_year, c.sale_price, c.price_psf, c.price_per_acre, c.cap_rate_pct, c.buyer, c.seller, c.sale_type, c.tenant, c.leased_sf, c.rent_psf_yr, c.rent_per_acre_mo, c.lease_structure, c.term_months, c.escalation_pct, c.free_rent_months, c.ti_psf, c.lease_kind, c.asking_rent_psf_yr, c.available_sf, c.severity, c.flags_json, c.notes,
+      const order = { newest: "c.txn_date_sort DESC", oldest: "c.txn_date_sort ASC", added: "c.id DESC", price: "c.price_psf DESC", rent: "c.rent_psf_yr DESC", size: "COALESCE(c.leased_sf, p.building_sf) DESC" }[q.get("sort") || "newest"] || "c.txn_date_sort DESC";
+      const sql = `SELECT c.id, c.record_kind, c.property_id, c.source_kind, c.source_label, c.txn_date, c.txn_year, c.txn_date_sort, c.date_precision, c.rent_basis, c.net_effective_rent_psf_yr, c.lease_start, c.lease_end, c.landlord, c.occupancy_pct, c.created_at, p.product_tags, p.cranes, p.power, p.office_sf, p.drive_in_doors AS dri, p.owner, c.sale_price, c.price_psf, c.price_per_acre, c.cap_rate_pct, c.buyer, c.seller, c.sale_type, c.tenant, c.leased_sf, c.rent_psf_yr, c.rent_per_acre_mo, c.lease_structure, c.term_months, c.escalation_pct, c.free_rent_months, c.ti_psf, c.lease_kind, c.asking_rent_psf_yr, c.available_sf, c.severity, c.flags_json, c.notes,
         p.address, p.property_name, p.city, p.zip, p.market, p.submarket, p.latitude, p.longitude, p.geocode_quality, p.building_sf, p.land_acres, p.year_built, p.clear_height_ft, p.dock_doors, p.drive_in_doors, p.loading, p.construction, p.building_class, p.property_subtype, p.yard_acres, p.rail_served
         FROM v2_comps c JOIN v2_properties p ON p.id = c.property_id WHERE ${where.join(" AND ")} ORDER BY ${order} NULLS LAST LIMIT ? OFFSET ?`;
       const { results } = await db.prepare(sql).bind(...binds, limit, offset).all();
@@ -491,6 +599,8 @@ export async function handleApi(req, env, ctx) {
     if ((mm = m(/^\/api\/v2\/properties\/(\d+)\/features$/)) && req.method === "POST") {
       const body = await req.json();
       const obs = Object.entries(body.features || {}).map(([field, value]) => ({ field, value, source: "manual", source_ref: `edited by ${userOf(req)}` }));
+      const prev = await db.prepare("SELECT * FROM v2_properties WHERE id = ?").bind(Number(mm[1])).first();
+      if (prev && obs.length) await db.batch(obs.map((o) => db.prepare("INSERT INTO v2_edits (entity, entity_id, field, old_value, new_value, reason, by_user) VALUES ('property', ?, ?, ?, ?, ?, ?)").bind(prev.id, o.field, prev[o.field] == null ? null : String(prev[o.field]), o.value == null ? null : String(o.value), body.reason || null, userOf(req))));
       await insertObservations(db, Number(mm[1]), obs);
       await refreshProperty(db, Number(mm[1]));
       return json({ ok: true });
@@ -500,8 +610,19 @@ export async function handleApi(req, env, ctx) {
       const body = await req.json();
       const c = await db.prepare("SELECT * FROM v2_comps WHERE id = ?").bind(Number(mm[1])).first();
       if (!c) return bad("not found", 404);
-      if (body.status) await db.prepare("UPDATE v2_comps SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(body.status, c.id).run();
+      const who = userOf(req);
+      if (body.status) {
+        await db.prepare("UPDATE v2_comps SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(body.status, c.id).run();
+        await db.prepare("INSERT INTO v2_edits (entity, entity_id, field, old_value, new_value, reason, by_user) VALUES ('comp', ?, 'status', ?, ?, ?, ?)").bind(c.id, c.status, body.status, body.reason || null, who).run();
+      }
       if (body.fields) {
+        const ek = Object.keys(body.fields).filter((k) => COMP_FIELDS.includes(k) && String(c[k] ?? "") !== String(body.fields[k] ?? ""));
+        if (ek.length) await db.batch(ek.map((k) => db.prepare("INSERT INTO v2_edits (entity, entity_id, field, old_value, new_value, reason, by_user) VALUES ('comp', ?, ?, ?, ?, ?, ?)").bind(c.id, k, c[k] == null ? null : String(c[k]), body.fields[k] == null ? null : String(body.fields[k]), body.reason || null, who)));
+        if (body.fields.sale_date !== undefined || body.fields.lease_start !== undefined) {
+          const vr = validateRecord({ ...c, ...body.fields, record_kind: c.record_kind });
+          const nd = txnDateOf(vr);
+          await db.prepare("UPDATE v2_comps SET txn_date = ?, txn_year = ? WHERE id = ?").bind(nd || null, dateToNumber(nd), c.id).run();
+        }
         const rec = validateRecord({ ...c, ...body.fields, record_kind: c.record_kind });
         const keys = Object.keys(body.fields).filter((k) => COMP_FIELDS.includes(k));
         if (keys.length) await db.prepare(`UPDATE v2_comps SET ${keys.map((k) => `${k} = ?`).join(", ")}, flags_json = ?, severity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(...keys.map((k) => rec[k]), JSON.stringify(rec._flags), rec._severity, c.id).run();
@@ -560,7 +681,8 @@ export async function handleApi(req, env, ctx) {
     }
 
     if (path === "/api/v2/files") {
-      const { results } = await db.prepare("SELECT f.id, f.filename, f.kind, f.uploaded_by, f.uploaded_at, f.status, f.summary, f.source_kind, (SELECT count(*) FROM v2_comps c WHERE c.file_id = f.id AND c.status='active') AS comps, (SELECT j.id FROM v2_jobs j WHERE j.file_id = f.id ORDER BY j.created_at DESC LIMIT 1) AS job_id FROM v2_files f ORDER BY f.id DESC LIMIT 300").all();
+      const { results } = await db.prepare("SELECT f.id, f.filename, f.kind, f.uploaded_by, f.uploaded_at, f.summary, f.source_kind, f.via, f.via_ref, (SELECT count(*) FROM v2_comps c WHERE c.file_id = f.id AND c.status='active') AS comps, (SELECT j.id FROM v2_jobs j WHERE j.file_id = f.id ORDER BY j.created_at DESC LIMIT 1) AS job_id, (SELECT j.status FROM v2_jobs j WHERE j.file_id = f.id ORDER BY j.created_at DESC LIMIT 1) AS job_status, COALESCE((SELECT count(*) FROM v2_staged s JOIN v2_jobs j ON j.id = s.job_id WHERE j.file_id = f.id AND s.decision = 'review'), 0) AS held, f.status AS file_status FROM v2_files f WHERE f.kind != 'bulk' ORDER BY f.id DESC LIMIT 300").all();
+      for (const r of results) r.status = r.held ? "review" : ["queued", "q_extracting", "needs_vision", "failed"].includes(r.job_status) ? r.job_status : r.file_status;
       return json({ files: results });
     }
 
@@ -568,11 +690,25 @@ export async function handleApi(req, env, ctx) {
       const body = await req.json();
       const ids = (body.ids || []).map(Number).slice(0, 2000);
       if (!ids.length) return bad("no ids");
-      const { results } = await db.prepare(`SELECT c.*, p.address, p.property_name, p.city, p.zip, p.submarket, p.market, p.latitude, p.longitude, p.building_sf, p.land_acres, p.year_built, p.clear_height_ft, p.dock_doors, p.drive_in_doors, p.loading, p.construction, p.building_class, p.property_subtype FROM v2_comps c JOIN v2_properties p ON p.id = c.property_id WHERE c.id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all();
+      const results = [];
+      for (let x = 0; x < ids.length; x += 90) {
+        const part = ids.slice(x, x + 90);
+        const { results: rr } = await db.prepare(`SELECT c.*, p.address, p.property_name, p.city, p.zip, p.submarket, p.market, p.latitude, p.longitude, p.building_sf, p.land_acres, p.year_built, p.clear_height_ft, p.dock_doors, p.drive_in_doors, p.loading, p.construction, p.building_class, p.property_subtype FROM v2_comps c JOIN v2_properties p ON p.id = c.property_id WHERE c.id IN (${part.map(() => "?").join(",")})`).bind(...part).all();
+        results.push(...rr);
+      }
       const cols = ["record_kind", "address", "property_name", "city", "zip", "submarket", "txn_date", "building_sf", "leased_sf", "year_built", "clear_height_ft", "dock_doors", "drive_in_doors", "loading", "construction", "building_class", "property_subtype", "land_acres", "sale_price", "price_psf", "cap_rate_pct", "buyer", "seller", "sale_type", "tenant", "rent_psf_yr", "lease_structure", "term_months", "escalation_pct", "free_rent_months", "ti_psf", "lease_kind", "source_label", "notes", "latitude", "longitude"];
       const order = new Map(ids.map((id, i) => [id, i]));
       results.sort((a, b) => order.get(a.id) - order.get(b.id));
       const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+      if (body.format === "xlsx") {
+        const H = { record_kind: "Type", address: "Address", property_name: "Property", city: "City", zip: "Zip", submarket: "Submarket", txn_date: "Date", building_sf: "Building SF", leased_sf: "Leased SF", year_built: "Year Built", clear_height_ft: "Clear (ft)", dock_doors: "Docks", drive_in_doors: "Grade-level", loading: "Loading", construction: "Construction", building_class: "Class", property_subtype: "Product", land_acres: "Acres", sale_price: "Sale Price", price_psf: "Price/SF", cap_rate_pct: "Cap %", buyer: "Buyer", seller: "Seller", sale_type: "Sale Type", tenant: "Tenant", rent_psf_yr: "Rent $/SF/yr", lease_structure: "Lease Type", term_months: "Term (mo)", escalation_pct: "Bumps %", free_rent_months: "Free (mo)", ti_psf: "TI $/SF", lease_kind: "New/Renewal", source_label: "Source", notes: "Notes", latitude: "Lat", longitude: "Lng" };
+        const aoa = [["Harbor Capital · Comps export " + new Date().toISOString().slice(0, 10)], [], cols.map((c) => H[c] || c), ...results.map((r) => cols.map((c) => (r[c] == null ? "" : r[c])))];
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws["!cols"] = cols.map((c) => ({ wch: ["address", "source_label", "notes", "buyer", "seller", "tenant"].includes(c) ? 28 : 12 }));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Comps");
+        return new Response(XLSX.write(wb, { type: "array", bookType: "xlsx" }), { headers: { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "content-disposition": `attachment; filename="harbor-comps-${new Date().toISOString().slice(0, 10)}.xlsx"` } });
+      }
       const csv = [cols.join(","), ...results.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\n");
       return new Response(csv, { headers: { "content-type": "text/csv", "content-disposition": `attachment; filename="harbor-comps-${new Date().toISOString().slice(0, 10)}.csv"` } });
     }

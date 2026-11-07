@@ -17,3 +17,7 @@ venv/
 .dev.vars
 .wrangler/
 node_modules/
+
+# Scripts that embed broker comp data (kept local, never public)
+worker/v2/seed/held-triage.mjs
+worker/v2/seed/pdf-realign.mjs

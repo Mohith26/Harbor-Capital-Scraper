@@ -1,3 +1,5 @@
+import { productTags } from "./tags.js";
+import { linkPlayers } from "./players.js";
 // D1 persistence for properties, comps and feature observations.
 
 import { parseAddress, marketFor } from "./geo.js";
@@ -11,7 +13,18 @@ export const COMP_FIELDS = [
   "sale_price", "price_psf", "price_per_acre", "cap_rate_pct", "sale_date", "buyer", "seller", "sale_type", "occupancy_pct", "noi",
   "tenant", "leased_sf", "rent_psf_yr", "rent_psf_mo", "rent_per_acre_mo", "monthly_rent_total", "lease_structure", "term_months",
   "lease_start", "lease_end", "escalation_pct", "free_rent_months", "ti_psf", "lease_kind", "landlord", "asking_rent_psf_yr", "asking_price", "available_sf",
+  "net_effective_rent_psf_yr", "tenant_industry", "rent_basis",
 ];
+
+export function rentBasis(s) {
+  if (!s) return null;
+  const u = String(s).toUpperCase();
+  if (["NNN", "NET", "TRIPLE NET"].includes(u)) return "NNN";
+  if (["NN", "DOUBLE NET", "MODIFIED NET"].includes(u)) return "NN";
+  if (["MG", "IG", "MODIFIED GROSS", "INDUSTRIAL GROSS"].includes(u)) return "MG";
+  if (["GROSS", "FSG", "FULL SERVICE", "FULL SERVICE GROSS"].includes(u)) return "gross";
+  return s;
+}
 export const PROP_FEATURES = FEATURE_FIELDS.filter((f) => f !== "office_sf" || true);
 const PROP_COLS = ["building_sf", "land_acres", "year_built", "year_renovated", "clear_height_ft", "dock_doors", "drive_in_doors", "loading", "construction", "office_sf", "office_pct", "sprinkler", "rail_served", "yard_acres", "building_class", "property_subtype", "tenancy", "car_parking", "trailer_parking", "power", "cranes", "zoning"];
 
@@ -93,6 +106,16 @@ export async function refreshProperty(db, propertyId) {
   }
   sets.push("features_json = ?", "updated_at = CURRENT_TIMESTAMP");
   binds.push(JSON.stringify({ best, conflicts }));
+  // product tags from resolved features + comp notes + broker file titles
+  try {
+    const cur = await db.prepare("SELECT * FROM v2_properties WHERE id = ?").bind(propertyId).first();
+    const txt = await db.prepare("SELECT group_concat(COALESCE(notes,'') || ' ' || COALESCE(source_label,'') || ' ' || COALESCE(source_sheet,''), ' ') AS t FROM v2_comps WHERE property_id = ? AND status = 'active'").bind(propertyId).first();
+    const merged = { ...(cur || {}) };
+    for (const f of PROP_COLS) if (best[f] !== undefined) merged[f] = best[f].value;
+    const noteObs = obs.filter((o) => /note|power|crane/.test(o.field)).map((o) => String(o.value)).join(" ");
+    sets.push("product_tags = ?");
+    binds.push(productTags(merged, `${txt?.t || ""} ${noteObs}`));
+  } catch {}
   await db.prepare(`UPDATE v2_properties SET ${sets.join(", ")} WHERE id = ?`).bind(...binds, propertyId).run();
   // Downstream mirrors (Atlas) sync on v2_comps.updated_at, so building changes bump the comps too.
   await db.prepare("UPDATE v2_comps SET updated_at = CURRENT_TIMESTAMP WHERE property_id = ?").bind(propertyId).run();
@@ -131,6 +154,7 @@ async function backfillProperty(db, prop, rec) {
 
 export async function insertComp(db, propertyId, rec, { fileId = null, sourceKind = "broker", sourceLabel = null, user = null, status = "active", dupOf = null } = {}) {
   const td = txnDate(rec);
+  if (rec.rent_basis == null && rec.lease_structure) rec.rent_basis = rentBasis(rec.lease_structure);
   const cols = ["property_id", "record_kind", "status", "dup_of", "file_id", "source_kind", "source_label", "source_sheet", "source_rows", "sources_json", ...COMP_FIELDS, "txn_date", "txn_year", "snapshot_json", "flags_json", "severity", "notes", "created_by"];
   const snap = {};
   for (const [k, v] of Object.entries(rec)) if (!k.startsWith("_") && v != null && k !== "evidence") snap[k] = v;
@@ -177,8 +201,10 @@ export async function commitRecord(db, rec, match, decision, ctx) {
     sources.push({ kind: ctx.sourceKind, label: ctx.sourceLabel, sheet: rec.source_sheet || null, rows: rec.source_rows || [], file_id: ctx.fileId });
     const keys = Object.keys(fill);
     await db.prepare(`UPDATE v2_comps SET ${[...keys.map((k) => `${k} = ?`), "sources_json = ?", "updated_at = CURRENT_TIMESTAMP"].join(", ")} WHERE id = ?`).bind(...keys.map((k) => fill[k]), JSON.stringify(sources), canon.id).run();
+    await linkPlayers(db, canon.id, rec, txnDate(rec)).catch(() => null);
     return { action: "merged", comp_id: canon.id, property_id: propertyId, filled: keys };
   }
   const id = await insertComp(db, propertyId, rec, ctx);
+  await linkPlayers(db, id, rec, txnDate(rec)).catch(() => null);
   return { action: "added", comp_id: id, property_id: propertyId };
 }

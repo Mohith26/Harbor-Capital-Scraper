@@ -1,0 +1,246 @@
+<script>
+// ================= DEALS: comp a deal =================
+const TAGL={crane:'Crane-served',heavy_power:'Heavy power',manufacturing:'Manufacturing',ios:'IOS / yard',yard:'Yard',truck_terminal:'Truck terminal',rail:'Rail',shallow_bay:'Shallow bay',multi_tenant:'Multi-tenant',flex:'Flex',bulk:'Bulk / big box',cross_dock:'Cross-dock',rear_load:'Rear-load',front_load:'Front-load',cold_storage:'Cold storage',service:'Service center'};
+const FACTL={building_sf:['Size',v=>fmt.sf(v)],land_acres:['Land',v=>fmt.ac(v)],clear_height_ft:['Clear',v=>v+"'"],year_built:['Built',v=>v],year_renovated:['Renovated',v=>v],construction:['Construction',v=>LBL[v]||v],loading:['Loading',v=>LBL[v]||v],dock_doors:['Dock-high',v=>v],drive_in_doors:['Grade-level',v=>v],cranes:['Cranes',v=>v],power:['Power',v=>v],rail_served:['Rail',v=>v?'Yes':'No'],yard_acres:['Yard',v=>fmt.ac(v)],building_class:['Class',v=>v],tenancy:['Tenancy',v=>v],occupancy_pct:['Leased',v=>v+'%'],office_pct:['Office',v=>v+'%'],sprinkler:['Sprinklers',v=>v],property_subtype:['Product',v=>LBL[v]||v],tenant:['Tenant',v=>v],walt_years:['WALT',v=>v+' yrs'],asking_price:['Price',v=>fmt.usd(v)],price_psf:['$/SF',v=>fmt.psf(v)],cap_rate_pct:['Cap',v=>fmt.pct(v)],in_place_rent_psf_yr:['In-place rent',v=>fmt.psf(v)+'/yr']};
+const SRCL={'write-up':'from write-up',manual:'edited',broker_sheet:'comp file',costar:'CoStar',cad:'county',parcel:'parcel',om:'OM',aerial:'satellite'};
+const PARTL=[['product','Type'],['size','Size'],['location','Distance'],['recency','Recency'],['clear_height','Clear'],['vintage','Vintage'],['features','Features'],['data','Data']];
+let DEALS=[],DEAL=null,DLANE='sale',SLANE=null,DFOCUS=0,USEADJ=false,setMap=null,setMarks=[],DEALLOAD=0;
+const isSaleK=k=>k==='sale'||k==='land_sale';
+
+async function loadDealList(){try{const r=await api('/api/v2/deals');DEALS=r.deals}catch(e){DEALS=[]}renderDealList()}
+function renderDealList(){const id=DEAL?.deal?.id;
+ $('#dl').innerHTML=`<button class="btn primary new" id="dnew">+ New deal</button>`+DEALS.map(d=>`<div class="di ${d.id===id?'on':''}" data-d="${d.id}"><b>${esc(d.name)}${d.n_alerts?'<span class="ad" title="new matching comps"></span>':''}</b><span class="s1">${esc([...new Set([d.city,d.market].filter(Boolean))].join(' · ')||'—')}</span><br><span class="s1">${d.lanes.includes('sale')?`<span class="badge b-sale">${d.n_sale} sale</span> `:''}${d.lanes.includes('lease')?`<span class="badge b-lease">${d.n_lease} lease</span>`:''}</span></div>`).join('')+`<div class="arch" id="darch">${DEALS.length?DEALS.length+' active deal'+(DEALS.length>1?'s':''):''}</div>`;
+ $('#dnew').onclick=()=>newDealModal();$$('#dl .di').forEach(e=>e.onclick=()=>{location.hash='#deal/'+e.dataset.d})}
+async function dealsShow(sub){if(!DEALS.length)await loadDealList();else renderDealList();
+ const id=sub&&+sub;if(id){if(DEAL?.deal?.id!==id)openDeal(id);return}
+ if(DEALS.length&&!isMobile()&&!sub){history.replaceState(null,'','#deal/'+DEALS[0].id);openDeal(DEALS[0].id);return}
+ DEAL=null;renderDealList();$('#ds').innerHTML='';$('#ds').classList.remove('on');$('#msetbtn').style.display='none';heroHtml()}
+function heroHtml(){$('#dm').innerHTML=`<div class="hero"><h1>Comp a deal</h1><div class="muted" style="font-size:14px">Paste the Slack write-up, OM text or broker email, or type an address. The subject's facts come from what you paste first, then from our database, CoStar and county records, each marked with its source. You get ranked sale and lease comps to add or pass, a comp set with stats and a map, and exports for the memo.</div>
+ <div class="card" style="padding:14px;margin-top:14px"><textarea id="htext" style="width:100%;min-height:150px;border:1px solid var(--line);border-radius:7px;padding:10px 12px;resize:vertical" placeholder="e.g. 13026 Rosecrest Drive – Investment Summary · Southwest Far, inside Beltway 8 · 52,000 SF on 7.77 acres with laydown yard · metal, built 1950 · 25' clear · crane-ready (1 × 20-ton + 3 × 5-ton) · 2 docks, 5 drive-ins"></textarea>
+ <div class="row2" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center"><input type="text" id="haddr" placeholder="…or just an address" style="flex:1;min-width:200px"/><label class="faint"><input type="checkbox" id="hs" checked> Sale comps</label><label class="faint"><input type="checkbox" id="hl" checked> Lease comps</label><button class="btn primary" id="hgo">Comp this deal</button></div></div>
+ <div class="faint" style="margin-top:10px">Tip: lease comps for a size band work too, e.g. "450,000 - 1,000,000 SF leases around 1085 Heritage West Dr, Katy".</div></div>`;
+ $('#hgo').onclick=()=>createDeal($('#htext').value,$('#haddr').value,[$('#hs').checked&&'sale',$('#hl').checked&&'lease'].filter(Boolean),$('#hgo'))}
+function newDealModal(prefill={}){openModal(`<h3>New deal</h3><div class="muted" style="margin-bottom:10px">Paste a write-up / OM text / broker email, or type an address.</div><textarea id="mtext" placeholder="Paste the investment summary…">${esc(prefill.text||'')}</textarea>
+ <div class="row2"><input type="text" id="maddr" placeholder="Address (optional)" value="${esc(prefill.address||'')}" style="flex:1;min-width:200px"/><label class="faint"><input type="checkbox" id="ms" ${prefill.lanes&&!prefill.lanes.includes('sale')?'':'checked'}> Sale comps</label><label class="faint"><input type="checkbox" id="ml" ${prefill.lanes&&!prefill.lanes.includes('lease')?'':'checked'}> Lease comps</label></div>
+ <div class="row2" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="mgo">Comp this deal</button></div>`);
+ setTimeout(()=>$('#mtext').focus(),50);$('#mgo').onclick=()=>createDeal($('#mtext').value,$('#maddr').value,[$('#ms').checked&&'sale',$('#ml').checked&&'lease'].filter(Boolean),$('#mgo'))}
+function openModal(h){$('#mbox').innerHTML=h;$('#modal').classList.add('on')}
+function closeModal(){$('#modal').classList.remove('on')}
+$('#modal').onclick=e=>{if(e.target.id==='modal')closeModal()};
+async function createDeal(text,address,lanes,btn){text=(text||'').trim();address=(address||'').trim();if(!text&&!address)return toast('Paste a write-up or type an address');if(!lanes.length)lanes=['sale','lease'];
+ const old=btn.textContent;btn.disabled=true;btn.textContent='Reading the write-up…';
+ try{const r=await api('/api/v2/deals',{method:'POST',body:JSON.stringify({text,address,lanes})});closeModal();await loadDealList();location.hash='#deal/'+r.id}
+ catch(e){toast(e.message,5000)}finally{btn.disabled=false;btn.textContent=old}}
+function newDealFromProperty(p){newDealModal({address:[p.address||p.property_name,p.city].filter(Boolean).join(', ')})}
+
+async function openDeal(id,keepLane){const my=++DEALLOAD;
+ if(!keepLane){$('#dm').innerHTML='<div class="card subj"><div class="skel" style="height:90px;border:0"></div></div>'+'<div class="skel"></div>'.repeat(5);$('#ds').innerHTML='<div class="skel"></div>'.repeat(3)}
+ try{const d=await api('/api/v2/deals/'+id);if(my!==DEALLOAD)return;DEAL=d;
+  if(!keepLane){DLANE=d.deal.lanes[0]||'sale';SLANE=DLANE;DFOCUS=0}
+  renderDealList();renderDeal();renderSet()}catch(e){$('#dm').innerHTML=`<div class="empty"><h3>Couldn't open this deal</h3>${esc(e.message)}</div>`}}
+async function reloadDeal(){if(DEAL)await openDeal(DEAL.deal.id,true);loadDealList()}
+
+function factChips(s){const f=s.facts||{};return Object.entries(FACTL).filter(([k])=>f[k]&&f[k].value!=null&&f[k].value!=='').map(([k,[l,fn]])=>`<span class="fact" title="${esc(f[k].ref||'')}"><span class="k">${l}</span><b>${esc(String(fn(f[k].value)))}</b><span class="srcb ${f[k].source==='write-up'?'w':''}">${esc(SRCL[f[k].source]||f[k].source)}</span></span>`).join('')}
+function renderDeal(){const D=DEAL.deal,s=D.subject||{},sr=D.search||{};const tags=s.tags||[];const alertIds=new Set((DEAL.alerts||[]).flatMap(a=>a.comp_ids));
+ const ce=Object.entries(s.conflicts||{}).filter(([k])=>!['cranes','power','tenant','property_subtype','sprinkler'].includes(k));
+ const conf=ce.length?`<div class="conf" style="display:block"><div style="margin-bottom:4px">△ Our database disagrees with the write-up on ${ce.length} fact${ce.length>1?'s':''}. The write-up is used.</div>${ce.map(([k,c])=>`<div style="display:flex;gap:8px;align-items:center;padding:3px 0;border-top:1px solid #f0e2c4"><span style="flex:1">${esc(FACTL[k]?.[0]||k)}: write-up <b>${esc(String(FACTL[k]?FACTL[k][1](s.facts[k]?.value):s.facts[k]?.value))}</b> · ${esc(SRCL[c.source]||c.source)} <b>${esc(String(FACTL[k]?FACTL[k][1](c.value):c.value))}</b></span><button class="btn sm" data-usedb="${k}" data-v="${esc(String(c.value))}">Use ${esc(SRCL[c.source]||c.source)}</button><button class="btn sm" data-keep="${k}">OK</button></div>`).join('')}</div>`:'';
+ const lanes=D.lanes.map(l=>{const L=DEAL.lanes[l];return `<button class="btn sm ${DLANE===l?'primary':''}" data-lane="${l}">${l==='sale'?'Sale':'Lease'} comps · ${L?L.rows.filter(r=>!r.relaxed).length:0}</button>`}).join('');
+ const L=DEAL.lanes[DLANE]||{rows:[],history:[]};
+ const passed=DEAL.items.filter(i=>i.state==='pass'&&(DLANE==='sale'?isSaleK(i.comp.record_kind):!isSaleK(i.comp.record_kind)));
+ const passIds=new Set(passed.map(i=>i.comp_id));
+ const rows=L.rows.filter(r=>!passIds.has(r.id));const exact=rows.filter(r=>!r.relaxed),near=rows.filter(r=>r.relaxed);
+ const since=sr.since?sr.since.slice(0,4):'';const yrs=sr.since?Math.round((Date.now()-new Date(sr.since))/3.15e10):3;
+ $('#dm').innerHTML=`<div class="card subj">
+  <div style="display:flex;gap:10px;align-items:flex-start"><div style="flex:1;min-width:0"><h2>${esc(D.name)}</h2><div class="loc">${esc([D.address&&D.address!==D.name?D.address:null,D.city,D.submarket,D.market].filter(Boolean).join(' · '))}${D.geocode_quality==='submarket'?' · <span class="badge b-warn">located to submarket</span>':''}${D.latitude==null?' · <span class="badge b-bad">not located - add an address</span>':''}</div></div>
+  <button class="btn sm" id="dedsub">Edit subject</button><button class="btn sm" id="dmore" title="More">⋯</button></div>
+  <div class="facts">${factChips(s)||'<span class="muted">No facts yet - edit the subject to add size, clear height, vintage…</span>'}</div>${conf}
+  <div class="tagrow"><span class="faint" style="font-size:12px">Product match on</span>${tags.length?tags.map(t=>`<span class="tg on ro">${esc(TAGL[t]||t)}</span>`).join(''):'<span class="faint" style="font-size:12px">any industrial (no product tags)</span>'}<button class="btn sm" id="dtags">Change</button></div>
+  <div class="searchset">Within <select id="srad">${[1,2,3,5,8,12,20,35].map(m=>`<option ${(+sr.radius_mi||(D.geocode_quality==='submarket'?6:5))===m?'selected':''}>${m}</option>`).join('')}${![1,2,3,5,8,12,20,35].includes(+sr.radius_mi||5)&&sr.radius_mi?`<option selected>${sr.radius_mi}</option>`:''}</select> mi
+   · since <select id="ssince">${[[1,'12 months'],[2,'24 months'],[3,'36 months'],[5,'5 years'],[10,'10 years']].map(([y,l])=>`<option value="${y}" ${yrs===y?'selected':''}>${l}</option>`).join('')}</select>
+   · size <input type="number" id="smin" placeholder="min SF" style="width:100px" value="${sr.size_sf?.min||''}"/>–<input type="number" id="smax" placeholder="max SF" style="width:100px" value="${sr.size_sf?.max||''}"/>
+   <button class="btn sm" id="sapply">Update</button>${D.source_text?'<a class="faint" style="cursor:pointer;margin-left:auto" id="swu">Show write-up</a>':''}</div>
+  <div class="wu" id="wu">${esc(D.source_text||'')}</div></div>
+  ${(DEAL.alerts||[]).length?`<div class="watch" style="margin:0 0 10px">★ ${esc(DEAL.alerts[0].title)} since you last looked. They're marked <span class="newb">NEW</span> below.<span style="flex:1"></span><button class="btn sm" id="dseen">Dismiss</button></div>`:''}
+  <div class="lanebar">${lanes}<span class="faint" style="margin-left:auto;font-size:12px">Ranked by match to the subject · <span class="kbd">A</span> add · <span class="kbd">X</span> pass · <span class="kbd">J</span>/<span class="kbd">K</span> move</span></div>
+  ${L.note?`<div class="empty">${esc(L.note)}</div>`:''}
+  <div class="card" style="overflow:hidden">${exact.map((r,i)=>sugHtml(r,i,alertIds)).join('')||'<div class="empty"><h3>No comps match yet</h3>Widen the radius or the date range, or change the product match.</div>'}</div>
+  ${near.length?`<div class="sect">Near misses <span class="faint" style="text-transform:none">· outside the size, date or distance limits</span></div><div class="card" style="overflow:hidden">${near.map((r,i)=>sugHtml(r,exact.length+i,alertIds)).join('')}</div>`:''}
+  ${(L.history||[]).length?`<div class="sect">Deals at the subject itself (not comps)</div><div class="card" style="padding:8px 14px">${L.history.map(h=>`<div style="padding:4px 0">${KL[h.record_kind]} ${fmt.date(h.txn_date)} · ${h.record_kind==='lease'?fmt.psf(h.rent_psf_yr)+'/yr'+(h.tenant?' · '+esc(h.tenant):''):fmt.psf(h.price_psf)+'/SF'+(h.buyer?' · '+esc(h.buyer):'')} <span class="faint">${esc(h.source_label||'')}</span></div>`).join('')}</div>`:''}
+  ${passed.length?`<details style="margin-top:12px"><summary class="sect" style="cursor:pointer;display:inline">Passed (${passed.length})</summary><div class="card" style="margin-top:6px">${passed.map(i=>`<div style="display:flex;gap:8px;align-items:center;padding:7px 14px;border-bottom:1px solid var(--line2)"><span>${esc(i.comp.address||i.comp.property_name||'')}</span><span class="faint">${fmt.date(i.comp.txn_date)} ${i.reason?'· '+esc(i.reason):''}</span><span style="flex:1"></span><button class="btn sm" data-unpass="${i.comp_id}">Undo</button></div>`).join('')}</div></details>`:''}`;
+ bindDeal(rows)}
+function partBar(v){if(v==null)return '<div class="bar" style="background:repeating-linear-gradient(90deg,#eee 0 3px,#fff 3px 6px)"></div>';const c=v>=70?'g':v>=40?'y':'r';return `<div class="bar"><i class="${c}" style="width:${v}%"></i></div>`}
+function whyLine(r){const g=[],b=[],p=r.parts||{};
+ if(r.tag_state==='match')g.push('same product');else if(r.tag_state==='related')g.push('related product');else if(r.tag_state==='unknown')b.push('building type unknown');
+ const sf=r.size_sf;if(p.size>=75&&sf)g.push(fmt.sf(sf));else if(p.size!=null&&p.size<40&&sf)b.push(fmt.sf(sf)+' (size off)');
+ if(r.distance_mi!=null)(r.distance_mi<=3?g:r.distance_mi>8?b:[]).push(fmt.mi(r.distance_mi)+' away');
+ if(p.recency!=null&&p.recency<45)b.push('older deal');if(p.clear_height!=null&&p.clear_height<=45&&r.clear_height_ft==null)b.push('clear unknown');
+ if(r.flags&&r.flags.length)b.push(r.flags[0]);
+ return (g.length?'✓ '+g.join(', '):'')+(b.length?(g.length?' · ':'')+'△ '+b.join(', '):'')}
+function valLine(r){if(isSaleK(r.record_kind))return [r.sale_price&&`<b>${fmt.usd(r.sale_price)}</b>`,r.price_psf&&`<b>${fmt.psf(r.price_psf)}</b>/SF`,r.cap_rate_pct&&`<b>${fmt.pct(r.cap_rate_pct)}</b> cap`,r.buyer&&'Buyer '+esc(r.buyer)].filter(Boolean).join(' · ')||'<span class="faint">price undisclosed</span>';
+ if(r.record_kind==='listing')return `Asking <b>${r.asking_rent_psf_yr?fmt.psf(r.asking_rent_psf_yr)+'/SF/yr':'n/a'}</b>`;
+ return [r.rent_psf_yr!=null&&`<b>${fmt.psf(r.rent_psf_yr)}</b>/SF/yr ${esc(r.rent_basis||r.lease_structure||'')}`,r.term_months&&Math.round(r.term_months)+' mo',r.escalation_pct&&fmt.pct(r.escalation_pct)+' bumps',r.free_rent_months&&r.free_rent_months+' mo free',r.tenant&&esc(r.tenant)].filter(Boolean).join(' · ')||'<span class="faint">rent n/a</span>'}
+function sugHtml(r,i,alertIds){const st=r.set_state;const p=r.parts||{};
+ return `<div class="sug ${st==='add'?'added':''} ${i===DFOCUS?'focus':''}" data-c="${r.id}" data-i="${i}"><div class="sc">${r.score}<small>match</small></div>
+ <div style="min-width:0"><div class="ad">${esc(r.address||r.property_name||'Unknown address')}${alertIds.has(r.id)?'<span class="newb">NEW</span>':''} <span style="font-weight:400;color:var(--muted)">${esc(r.city||'')}</span></div>
+ <div class="mt">${fmt.date(r.txn_date)}${r.date_precision&&!['day',null].includes(r.date_precision)?'':''} · ${fmt.sf(r.size_sf)}${r.year_built?' · built '+r.year_built:''}${r.clear_height_ft?' · '+r.clear_height_ft+"' clear":''}${r.submarket?' · '+esc(r.submarket):''}${r.source_kind==='costar'?' · <span class="badge" title="From the CoStar archive">CoStar</span>':''}</div>
+ <div class="vl">${valLine(r)}</div><div class="why">${whyLine(r)}</div></div>
+ <div class="bars">${PARTL.filter(([k])=>p[k]!=null).slice(0,6).map(([k,l])=>`<span>${l}</span>${partBar(p[k])}`).join('')}</div>
+ <div class="acts">${st==='add'?`<button class="btn sm" data-rm="${r.id}" title="Click to remove from the set">✓ In set</button>`:`<button class="btn sm primary" data-add="${r.id}">Add</button><button class="btn sm" data-pass="${r.id}">Pass</button>`}</div></div>`}
+function bindDeal(rows){const D=DEAL.deal;
+ $$('#dm [data-lane]').forEach(b=>b.onclick=()=>{DLANE=b.dataset.lane;SLANE=DLANE;DFOCUS=0;renderDeal();renderSet()});
+ $$('#dm [data-add]').forEach(b=>b.onclick=e=>{e.stopPropagation();setItem(+b.dataset.add,'add')});
+ $$('#dm [data-rm]').forEach(b=>b.onclick=e=>{e.stopPropagation();removeItem(+b.dataset.rm)});
+ $$('#dm [data-pass]').forEach(b=>b.onclick=e=>{e.stopPropagation();passItem(+b.dataset.pass,b)});
+ $$('#dm [data-unpass]').forEach(b=>b.onclick=()=>removeItem(+b.dataset.unpass));
+ $$('#dm .sug').forEach(el=>{el.onclick=()=>{const r=rows.find(x=>x.id==el.dataset.c);DFOCUS=+el.dataset.i;openProperty(r.property_id||r.pid,r)};el.onmouseenter=()=>hlSet(+el.dataset.c,true);el.onmouseleave=()=>hlSet(+el.dataset.c,false)});
+ $('#dedsub').onclick=editSubject;$('#dtags').onclick=editTags;$('#dmore').onclick=e=>dealMenu(e.target);
+ const wu=$('#swu');if(wu)wu.onclick=()=>{const w=$('#wu');w.style.display=w.style.display==='block'?'none':'block';wu.textContent=w.style.display==='block'?'Hide write-up':'Show write-up'};
+ $('#sapply').onclick=async()=>{const y=+$('#ssince').value;const d=new Date();d.setFullYear(d.getFullYear()-y);const mn=+$('#smin').value||null,mx=+$('#smax').value||null;
+  await api('/api/v2/deals/'+D.id,{method:'PATCH',body:JSON.stringify({search:{radius_mi:+$('#srad').value,since:d.toISOString().slice(0,10),size_sf:mn||mx?{min:mn,max:mx}:null}})});toast('Search updated');reloadDeal()};
+ $$('#dm [data-usedb]').forEach(b=>b.onclick=async()=>{const k=b.dataset.usedb;let v=b.dataset.v;if(!isNaN(+v)&&v!=='')v=+v;await api('/api/v2/deals/'+D.id,{method:'PATCH',body:JSON.stringify({subject:{[k]:v}})});reloadDeal()});
+ $$('#dm [data-keep]').forEach(b=>b.onclick=async()=>{const s=DEAL.deal.subject;await api('/api/v2/deals/'+D.id,{method:'PATCH',body:JSON.stringify({subject:{[b.dataset.keep]:s.facts[b.dataset.keep].value}})});reloadDeal()});
+ const ds=$('#dseen');if(ds)ds.onclick=async()=>{await api(`/api/v2/deals/${D.id}/seen`,{method:'POST'});DEAL.alerts=[];renderDeal();loadDealList();loadAlerts()}}
+async function setItem(cid,state,extra={}){const D=DEAL.deal;const r=(DEAL.lanes[DLANE]?.rows||[]).find(x=>x.id===cid);
+ await api(`/api/v2/deals/${D.id}/items`,{method:'POST',body:JSON.stringify({comp_id:cid,state,score:r?.score,...extra})});
+ if(state==='add')toast('Added to the comp set');await reloadDeal()}
+async function removeItem(cid){await api(`/api/v2/deals/${DEAL.deal.id}/items/${cid}`,{method:'DELETE'});await reloadDeal()}
+function passItem(cid,anchor){const reasons=['Wrong product','Too far','Too old','Wrong size','Bad data','Other'];
+ pickMenu(anchor,reasons.map(r=>[r,()=>setItem(cid,'pass',{reason:r==='Other'?null:r})]))}
+function pickMenu(anchor,items){document.querySelectorAll('.pick').forEach(p=>p.remove());const b=anchor.getBoundingClientRect();const m=document.createElement('div');m.className='pick';
+ m.innerHTML=items.map((it,i)=>`<div data-i="${i}">${it[0]}</div>`).join('');document.body.appendChild(m);
+ const left=Math.max(8,Math.min(innerWidth-m.offsetWidth-8,b.right-m.offsetWidth));const top=b.bottom+4+m.offsetHeight>innerHeight?Math.max(8,b.top-m.offsetHeight-4):b.bottom+4;m.style.left=left+'px';m.style.top=(top+scrollY)+'px';
+ m.querySelectorAll('div').forEach(d=>d.onclick=e=>{e.stopPropagation();m.remove();items[+d.dataset.i][1]()});setTimeout(()=>document.addEventListener('click',()=>m.remove(),{once:true}),0)}
+function dealMenu(anchor){const D=DEAL.deal;pickMenu(anchor,[['Rename',async()=>{const n=prompt('Deal name',D.name);if(n){await api('/api/v2/deals/'+D.id,{method:'PATCH',body:JSON.stringify({name:n})});reloadDeal()}}],
+ [D.watch?'Stop watching for new comps':'Watch for new comps',async()=>{await api('/api/v2/deals/'+D.id,{method:'PATCH',body:JSON.stringify({watch:D.watch?0:1})});reloadDeal()}],
+ ['Change address',async()=>{const a=prompt('Subject address',D.address||'');if(a){await api('/api/v2/deals/'+D.id,{method:'PATCH',body:JSON.stringify({address:a})});reloadDeal()}}],
+ ['Archive deal',async()=>{if(!confirm('Archive this deal? Its comp set is kept.'))return;await api('/api/v2/deals/'+D.id,{method:'DELETE'});DEAL=null;await loadDealList();location.hash='#deals'}]])}
+function editSubject(){const s=DEAL.deal.subject||{},f=s.facts||{};const keys=['building_sf','land_acres','clear_height_ft','year_built','year_renovated','construction','loading','dock_doors','drive_in_doors','cranes','power','building_class','tenancy','occupancy_pct','tenant','asking_price','price_psf','cap_rate_pct','in_place_rent_psf_yr'];
+ const opts={construction:['','tilt_wall','metal','masonry','concrete_block','precast','steel'],loading:['','rear','front','cross_dock','side'],building_class:['','A','B','C'],tenancy:['','single','multi']};
+ openModal(`<h3>Subject facts</h3><div class="muted" style="margin-bottom:10px">Edits are saved with your name and override every other source.</div><div class="fgrid">${keys.map(k=>{const v=f[k]?.value??'';const l=FACTL[k][0];return `<div class="fc"><div class="l">${l} ${f[k]?`<span class="srcb ${f[k].source==='write-up'?'w':''}">${esc(SRCL[f[k].source]||f[k].source)}</span>`:''}</div>${opts[k]?`<select data-k="${k}">${opts[k].map(o=>`<option value="${o}" ${String(v)===o?'selected':''}>${o?(LBL[o]||o):'—'}</option>`).join('')}</select>`:`<input data-k="${k}" value="${esc(v)}" ${['cranes','power','tenant'].includes(k)?'':'type="number" step="any"'}/>`}</div>`}).join('')}</div>
+ <div class="row2" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="msave">Save</button></div>`);
+ $('#msave').onclick=async()=>{const ch={};$$('#mbox [data-k]').forEach(i=>{const k=i.dataset.k,v=i.value.trim(),cur=f[k]?.value==null?'':String(f[k].value);if(v!==cur)ch[k]=v===''?null:i.type==='number'?+v:v});
+  if(Object.keys(ch).length)await api('/api/v2/deals/'+DEAL.deal.id,{method:'PATCH',body:JSON.stringify({subject:ch})});closeModal();reloadDeal()}}
+function editTags(){const cur=new Set(DEAL.deal.subject?.tags||[]);openModal(`<h3>Product match</h3><div class="muted" style="margin-bottom:10px">Comps with a different building type are left out; comps whose type is unknown stay in, scored lower.</div><div class="tagrow">${Object.entries(TAGL).map(([k,l])=>`<span class="tg ${cur.has(k)?'on':''}" data-t="${k}">${l}</span>`).join('')}</div><div class="row2" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="msave">Apply</button></div>`);
+ $$('#mbox .tg').forEach(t=>t.onclick=()=>t.classList.toggle('on'));$('#msave').onclick=async()=>{const tags=$$('#mbox .tg.on').map(t=>t.dataset.t);await api('/api/v2/deals/'+DEAL.deal.id,{method:'PATCH',body:JSON.stringify({tags})});closeModal();reloadDeal()}}
+
+// ---------- the set ----------
+function setRows(lane){return DEAL.items.filter(i=>i.state==='add'&&(lane==='sale'?isSaleK(i.comp.record_kind):!isSaleK(i.comp.record_kind)))}
+function adjVal(i){const c=i.comp;const base=isSaleK(c.record_kind)?c.price_psf:(c.rent_psf_yr??c.asking_rent_psf_yr);if(base==null)return null;if(!USEADJ||!i.adjust)return base;const t=Object.values(i.adjust).reduce((a,b)=>a+(+b||0),0);return base*(1+t/100)}
+function med(a){const v=a.filter(x=>x!=null).sort((x,y)=>x-y);if(!v.length)return null;const m=v.length>>1;return v.length%2?v[m]:(v[m-1]+v[m])/2}
+function pctRank(v,arr){const a=arr.filter(x=>x!=null);if(v==null||!a.length)return null;return Math.round(100*a.filter(x=>x<=v).length/a.length)}
+function setStats(lane){const it=setRows(lane);const vals=it.map(adjVal);const nn=vals.filter(v=>v!=null);const caps=it.map(i=>i.comp.cap_rate_pct).filter(Boolean);
+ let w=0,ws=0;it.forEach(i=>{const v=adjVal(i),sf=i.comp.size_sf;if(v!=null&&sf){w+=v*sf;ws+=sf}});
+ return {it,vals,n:nn.length,lo:nn.length?Math.min(...nn):null,hi:nn.length?Math.max(...nn):null,md:med(nn),avg:nn.length?nn.reduce((a,b)=>a+b,0)/nn.length:null,caps,wavg:ws?w/ws:null,term:med(it.map(i=>i.comp.term_months)),esc:med(it.map(i=>i.comp.escalation_pct))}}
+function marketRead(lane){const S=setStats(lane),it=S.it;if(!it.length)return 'Add comps to see a read of the set.';const D=DEAL.deal,f=D.subject?.facts||{};
+ const idx=v=>{const i=it.findIndex(x=>adjVal(x)===v);return i<0?'':`<sup data-n="${i}">${i+1}</sup>`};
+ const dates=it.map(i=>i.comp.txn_date_sort||i.comp.txn_date).filter(Boolean).sort();const far=Math.max(...it.map(i=>i.comp.distance_mi||0));
+ const unit=lane==='sale'?'/SF':'/SF/yr';const word=lane==='sale'?'sales':'leases';const sub=lane==='sale'?f.price_psf?.value:f.in_place_rent_psf_yr?.value;
+ let s=`${it.length} ${word} within ${far.toFixed(1)} mi, ${fmt.date(dates[0])} to ${fmt.date(dates[dates.length-1])}. `;
+ if(S.n)s+=`${USEADJ?'Adjusted '+(lane==='sale'?'pricing':'base rent'):(lane==='sale'?'Pricing':'Base rent')} runs ${fmt.psf(S.lo)}${idx(S.lo)} to ${fmt.psf(S.hi)}${idx(S.hi)}${unit}, median ${fmt.psf(S.md)}${S.n<it.length?` (${it.length-S.n} without a number)`:''}. `;
+ if(lane==='sale')s+=S.caps.length?`${S.caps.length} report a cap rate: ${fmt.pct(Math.min(...S.caps))} to ${fmt.pct(Math.max(...S.caps))}. `:'None report a cap rate. ';
+ else{if(S.wavg)s+=`SF-weighted ${fmt.psf(S.wavg)}. `;if(S.term)s+=`Median term ${Math.round(S.term)} mo`+(S.esc?`, bumps ${fmt.pct(S.esc)}`:'')+'. '}
+ if(sub!=null&&S.n){const p=pctRank(sub,S.vals);s+=`The subject at ${fmt.psf(sub)}${unit} sits at the ${p}th percentile. `}
+ const nc=it.filter(i=>!i.comp.clear_height_ft).length;if(nc)s+=`${nc} of ${it.length} lack clear height.`;return s}
+function renderSet(){if(!DEAL)return;const D=DEAL.deal;const lane=SLANE||DLANE;const S=setStats(lane);const unit=lane==='sale'?'$/SF':'$/SF/yr';const anyAdj=S.it.some(i=>i.adjust);
+ $('#ds').innerHTML=`<div class="sethd"><div style="display:flex;gap:8px;align-items:center"><b style="font-size:15px">Comp set</b>${D.lanes.map(l=>`<button class="btn sm ${lane===l?'primary':''}" data-sl="${l}">${l==='sale'?'Sales':'Leases'} · ${setRows(l).length}</button>`).join('')}<span style="flex:1"></span><button class="btn sm mclose" id="dsclose" style="display:none">Done</button></div>
+  <div class="stats4"><div><span>Low</span><b>${S.lo!=null?fmt.psf(S.lo):'—'}</b></div><div><span>Median</span><b>${S.md!=null?fmt.psf(S.md):'—'}</b></div><div><span>Average</span><b>${S.avg!=null?fmt.psf(S.avg):'—'}</b></div><div><span>High</span><b>${S.hi!=null?fmt.psf(S.hi):'—'}</b></div></div>
+  <div class="faint" style="font-size:11.5px;margin-top:6px">${unit} · n=${S.n}${lane==='sale'?` · cap n=${S.caps.length}${S.caps.length?' (median '+fmt.pct(med(S.caps))+')':''}`:S.wavg?' · SF-weighted '+fmt.psf(S.wavg):''}${anyAdj?` · <label style="cursor:pointer"><input type="checkbox" id="useadj" ${USEADJ?'checked':''}> adjusted</label>`:''}</div></div>
+ <div class="watch">${D.watch?'● Watching: new comps that fit this deal are flagged here and in the bell.':'○ Not watching for new comps.'}</div>
+ <div class="read"><div class="faint" style="font-size:10.5px;letter-spacing:.06em;font-weight:600;margin-bottom:3px">MARKET READ · NUMBERS FROM THE ROWS BELOW</div>${marketRead(lane)}</div>
+ <div id="setmap"></div>
+ ${S.it.map((i,n)=>{const c=i.comp,v=adjVal(i),base=isSaleK(c.record_kind)?c.price_psf:(c.rent_psf_yr??c.asking_rent_psf_yr);return `<div class="si" data-c="${c.id}"><span class="n">${n+1}</span><div style="min-width:0"><div style="font-weight:500">${esc(c.address||c.property_name||'')}</div><div class="faint" style="font-size:11.5px">${fmt.date(c.txn_date)} · ${fmt.sf(c.size_sf)}${c.distance_mi!=null?' · '+fmt.mi(c.distance_mi):''}${c.tenant?' · '+esc(c.tenant):c.buyer?' · '+esc(c.buyer):''}</div></div>
+  <div class="v">${v!=null?fmt.psf(v):'—'}${USEADJ&&i.adjust&&base!=null?`<small>from ${fmt.psf(base)}</small>`:isSaleK(c.record_kind)&&c.cap_rate_pct?`<small>${fmt.pct(c.cap_rate_pct)} cap</small>`:c.rent_basis?`<small>${esc(c.rent_basis)}</small>`:''}</div>
+  <input class="note" data-note="${c.id}" placeholder="Why this comp (optional)" value="${esc(i.note||'')}"/>
+  <div class="tools"><button data-up="${c.id}" ${n===0?'disabled':''}>↑</button><button data-dn="${c.id}" ${n===S.it.length-1?'disabled':''}>↓</button><button data-adj="${c.id}">Adjust${i.adjust?' ('+Object.values(i.adjust).reduce((a,b)=>a+(+b||0),0)+'%)':''}</button><button data-open="${c.property_id}">Building</button><button data-rm2="${c.id}">Remove</button></div>
+  <div class="adj" id="adj-${c.id}" style="display:none">${['size','clear','age','location','condition'].map(k=>`<label>${k}<input type="number" step="1" data-ak="${k}" value="${i.adjust?.[k]??''}" placeholder="%"/></label>`).join('')}</div></div>`}).join('')||'<div class="empty" style="padding:28px 16px">Nothing here yet. Click <b>Add</b> on the comps you want.</div>'}
+ <div class="expbar"><button class="btn sm primary" id="xxlsx">Excel</button><button class="btn sm" id="xpdf">PDF exhibit</button><button class="btn sm" id="xpng">Image for Slack</button><button class="btn sm" id="xcopy">Copy table</button></div>`;
+ const n=S.it.length;$('#msetbtn').textContent=`Comp set · ${n} ${lane==='sale'?'sale':'lease'}${n===1?'':'s'}${S.md!=null?' · median '+fmt.psf(S.md):''}`;$('#msetbtn').style.display='';
+ $('#msetbtn').onclick=()=>{$('#ds').classList.add('on');setTimeout(()=>{setMap&&setMap.invalidateSize();drawSetMap()},300)};
+ if(isMobile())$('#dsclose').style.display='';$('#dsclose').onclick=()=>$('#ds').classList.remove('on');
+ $$('#ds [data-sl]').forEach(b=>b.onclick=()=>{SLANE=b.dataset.sl;renderSet()});
+ const ua=$('#useadj');if(ua)ua.onchange=()=>{USEADJ=ua.checked;renderSet()};
+ $$('#ds sup[data-n]').forEach(s=>s.onclick=()=>{const el=$$('#ds .si')[+s.dataset.n];el&&el.scrollIntoView({behavior:'smooth',block:'center'});el&&(el.style.background='#fff7e0',setTimeout(()=>el.style.background='',1200))});
+ $$('#ds [data-note]').forEach(i=>{let t;i.oninput=()=>{clearTimeout(t);t=setTimeout(()=>api(`/api/v2/deals/${D.id}/items/${i.dataset.note}`,{method:'PATCH',body:JSON.stringify({note:i.value})}).then(()=>{const it=DEAL.items.find(x=>x.comp_id==i.dataset.note);if(it)it.note=i.value}),600)}});
+ $$('#ds [data-rm2]').forEach(b=>b.onclick=()=>removeItem(+b.dataset.rm2));
+ $$('#ds [data-open]').forEach(b=>b.onclick=()=>openProperty(+b.dataset.open));
+ $$('#ds [data-adj]').forEach(b=>b.onclick=()=>{const a=$('#adj-'+b.dataset.adj);a.style.display=a.style.display==='none'?'grid':'none'});
+ $$('#ds .adj input').forEach(inp=>{let t;inp.oninput=()=>{clearTimeout(t);t=setTimeout(async()=>{const host=inp.closest('.adj');const cid=+host.id.slice(4);const adj={};host.querySelectorAll('input').forEach(x=>{if(x.value!=='')adj[x.dataset.ak]=+x.value});const it=DEAL.items.find(x=>x.comp_id===cid);it.adjust=Object.keys(adj).length?adj:null;await api(`/api/v2/deals/${D.id}/items/${cid}`,{method:'PATCH',body:JSON.stringify({adjust:it.adjust})});USEADJ=true;renderSet();$('#adj-'+cid).style.display='grid'},700)}});
+ const mv=async(cid,d)=>{const ids=S.it.map(i=>i.comp_id);const k=ids.indexOf(cid);const j=k+d;if(j<0||j>=ids.length)return;[ids[k],ids[j]]=[ids[j],ids[k]];const all=[...ids,...DEAL.items.filter(i=>!ids.includes(i.comp_id)).map(i=>i.comp_id)];await api(`/api/v2/deals/${D.id}/order`,{method:'POST',body:JSON.stringify({comp_ids:all})});await reloadDeal()};
+ $$('#ds [data-up]').forEach(b=>b.onclick=()=>mv(+b.dataset.up,-1));$$('#ds [data-dn]').forEach(b=>b.onclick=()=>mv(+b.dataset.dn,1));
+ $('#xxlsx').onclick=()=>{location.href=`/api/v2/deals/${D.id}/export.xlsx${USEADJ?'?adjusted=1':''}`;toast('Downloading the Excel comp set')};
+ $('#xpdf').onclick=()=>exhibit('pdf');$('#xpng').onclick=()=>exhibit('png');$('#xcopy').onclick=copyTable;
+ drawSetMap()}
+function drawSetMap(){const el=$('#setmap');if(!el||!DEAL)return;if(setMap){setMap.remove();setMap=null}
+ setMap=L.map(el,{zoomControl:false,attributionControl:false,preferCanvas:true});window.setMap=setMap;
+ L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',{maxZoom:16}).addTo(setMap);
+ L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',{maxZoom:16}).addTo(setMap);
+ const D=DEAL.deal,pts=[];setMarks=[];if(D.latitude!=null){L.marker([D.latitude,D.longitude],{icon:L.divIcon({className:'',html:'<div class="subjpin"></div>',iconSize:[18,18],iconAnchor:[9,9]}),zIndexOffset:1000}).addTo(setMap).bindTooltip('Subject: '+esc(D.name));pts.push([D.latitude,D.longitude])}
+ setRows(SLANE||DLANE).forEach((i,n)=>{const c=i.comp;if(c.latitude==null)return;const m=L.marker([c.latitude,c.longitude],{icon:L.divIcon({className:'',html:`<div class="pin" style="background:${KCOL[c.record_kind]||'#555'}">${n+1}</div>`,iconSize:[22,22],iconAnchor:[11,11]})}).addTo(setMap).bindTooltip(esc(c.address||''));m._cid=c.id;setMarks.push(m);pts.push([c.latitude,c.longitude])});
+ setTimeout(()=>{setMap.invalidateSize();if(pts.length>1)setMap.fitBounds(pts,{padding:[26,26],maxZoom:14});else if(pts.length)setMap.setView(pts[0],12)},60)}
+function hlSet(cid,on){const m=setMarks.find(m=>m._cid===cid);const e=m&&m.getElement()?.querySelector('.pin');if(e)e.classList.toggle('big',on)}
+
+// ---------- exports ----------
+function exportRows(){const lane=SLANE||DLANE;return setRows(lane).map((i,n)=>{const c=i.comp;const v=adjVal(i);
+ return lane==='sale'?{'#':n+1,Address:c.address||c.property_name||'',City:c.city||'',Date:fmt.date(c.txn_date),SF:c.size_sf?Math.round(c.size_sf).toLocaleString():'',Built:c.year_built||'',Clear:c.clear_height_ft?c.clear_height_ft+"'":'',Price:c.sale_price?fmt.usd(c.sale_price):'',[USEADJ?'Adj. $/SF':'$/SF']:v!=null?fmt.psf(v):'',Cap:c.cap_rate_pct?fmt.pct(c.cap_rate_pct):'',Buyer:c.buyer||'',Source:c.source_label||''}
+ :{'#':n+1,Address:c.address||c.property_name||'',City:c.city||'',Date:fmt.date(c.lease_start||c.txn_date),SF:c.size_sf?Math.round(c.size_sf).toLocaleString():'',Built:c.year_built||'',Clear:c.clear_height_ft?c.clear_height_ft+"'":'',[USEADJ?'Adj. rent/yr':'Rent/yr']:v!=null?fmt.psf(v)+' '+(c.rent_basis||''):'',Term:c.term_months?Math.round(c.term_months)+' mo':'',Bumps:c.escalation_pct?fmt.pct(c.escalation_pct):'',Tenant:c.tenant||'',Source:c.source_label||''}})}
+async function copyTable(){const rows=exportRows();if(!rows.length)return toast('The set is empty');const H=Object.keys(rows[0]);
+ const html=`<table border="1" style="border-collapse:collapse;font-family:Arial;font-size:11px"><tr>${H.map(h=>`<th style="background:#141517;color:#fff;padding:3px 6px">${esc(h)}</th>`).join('')}</tr>${rows.map(r=>`<tr>${H.map(h=>`<td style="padding:3px 6px">${esc(r[h])}</td>`).join('')}</tr>`).join('')}</table>`;
+ const tsv=[H.join('\t'),...rows.map(r=>H.map(h=>r[h]).join('\t'))].join('\n');
+ try{await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([html],{type:'text/html'}),'text/plain':new Blob([tsv],{type:'text/plain'})})]);toast('Copied - paste into the memo or Excel')}catch{try{await navigator.clipboard.writeText(tsv);toast('Copied as text')}catch{toast('Copy blocked by the browser')}}}
+function staticMap(pts,w,h){// Esri static export in Web Mercator; returns {url, px(lat,lng)}
+ const merc=(lat,lng)=>[lng*20037508.34/180,Math.log(Math.tan((90+lat)*Math.PI/360))*20037508.34/Math.PI];
+ const xs=pts.map(p=>merc(p[0],p[1]));let [x0,y0,x1,y1]=[Math.min(...xs.map(p=>p[0])),Math.min(...xs.map(p=>p[1])),Math.max(...xs.map(p=>p[0])),Math.max(...xs.map(p=>p[1]))];
+ const pad=Math.max(x1-x0,y1-y0,4000)*0.18;x0-=pad;x1+=pad;y0-=pad;y1+=pad;const sx=(x1-x0)/w,sy=(y1-y0)/h,s=Math.max(sx,sy);const cx=(x0+x1)/2,cy=(y0+y1)/2;x0=cx-s*w/2;x1=cx+s*w/2;y0=cy-s*h/2;y1=cy+s*h/2;
+ return {url:`https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/export?bbox=${x0},${y0},${x1},${y1}&bboxSR=3857&imageSR=3857&size=${w},${h}&format=png&f=image`,px:(lat,lng)=>{const [x,y]=merc(lat,lng);return [(x-x0)/s,(y1-y)/s]}}}
+async function exhibit(kind){const D=DEAL.deal,lane=SLANE||DLANE,rows=exportRows();if(!rows.length)return toast('The set is empty');const S=setStats(lane),f=D.subject?.facts||{};
+ const pts=[...(D.latitude!=null?[[D.latitude,D.longitude]]:[]),...S.it.filter(i=>i.comp.latitude!=null).map(i=>[i.comp.latitude,i.comp.longitude])];
+ const title=`${D.name} · ${lane==='sale'?'Sale':'Lease'} comps`;const subj=Object.entries(FACTL).filter(([k])=>f[k]).slice(0,9).map(([k,[l,fn]])=>`${l} ${fn(f[k].value)}`).join(' · ');
+ const today=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});const H=Object.keys(rows[0]);
+ if(kind==='pdf'){const sm=pts.length?staticMap(pts,1000,360):null;
+  const pins=sm?`${D.latitude!=null?`<div class="sp" style="left:${sm.px(D.latitude,D.longitude)[0]/10}%;top:${sm.px(D.latitude,D.longitude)[1]/3.6}%"></div>`:''}${S.it.map((i,n)=>i.comp.latitude==null?'':`<div class="p" style="left:${sm.px(i.comp.latitude,i.comp.longitude)[0]/10}%;top:${sm.px(i.comp.latitude,i.comp.longitude)[1]/3.6}%">${n+1}</div>`).join('')}`:'';
+  const w=window.open('','_blank');if(!w)return toast('Allow pop-ups to open the exhibit');
+  w.document.write(`<!doctype html><html><head><title>${esc(title)}</title><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"><style>@page{size:letter landscape;margin:.45in}body{font:10.5px/1.4 Inter,Arial,sans-serif;color:#17181a;margin:0}header{display:flex;align-items:center;gap:14px;border-bottom:3px solid #141517;padding-bottom:8px}header img{height:16px}header .t{font-size:17px;font-weight:700;margin-left:auto;text-align:right}header .t small{display:block;font-size:10px;font-weight:400;color:#6e7178}.subj{margin:8px 0;color:#3c3f44}.stats{display:flex;gap:0;border:1px solid #ddd;margin:8px 0}.stats div{flex:1;padding:6px 10px;border-right:1px solid #eee}.stats div:last-child{border:0}.stats span{display:block;color:#6e7178;font-size:9px;text-transform:uppercase;letter-spacing:.05em}.stats b{font-size:14px}.map{position:relative;height:3.1in;border:1px solid #ddd;background:#eee center/cover no-repeat;margin:8px 0}.map .p,.map .sp{position:absolute;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:#1f4e8c;color:#fff;font:700 9px/18px Inter;text-align:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)}.map .sp{background:#ffbd60;border:3px solid #141517;width:14px;height:14px}table{border-collapse:collapse;width:100%}th{background:#141517;color:#fff;text-align:left;padding:4px 6px;font-weight:600;font-size:9.5px}td{padding:4px 6px;border-bottom:1px solid #e6e6e2;font-size:9.5px}tr:nth-child(even) td{background:#fafaf8}.read{margin:8px 0;color:#3c3f44}.read sup{color:#7d1d1d}footer{margin-top:8px;color:#9a9da3;font-size:8.5px;display:flex;justify-content:space-between}@media print{.noprint{display:none}}</style></head><body>
+  <div class="noprint" style="background:#fff4e3;padding:8px 12px;margin-bottom:10px;font-size:12px">Use your browser's Print → Save as PDF. <button onclick="print()">Print / Save PDF</button></div>
+  <header><img src="${location.origin}/logo-black.svg" alt="Harbor Capital"><div class="t">${esc(title)}<small>${esc([D.address&&D.address!==D.name?D.address:null,D.city,D.market].filter(Boolean).join(' · '))} · ${today}</small></div></header>
+  <div class="subj"><b>Subject</b> · ${esc(subj||'—')}</div>
+  <div class="stats"><div><span>Comps</span><b>${S.it.length}</b></div><div><span>Low</span><b>${fmt.psf(S.lo)}</b></div><div><span>Median</span><b>${fmt.psf(S.md)}</b></div><div><span>Average</span><b>${fmt.psf(S.avg)}</b></div><div><span>High</span><b>${fmt.psf(S.hi)}</b></div><div><span>${lane==='sale'?'Cap rates':'SF-weighted'}</span><b>${lane==='sale'?(S.caps.length?fmt.pct(Math.min(...S.caps))+'–'+fmt.pct(Math.max(...S.caps)):'—'):fmt.psf(S.wavg)}</b></div></div>
+  ${sm?`<div class="map" style="background-image:url('${sm.url}')">${pins}</div>`:''}
+  <div class="read">${marketRead(lane)}</div>
+  <table><tr>${H.map(h=>`<th>${esc(h)}</th>`).join('')}</tr>${rows.map(r=>`<tr>${H.map(h=>`<td>${esc(r[h])}</td>`).join('')}</tr>`).join('')}</table>
+  <footer><span>Harbor Capital · comps.harborcap.dev/#deal/${D.id}</span><span>Sources: broker comp files${S.it.some(i=>i.comp.source_kind==='costar')?', CoStar':''}. Confidential.</span></footer></body></html>`);w.document.close();setTimeout(()=>{try{w.focus()}catch{}},300);return}
+ // PNG for Slack: draw on a canvas
+ const W=1600,rowH=34,top=220,n=Math.min(rows.length,14),mapH=pts.length?360:0,Hh=top+mapH+40+rowH*(n+1)+70;const cv=document.createElement('canvas');cv.width=W;cv.height=Hh;const g=cv.getContext('2d');
+ g.fillStyle='#fff';g.fillRect(0,0,W,Hh);g.fillStyle='#141517';g.fillRect(0,0,W,70);
+ const logo=await loadImg('/logo-white.png').catch(()=>null);if(logo)g.drawImage(logo,32,24,logo.width*(22/logo.height),22);
+ g.fillStyle='#ffbd60';g.fillRect(0,70,W,4);g.fillStyle='#17181a';g.font='700 34px Inter, Arial';g.fillText(title,32,124);g.font='400 19px Inter, Arial';g.fillStyle='#6e7178';g.fillText([subj,today].filter(Boolean).join('  ·  ').slice(0,150),32,156);
+ const st=[['Comps',String(S.it.length)],['Low',fmt.psf(S.lo)],['Median',fmt.psf(S.md)],['Average',fmt.psf(S.avg)],['High',fmt.psf(S.hi)],[lane==='sale'?'Cap rates':'SF-weighted',lane==='sale'?(S.caps.length?fmt.pct(Math.min(...S.caps))+'–'+fmt.pct(Math.max(...S.caps)):'—'):fmt.psf(S.wavg)]];
+ st.forEach(([l,v],i)=>{const x=32+i*256;g.fillStyle='#9a9da3';g.font='600 14px Inter, Arial';g.fillText(l.toUpperCase(),x,186);g.fillStyle='#17181a';g.font='700 24px Inter, Arial';g.fillText(v,x,212)});
+ if(mapH){const sm=staticMap(pts,W-64,mapH);const im=await loadImg(sm.url).catch(()=>null);const y0=top+10;if(im){try{g.drawImage(im,32,y0,W-64,mapH)}catch{}}else{g.fillStyle='#eee';g.fillRect(32,y0,W-64,mapH)}
+  const dot=(x,y,fill,txt,r)=>{g.beginPath();g.arc(32+x,y0+y,r,0,7);g.fillStyle=fill;g.fill();g.lineWidth=3;g.strokeStyle=txt?'#fff':'#141517';g.stroke();if(txt){g.fillStyle='#fff';g.font='700 13px Inter, Arial';g.textAlign='center';g.fillText(txt,32+x,y0+y+4.5);g.textAlign='left'}};
+  if(D.latitude!=null){const [x,y]=sm.px(D.latitude,D.longitude);dot(x,y,'#ffbd60','',10)}S.it.forEach((i,k)=>{if(i.comp.latitude==null)return;const [x,y]=sm.px(i.comp.latitude,i.comp.longitude);dot(x,y,'#1f4e8c',String(k+1),13)})}
+ const ty=top+mapH+40;const cols=H.filter(h=>h!=='Source');const cw=(W-64)/cols.length;const widths=cols.map(h=>h==='Address'?2.4:h==='Buyer'||h==='Tenant'?1.8:h==='#'?.4:1);const tw=widths.reduce((a,b)=>a+b,0);let xs=[32];widths.forEach(w=>xs.push(xs[xs.length-1]+(W-64)*w/tw));
+ g.fillStyle='#141517';g.fillRect(32,ty,W-64,rowH);g.fillStyle='#fff';g.font='600 15px Inter, Arial';cols.forEach((h,i)=>g.fillText(h,xs[i]+8,ty+22));
+ rows.slice(0,n).forEach((r,k)=>{const y=ty+rowH*(k+1);if(k%2){g.fillStyle='#fafaf8';g.fillRect(32,y,W-64,rowH)}g.fillStyle='#17181a';g.font='400 15px Inter, Arial';cols.forEach((h,i)=>{let s=String(r[h]??'');const maxw=xs[i+1]-xs[i]-14;while(s&&g.measureText(s).width>maxw)s=s.slice(0,-2);g.fillText(s,xs[i]+8,y+22)});g.strokeStyle='#ececea';g.beginPath();g.moveTo(32,y+rowH);g.lineTo(W-32,y+rowH);g.stroke()});
+ g.fillStyle='#9a9da3';g.font='400 14px Inter, Arial';g.fillText(`${rows.length>n?`+${rows.length-n} more in the full set · `:''}comps.harborcap.dev/#deal/${D.id}`,32,Hh-26);
+ let blob;try{blob=await new Promise(r=>cv.toBlob(r,'image/png'))}catch{blob=null}
+ if(!blob){toast('Image blocked by the map tiles - try again without the map');return}
+ try{await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);toast('Image copied - paste it into Slack (also downloading)')}catch{}
+ const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${D.name} - ${lane} comps.png`;a.click()}
+function loadImg(src){return new Promise((ok,no)=>{const i=new Image();i.crossOrigin='anonymous';i.onload=()=>ok(i);i.onerror=no;i.src=src})}
+
+// ---------- keyboard ----------
+document.addEventListener('keydown',e=>{if(!$('#v-deals').classList.contains('on')||!DEAL||$('#modal').classList.contains('on')||$('#drawer').classList.contains('on'))return;if(/input|textarea|select/i.test(e.target.tagName))return;
+ const els=$$('#dm .sug');if(!els.length)return;const k=e.key.toLowerCase();
+ if(k==='j'||k==='k'){DFOCUS=Math.max(0,Math.min(els.length-1,DFOCUS+(k==='j'?1:-1)));els.forEach((x,i)=>x.classList.toggle('focus',i===DFOCUS));els[DFOCUS].scrollIntoView({block:'nearest'});e.preventDefault()}
+ else if(k==='a'){const el=els[DFOCUS];const b=el&&(el.querySelector('[data-add]'));if(b)b.click()}
+ else if(k==='x'){const el=els[DFOCUS];const b=el&&el.querySelector('[data-pass]');if(b)setItem(+b.dataset.pass,'pass')}
+ else if(k==='o'){els[DFOCUS]?.click()}
+ else if(k==='e'){$('#xxlsx')?.click()}});
+
+// ---------- alerts (bell) ----------
+async function loadAlerts(){try{const r=await api('/api/v2/alerts');const n=r.alerts.length;$('#bellct').style.display=n?'':'none';$('#bellct').textContent=n;
+ $('#alertpop').innerHTML=(n?r.alerts.map(a=>`<div class="ai" data-k="${a.kind}" data-r="${a.ref_id}" data-id="${a.id}"><b>${esc(a.title)}</b><div class="faint" style="font-size:12px">${a.kind==='deal'?'Deal':'Saved search'} · ${esc(a.ref_name||'')} · ${esc((a.created_at||'').slice(0,10))}</div></div>`).join(''):'<div class="ai faint">No new comps for your deals or saved searches.</div>');
+ $$('#alertpop .ai[data-k]').forEach(el=>el.onclick=async()=>{$('#alertpop').classList.remove('on');if(el.dataset.k==='deal')location.hash='#deal/'+el.dataset.r;else{runSaved(+el.dataset.r);await api('/api/v2/alerts/seen',{method:'POST',body:JSON.stringify({ids:[+el.dataset.id]})});loadAlerts()}})}catch{}}
+$('#bell').onclick=e=>{e.stopPropagation();$('#alertpop').classList.toggle('on')};document.addEventListener('click',e=>{if(!e.target.closest('#alertpop'))$('#alertpop').classList.remove('on')});
+loadAlerts();setInterval(loadAlerts,5*60*1000);
+</script>
