@@ -25,7 +25,7 @@ export function makeLLM(env, opts = {}) {
   if (!key) throw new Error(`${p.keyEnv} is not configured`);
   const envModel = (v, re) => (v && re.test(v) ? v : null);
   const models = {
-    deepseek: { strong: envModel(env.LLM_MODEL_STRONG, /^deepseek/) || "deepseek-v4-pro", fast: envModel(env.LLM_MODEL_FAST, /^deepseek/) || "deepseek-flash", vision: "deepseek-flash" },
+    deepseek: { strong: envModel(env.DEEPSEEK_MODEL_STRONG, /^deepseek/) || envModel(env.LLM_MODEL_STRONG, /^deepseek/) || "deepseek-flash", fast: envModel(env.LLM_MODEL_FAST, /^deepseek/) || "deepseek-flash", vision: "deepseek-flash" },
     openai: { strong: envModel(env.LLM_MODEL_STRONG, /^(gpt|o\d)/) || "gpt-5.5", fast: envModel(env.LLM_MODEL_FAST, /^(gpt|o\d)/) || "gpt-5.4-mini", vision: envModel(env.LLM_MODEL_VISION, /^(gpt|o\d)/) || "gpt-5.5" },
   }[provider];
   if (opts.strong && (provider === "deepseek" ? /^deepseek/.test(opts.strong) : !/^deepseek/.test(opts.strong))) models.strong = opts.strong;
@@ -80,7 +80,17 @@ export function makeLLM(env, opts = {}) {
           await new Promise((r) => setTimeout(r, Math.min(wait, 30000)));
           continue;
         }
-        if (!res.ok) throw new Error(`LLM ${res.status}: ${(await res.text()).slice(0, 500)}`);
+        if (!res.ok) {
+          const bt = await res.text();
+          const err = new Error(`LLM ${res.status}: ${bt.slice(0, 500)}`);
+          if (res.status === 402 || /insufficient|credit|balance|quota/i.test(bt)) {
+            disabledUntil[provider] = Date.now() + 10 * 60 * 1000;
+            err.quota = true;
+            lastErr = err;
+            break;
+          }
+          throw err;
+        }
         const data = await res.json();
         usage.calls++;
         usage.ms += Date.now() - t0;
@@ -110,11 +120,19 @@ export function makeLLM(env, opts = {}) {
       return await chat(args);
     } catch (e) {
       const other = provider === "openai" ? "deepseek" : "openai";
-      if (opts.noFallback || !env[PROVIDERS[other].keyEnv]) throw e;
+      if (opts.noFallback || !env[PROVIDERS[other].keyEnv] || !providerAvailable(other)) {
+        if (e.quota) { const q = new Error("AI_CREDITS_EXHAUSTED: the AI provider account is out of credits - extraction is paused until it is topped up"); q.quota = true; throw q; }
+        throw e;
+      }
       const alt = makeLLM(env, { provider: other, noFallback: true });
-      const out = await alt.chat({ ...args, tier: args.tier === "vision" && other === "deepseek" ? "vision" : args.tier });
-      usage.fallbacks = (usage.fallbacks || 0) + 1;
-      return out;
+      try {
+        const out = await alt.chat({ ...args, tier: args.tier === "vision" && other === "deepseek" ? "vision" : args.tier });
+        usage.fallbacks = (usage.fallbacks || 0) + 1;
+        return out;
+      } catch (e2) {
+        if (e.quota && e2.quota) { const q = new Error("AI_CREDITS_EXHAUSTED: both AI provider accounts (DeepSeek and OpenAI) are out of credits - extraction is paused until one is topped up"); q.quota = true; throw q; }
+        throw new Error(`${provider}: ${String(e.message || e).slice(0, 200)} | ${other}: ${String(e2.message || e2).slice(0, 120)}`);
+      }
     }
   }
 

@@ -233,7 +233,7 @@ export function cadUseToFeatures(text) {
   const out = {};
   if (/manufactur|heavy industrial|plant|fabricat/.test(t)) out.property_subtype = "manufacturing";
   else if (/cold storage|refriger|freezer/.test(t)) out.property_subtype = "cold_storage";
-  else if (/distribution/.test(t)) out.property_subtype = "bulk_distribution";
+  else if (/distribution/.test(t)) out.property_subtype = "warehouse"; // CAD "distribution warehouse" covers every size; bulk is inferred from SF
   else if (/office[\s-]*warehouse|flex|showroom|r&d/.test(t)) out.property_subtype = "flex";
   else if (/truck terminal|terminal/.test(t)) out.property_subtype = "ios";
   else if (/warehouse|storage|industrial/.test(t) && !/mini/.test(t)) out.property_subtype = "warehouse";

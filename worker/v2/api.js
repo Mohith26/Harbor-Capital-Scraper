@@ -3,12 +3,12 @@
 import { renderDocument } from "./render.js";
 import { makeLLM, pool } from "./llm.js";
 import { surveyDocument, planChunks, extractChunk, dedupeChunkOverlap, verifyRecord } from "./extract.js";
-import { validateRecord, BOUNDS } from "./validate.js";
+import { validateRecord, BOUNDS, dateToNumber } from "./validate.js";
 import { geocode, marketFor, inTexas } from "./geo.js";
 import { dedupeBatch, tagPortfolios, samePropertyScore, sameDealScore, mergeMissing } from "./dedupe.js";
 import { bbox as bboxOf } from "./geo.js";
-import { findPropertyMatch, findDealMatch, commitRecord, refreshProperty, insertObservations, COMP_FIELDS } from "./store.js";
-import { findComps, explainComps, geoCache } from "./finder.js";
+import { findPropertyMatch, findDealMatch, commitRecord, refreshProperty, insertObservations, COMP_FIELDS, txnDate as txnDateOf } from "./store.js";
+import { findComps, explainComps, geoCache, ALIASES } from "./finder.js";
 import { matchCostar, costarObservations, parcelObservations, aerialObservations, webObservations } from "./enrich.js";
 import { RECORD_KEYS, SCHEMA_PROMPT } from "./schema.js";
 import UI_HTML from "./ui.html";
@@ -17,8 +17,19 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), { status
 const bad = (msg, status = 400) => json({ error: msg }, status);
 
 function userOf(req) {
-  return req.headers.get("cf-access-authenticated-user-email") || req.headers.get("x-harbor-user") || (req.headers.get("cf-access-client-id") ? "service-token" : "unknown");
+  const email = req.headers.get("cf-access-authenticated-user-email");
+  if (email) return email;
+  const jwt = req.headers.get("cf-access-jwt-assertion");
+  if (jwt) {
+    try {
+      const payload = JSON.parse(atob(jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+      if (payload.email) return payload.email;
+      if (payload.common_name) return req.headers.get("x-harbor-user") ? `${req.headers.get("x-harbor-user")} (automation)` : "service-token";
+    } catch {}
+  }
+  return "unknown";
 }
+const isService = (u) => u === "service-token" || /\(automation\)$/.test(u);
 
 async function sha256(buf) {
   const h = await crypto.subtle.digest("SHA-256", buf);
@@ -43,6 +54,12 @@ export async function handleApi(req, env, ctx) {
   const db = env.COMPS_DB;
   const m = (re) => re.exec(path);
   let mm;
+  // Admin / maintenance routes: service token or named admins only.
+  if (path.startsWith("/api/v2/admin/") || path === "/api/v2/llmtest") {
+    const who = userOf(req);
+    const admins = String(env.ADMIN_EMAILS || "mohith@harborcap.com,isaac@harborcap.com").split(",").map((x) => x.trim().toLowerCase());
+    if (!isService(who) && !admins.includes(who.toLowerCase())) return bad("admin only", 403);
+  }
   try {
     // ---------------- meta ----------------
     if (path === "/api/v2/health") {
@@ -78,7 +95,9 @@ export async function handleApi(req, env, ctx) {
     // ---------------- upload / extraction ----------------
     if (path === "/api/v2/upload" && req.method === "POST") {
       const form = await req.formData();
-      const file = form.get("file");
+      let file = form.get("file");
+      const pasted = form.get("text");
+      if ((!file || typeof file === "string") && pasted) file = new File([pasted], `${(form.get("title") || "Pasted comps").toString().slice(0, 60)}.txt`, { type: "text/plain" });
       if (!file || typeof file === "string") return bad("no file");
       const buf = await file.arrayBuffer();
       const name = file.name || "upload";
@@ -123,7 +142,10 @@ export async function handleApi(req, env, ctx) {
       const n = Number(mm[2]);
       const ch = plan.chunks?.[n];
       if (!ch) return bad("no such chunk");
-      const llm = makeLLM(env, { provider: plan.provider, strong: plan.model });
+      // Layout-heavy PDFs / pasted text read better with the larger DeepSeek model.
+      const pdfLike = doc.kind === "pdf" || doc.kind === "text";
+      const model = plan.provider === "deepseek" && pdfLike ? env.DEEPSEEK_PDF_MODEL || "deepseek-v4-pro" : plan.model;
+      const llm = makeLLM(env, { provider: plan.provider, strong: model });
       const { records, error } = await extractChunk(doc, plan.survey, ch, llm, {});
       const validated = records.map((r) => validateRecord(r));
       const stmts = validated.map((r, i) => db.prepare("INSERT OR REPLACE INTO v2_staged (job_id, idx, chunk, record_json) VALUES (?, ?, ?, ?)").bind(job.id, n * 1000 + i, n, JSON.stringify(r)));
@@ -186,6 +208,10 @@ export async function handleApi(req, env, ctx) {
         if (r.latitude != null && r.longitude != null && inTexas(r.latitude, r.longitude)) {
           r.geocode_quality = "source";
           return;
+        }
+        if (!r.address && !r.property_name) {
+          const sm = await locateArea(db, r, ctxCity, plan.survey?.context?.market);
+          if (sm) { Object.assign(r, { latitude: sm.lat, longitude: sm.lng, geocode_quality: "submarket" }); return; }
         }
         const g = await geocode(env, { address: r.address, city: r.city || ctxCity, zip: r.zip, propertyName: r.property_name }, { cache });
         r._geo = g;
@@ -339,7 +365,8 @@ export async function handleApi(req, env, ctx) {
         const snap = JSON.parse(c.snapshot_json || "{}");
         const prev = JSON.parse(c.flags_json || "[]").filter((f) => ["unverified", "vision", "portfolio", "possible_duplicate", "geocode_low", "geocode_failed"].includes(f.code));
         const r = validateRecord({ ...snap, record_kind: c.record_kind, _flags: prev });
-        stmts.push(db.prepare("UPDATE v2_comps SET flags_json = ?, severity = ? WHERE id = ?").bind(JSON.stringify(r._flags), r._severity, c.id));
+        const td = txnDateOf(r);
+        stmts.push(db.prepare(`UPDATE v2_comps SET ${COMP_FIELDS.map((f) => `${f} = ?`).join(", ")}, txn_date = ?, txn_year = ?, flags_json = ?, severity = ? WHERE id = ?`).bind(...COMP_FIELDS.map((f) => (r[f] === undefined ? null : r[f])), td, dateToNumber(td), JSON.stringify(r._flags), r._severity, c.id));
       }
       for (let i = 0; i < stmts.length; i += 50) await db.batch(stmts.slice(i, i + 50));
       return json({ done: results.length, last: results.length ? results[results.length - 1].id : null });
@@ -548,8 +575,27 @@ export async function handleApi(req, env, ctx) {
 
     return bad("not found", 404);
   } catch (e) {
+    if (e.quota || /AI_CREDITS_EXHAUSTED/.test(String(e.message))) return json({ error: String(e.message).replace("AI_CREDITS_EXHAUSTED: ", ""), code: "ai_credits" }, 402);
     return json({ error: String(e.message || e), stack: String(e.stack || "").split("\n").slice(0, 4) }, 500);
   }
+}
+
+// Address-less comps (common in broker "mid bulk" sheets): place them at the
+// submarket (gazetteer) or city centroid so they still show up in area searches.
+async function locateArea(db, r, ctxCity, ctxMarket) {
+  const name = String(r.submarket || "").trim().toLowerCase();
+  if (name) {
+    const row = await db.prepare("SELECT * FROM v2_submarkets WHERE lower(name) = ? ORDER BY n DESC LIMIT 1").bind(name).first().catch(() => null);
+    if (row) return { lat: row.latitude, lng: row.longitude };
+    const key = Object.keys(ALIASES).find((a) => a === name || name.includes(a));
+    if (key) return { lat: ALIASES[key][1], lng: ALIASES[key][2] };
+  }
+  const city = r.city || ctxCity;
+  if (city) {
+    const g = await geocode({}, { address: null, propertyName: `${city}`, state: "TX" }).catch(() => null);
+    if (g && g.lat != null) return { lat: g.lat, lng: g.lng };
+  }
+  return null;
 }
 
 function pick(c) {

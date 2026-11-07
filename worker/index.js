@@ -1,5 +1,6 @@
 import { Container, getContainer } from "@cloudflare/containers";
 import { handleApi, UI_HTML, enrichProperty } from "./v2/api.js";
+import LOGO from "./v2/logo-white.png";
 
 /**
  * Wraps the FastAPI comp-database image.
@@ -57,6 +58,11 @@ export default {
     // v2: LLM extraction pipeline, property/feature store and comp finder run
     // in the Worker itself (D1 + R2); the legacy FastAPI app stays in the container.
     if (url.pathname.startsWith("/api/v2/")) return handleApi(request, env, ctx);
+    if (url.pathname === "/logo-white.png") return new Response(LOGO, { headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
+    // The old finder and upload pages are replaced by the v2 app.
+    if (request.method === "GET" && (url.pathname === "/finder" || url.pathname === "/upload")) {
+      return Response.redirect(`${url.origin}/#${url.pathname === "/finder" ? "find" : "up"}`, 302);
+    }
     if (V2_PAGES.has(url.pathname)) {
       return new Response(UI_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
     }
@@ -67,7 +73,7 @@ export default {
   // Background feature sourcing for properties that have not been enriched yet.
   async scheduled(event, env, ctx) {
     const db = env.COMPS_DB;
-    const { results } = await db.prepare("SELECT id FROM v2_properties WHERE enrich_status = 'pending' AND latitude IS NOT NULL ORDER BY id LIMIT 25").all();
+    const { results } = await db.prepare("SELECT id FROM v2_properties WHERE enrich_status = 'pending' AND latitude IS NOT NULL ORDER BY id LIMIT 60").all();
     for (const r of results) {
       try {
         await enrichProperty(env, db, r.id, {});

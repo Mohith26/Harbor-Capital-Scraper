@@ -38,6 +38,7 @@ for (const [a, b] of diff) t(`different addr: ${a} vs ${b}`, addrSimilarity(a, b
 
 t("building after comma kept", samePropertyScore({ address: "2831 South Houston Avenue, Building 4", latitude: 29.9, longitude: -95.3 }, { address: "2831 South Houston Avenue, Building 2", latitude: 29.9005, longitude: -95.3 }).score < 0.5);
 t("suites are the same building", samePropertyScore({ address: "5829 W Sam Houston Pkwy N, Suite 910", latitude: 29.88, longitude: -95.55, geocode_quality: "rooftop" }, { address: "5829 W Sam Houston Pkwy N, Suite 1206", latitude: 29.8801, longitude: -95.55, geocode_quality: "rooftop" }).score >= 0.85);
+t("odd vs even range is other side of street", addrSimilarity("8400 - 8432 Sterling Street", "8401 Sterling Street") < 0.9);
 // ---------- property matching with geo ----------
 const p1 = { address: "8901 Forney Rd", city: "Dallas", latitude: 32.7746, longitude: -96.6672, geocode_quality: "rooftop" };
 t("same bldg w/ geo", samePropertyScore(p1, { address: "8901 Forney Road", city: "Dallas", latitude: 32.7748, longitude: -96.667, geocode_quality: "rooftop" }).score >= 0.8);

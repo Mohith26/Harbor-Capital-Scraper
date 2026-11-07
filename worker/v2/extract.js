@@ -22,7 +22,7 @@ Return JSON only.`;
 
 function surveyUser(doc, preview) {
   return `File name: ${doc.filename}
-Document type: ${doc.kind}
+Document type: ${doc.kind === "text" ? "text pasted from Slack / email (not a spreadsheet)" : doc.kind}
 
 ${preview}
 
@@ -156,7 +156,7 @@ export async function surveyDocument(doc, llm, opts = {}) {
 // Turn a survey into concrete chunk jobs (row numbers only, so the plan can be
 // stored and each chunk executed in a separate request).
 export function planChunks(doc, survey, { chunkRowsMax = 22 } = {}) {
-  const isPdf = doc.kind === "pdf";
+  const isPdf = doc.kind === "pdf" || doc.kind === "text";
   const plan = [];
   survey.tables.forEach((table, ti) => {
     if (!table.record_kind || table.record_kind === "none" || table.duplicate_of) return;
@@ -175,7 +175,7 @@ export function planChunks(doc, survey, { chunkRowsMax = 22 } = {}) {
 }
 
 export async function extractChunk(doc, survey, job, llm, opts = {}) {
-  const isPdf = doc.kind === "pdf";
+  const isPdf = doc.kind === "pdf" || doc.kind === "text";
   const table = survey.tables[job.table];
   const sheet = sheetByName(doc, table.sheet);
   const headerRows = new Set((table.header_rows || []).map(Number));
@@ -193,7 +193,10 @@ export async function extractChunk(doc, survey, job, llm, opts = {}) {
       reasoning: opts.extractReasoning || "off",
       maxTokens: 24000,
     })
-    .catch((e) => ({ records: [], error: String(e.message || e) }));
+    .catch((e) => {
+      if (e.quota) throw e;
+      return { records: [], error: String(e.message || e) };
+    });
   const recs = (out.records || []).map((r) => ({ ...r, source_sheet: r.source_sheet || table.sheet }));
   let kept = recs.filter((r) => !Array.isArray(r.source_rows) || !r.source_rows.length || r.source_rows.some((x) => rowSet.has(Number(x))));
   if (opts.review !== false && kept.length) {
@@ -372,7 +375,7 @@ function cellLookup(doc, sheetName, ref) {
   const texts = [];
   for (const one of refs) {
     let m = /^L?(\d+)$/i.exec(one);
-    if (m && doc.kind === "pdf") {
+    if (m && (doc.kind === "pdf" || doc.kind === "text")) {
       const r = sheet && sheet.rows.find((x) => x.row === Number(m[1]));
       if (r) texts.push(r.cells.map((c) => c.text).join(" | "));
       continue;

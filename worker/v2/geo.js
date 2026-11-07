@@ -90,7 +90,10 @@ export function addrSimilarity(a, b) {
   if (A.numbers.length && B.numbers.length) {
     const ra = [Math.min(...A.numbers), Math.max(...A.numbers)], rb = [Math.min(...B.numbers), Math.max(...B.numbers)];
     if (A.numbers.some((n) => B.numbers.includes(n))) numScore = 1;
-    else if (ra[0] <= rb[1] && rb[0] <= ra[1]) numScore = 0.9; // overlapping ranges
+    else if (ra[0] <= rb[1] && rb[0] <= ra[1]) {
+      // Overlapping ranges: same side of the street only when parity matches.
+      numScore = ra[0] % 2 === rb[0] % 2 ? 0.9 : 0.55;
+    }
     else numScore = 0;
   } else numScore = 0.5;
   const ta = new Set(A.core.split(" ")), tb = new Set(B.core.split(" "));
@@ -140,7 +143,7 @@ export function marketFor(lat, lng) {
 }
 
 // Quality labels, best to worst.
-export const GEO_QUALITY = ["source", "rooftop", "parcel", "interpolated", "intersection", "street", "postal", "city", "failed"];
+export const GEO_QUALITY = ["source", "rooftop", "parcel", "interpolated", "intersection", "street", "postal", "submarket", "city", "failed"];
 
 // Geocode with Google (if key) then Esri World (keyless). Never overwrites the
 // address the broker wrote: returns the formatted address separately.

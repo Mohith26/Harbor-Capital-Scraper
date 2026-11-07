@@ -85,6 +85,7 @@ export function normalizeDate(v) {
     return null;
   }
   let s = String(v).trim();
+  if (!/\d/.test(s)) return null; // "Ongoing", "TBD", "Awarded", "-"
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
   if (/^\d{4}-\d{2}$/.test(s) || /^\d{4}$/.test(s) || /^\d{4}-Q[1-4]$/.test(s)) return s;
   const q = QUARTER.exec(s.replace(/\s+/g, ""));
@@ -109,7 +110,8 @@ export function normalizeDate(v) {
   }
   const d = new Date(s);
   if (!Number.isNaN(d.getTime()) && d.getFullYear() > 1900) return d.toISOString().slice(0, 10);
-  return s;
+  const y = /\b(19[5-9]\d|20\d{2})\b/.exec(s);
+  return y ? y[1] : null;
 }
 
 export function dateToNumber(iso) {
@@ -278,6 +280,15 @@ export function validateRecord(input, { today = new Date() } = {}) {
     r._derived = [...(r._derived || []), "office_pct"];
   }
 
+  // Price per LAND SF reported in a $/SF column (IOS / land deals).
+  if (r.sale_price && r.price_psf && r.land_acres && (r.record_kind === "land_sale" || r.property_subtype === "ios" || !r.building_sf || r.sale_price / r.building_sf > r.price_psf * 3)) {
+    const plsf = r.sale_price / (r.land_acres * 43560);
+    if (Math.abs(plsf - r.price_psf) / r.price_psf < 0.08 && (!r.building_sf || Math.abs(r.sale_price / r.building_sf - r.price_psf) / r.price_psf > 0.25)) {
+      flag(r, "price_psf", "unit_fix", "info", `$${r.price_psf}/SF is per LAND SF (price / land area); stored as $/acre instead`);
+      r.price_per_acre = Math.round(r.sale_price / r.land_acres);
+      r.price_psf = r.building_sf ? +(r.sale_price / r.building_sf).toFixed(2) : null;
+    }
+  }
   // ---- cross-field consistency ----
   if (r.sale_price && r.building_sf && r.price_psf && r.sale_type !== "portfolio") {
     const implied = r.sale_price / r.building_sf;
@@ -305,7 +316,15 @@ export function validateRecord(input, { today = new Date() } = {}) {
     if (n && n < 1995) flag(r, f, "bounds", "warn", `${f} ${r[f]} is very old for a comp`);
     if (n && f !== "lease_end" && n > ty + 1.5) flag(r, f, "bounds", "warn", `${f} ${r[f]} is in the future`);
   }
-  if (r.lease_start && r.lease_end && dateToNumber(r.lease_end) <= dateToNumber(r.lease_start)) flag(r, "lease_end", "inconsistent", "error", "lease end is before start");
+  if (r.lease_start && r.lease_end && dateToNumber(r.lease_end) <= dateToNumber(r.lease_start)) {
+    if (r.term_months > 0 && /^\d{4}-\d{2}/.test(r.lease_start)) {
+      const [y, m] = r.lease_start.split("-").map(Number);
+      const tot = y * 12 + (m - 1) + Math.round(r.term_months);
+      const fixed = `${Math.floor(tot / 12)}-${String((tot % 12) + 1).padStart(2, "0")}`;
+      flag(r, "lease_end", "unit_fix", "warn", `source lease end ${r.lease_end} is before the start; recomputed from the ${Math.round(r.term_months)}-month term -> ${fixed}`);
+      r.lease_end = fixed;
+    } else flag(r, "lease_end", "inconsistent", "error", "lease end is before start");
+  }
   if (r.year_built && r.year_renovated && r.year_renovated < r.year_built) flag(r, "year_renovated", "inconsistent", "warn", "renovated before built");
 
   // ---- bounds ----
@@ -323,7 +342,8 @@ export function validateRecord(input, { today = new Date() } = {}) {
   }
 
   // ---- completeness ----
-  if (!r.address && !r.property_name) flag(r, "address", "missing", "error", "no address or property name - cannot locate this comp");
+  if (!r.address && !r.property_name && !r.submarket && !r.city) flag(r, "address", "missing", "error", "no address, name, submarket or city - cannot locate this comp");
+  else if (!r.address && !r.property_name) flag(r, "address", "missing", "warn", `no address - placed at the ${r.submarket ? "submarket" : "city"} level only`);
   else if (!r.address) flag(r, "address", "missing", "warn", "no street address, only a property name - geocoding will be approximate");
   else if (!/\d/.test(r.address) && !/&| and | at |\//i.test(r.address)) flag(r, "address", "partial", "warn", "address has no street number - location will be approximate");
   if (r.record_kind === "sale" && !r.sale_price && !r.price_psf) flag(r, "sale_price", "missing", "warn", "sale with no price or $/SF");
@@ -331,6 +351,11 @@ export function validateRecord(input, { today = new Date() } = {}) {
   if (r.record_kind === "sale" && !r.sale_date) flag(r, "sale_date", "missing", "info", "sale date missing");
   if (r.record_kind === "lease" && !r.lease_start) flag(r, "lease_start", "missing", "info", "lease date missing");
 
+  // Tidy precision (source cells often carry 7+ decimals).
+  for (const [f, d] of [["price_psf", 2], ["rent_psf_yr", 4], ["rent_psf_mo", 4], ["cap_rate_pct", 3], ["escalation_pct", 3], ["ti_psf", 2], ["land_acres", 3], ["yard_acres", 3], ["office_pct", 1], ["occupancy_pct", 1], ["clear_height_ft", 1]]) {
+    if (typeof r[f] === "number") r[f] = +r[f].toFixed(d);
+  }
+  for (const f of ["sale_price", "building_sf", "leased_sf", "available_sf", "asking_price", "price_per_acre", "monthly_rent_total"]) if (typeof r[f] === "number") r[f] = Math.round(r[f]);
   r._severity = r._flags.some((x) => x.severity === "error") ? "error" : r._flags.some((x) => x.severity === "warn") ? "warn" : "ok";
   return r;
 }

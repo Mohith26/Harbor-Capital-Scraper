@@ -182,9 +182,19 @@ export async function renderPdf(buf, { filename = "", maxPages = 40 } = {}) {
   return { kind: "pdf", filename, sheets, numPages: pdf.numPages, scanned: textChars < 200 };
 }
 
+// Pasted text (Slack / email comp blurbs): one "page" of numbered lines, read
+// by the same PDF-style extraction prompt.
+export function renderText(text, { filename = "pasted.txt" } = {}) {
+  const lines = String(text).replace(/\r\n?/g, "\n").split("\n").map((l) => l.replace(/\s+/g, " ").trim());
+  const rows = [];
+  lines.forEach((t, i) => { if (t) rows.push({ row: i + 1, cells: [{ col: "L", text: t }] }); });
+  return { kind: "text", filename, sheets: [{ name: "page 1", hidden: false, rows, nonEmpty: rows.length, text: "### Pasted text\n" + rows.map((r) => `${r.row}: ${r.cells[0].text}`).join("\n") }] };
+}
+
 export async function renderDocument(buf, filename) {
   const lower = filename.toLowerCase();
   if (lower.endsWith(".pdf")) return renderPdf(buf, { filename });
-  if (lower.endsWith(".csv") || lower.endsWith(".txt")) return renderCsv(new TextDecoder().decode(buf), { filename });
+  if (lower.endsWith(".txt")) return renderText(new TextDecoder().decode(buf), { filename });
+  if (lower.endsWith(".csv")) return renderCsv(new TextDecoder().decode(buf), { filename });
   return renderWorkbook(buf, { filename });
 }

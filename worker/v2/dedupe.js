@@ -51,6 +51,11 @@ export function samePropertyScore(a, b) {
   }
   const haveGeo = a.latitude != null && b.latitude != null;
   const d = haveGeo ? haversineMi(a.latitude, a.longitude, b.latitude, b.longitude) : null;
+  if ((a.geocode_quality === "submarket" || b.geocode_quality === "submarket") && !(a.address && b.address)) {
+    // Area-level placements only match on an explicit shared name.
+    const nm = a.property_name && b.property_name ? nameSimilarity(a.property_name, b.property_name) : 0;
+    return { score: nm >= 0.9 ? 0.8 : 0, reasons: nm >= 0.9 ? ["same name"] : ["area-level location"] };
+  }
   const preciseA = ["source", "rooftop", "parcel", "interpolated"].includes(a.geocode_quality || "rooftop");
   const preciseB = ["source", "rooftop", "parcel", "interpolated"].includes(b.geocode_quality || "rooftop");
   const name = a.property_name && b.property_name ? nameSimilarity(a.property_name, b.property_name) : 0;
