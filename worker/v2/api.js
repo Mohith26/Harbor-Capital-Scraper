@@ -249,7 +249,11 @@ export async function handleApi(req, env, ctx) {
         else if (deal?.verdict === "duplicate") verdict = "duplicate";
         else if (deal?.verdict === "conflict") verdict = "conflict";
         else if (pm && !pm.weak) verdict = "same_property";
-        const decision = verdict === "batch_duplicate" || verdict === "duplicate" ? (verdict === "duplicate" ? "merge" : "skip") : verdict === "conflict" || sev === "error" ? "review" : "add";
+        // A row with no deal numbers and no size is not a usable comp (blank listing rows, headers read from images).
+        const thin = !["sale_price", "price_psf", "price_per_acre", "rent_psf_yr", "rent_per_acre_mo", "asking_rent_psf_yr", "asking_price", "leased_sf", "available_sf", "building_sf", "cap_rate_pct"].some((f) => r[f] != null);
+        if (thin) (r._flags = r._flags || []).push({ field: "record", code: "thin", severity: "warn", msg: "no price, rent or size - skipped by default" });
+        let decision = verdict === "batch_duplicate" || verdict === "duplicate" ? (verdict === "duplicate" ? "merge" : "skip") : verdict === "conflict" || sev === "error" ? "review" : "add";
+        if (thin && decision === "add") decision = "skip";
         const match = {
           verdict,
           property: pm ? { id: pm.property.id, address: pm.property.address, name: pm.property.property_name, score: +pm.score.toFixed(2), reasons: pm.reasons, weak: !!pm.weak } : null,
@@ -366,7 +370,7 @@ export async function handleApi(req, env, ctx) {
         const prev = JSON.parse(c.flags_json || "[]").filter((f) => ["unverified", "vision", "portfolio", "possible_duplicate", "geocode_low", "geocode_failed"].includes(f.code));
         const r = validateRecord({ ...snap, record_kind: c.record_kind, _flags: prev });
         const td = txnDateOf(r);
-        stmts.push(db.prepare(`UPDATE v2_comps SET ${COMP_FIELDS.map((f) => `${f} = ?`).join(", ")}, txn_date = ?, txn_year = ?, flags_json = ?, severity = ? WHERE id = ?`).bind(...COMP_FIELDS.map((f) => (r[f] === undefined ? null : r[f])), td, dateToNumber(td), JSON.stringify(r._flags), r._severity, c.id));
+        stmts.push(db.prepare(`UPDATE v2_comps SET ${COMP_FIELDS.map((f) => `${f} = ?`).join(", ")}, txn_date = ?, txn_year = ?, flags_json = ?, severity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(...COMP_FIELDS.map((f) => (r[f] === undefined ? null : r[f])), td, dateToNumber(td), JSON.stringify(r._flags), r._severity, c.id));
       }
       for (let i = 0; i < stmts.length; i += 50) await db.batch(stmts.slice(i, i + 50));
       return json({ done: results.length, last: results.length ? results[results.length - 1].id : null });
@@ -391,7 +395,7 @@ export async function handleApi(req, env, ctx) {
           log.push({ merge_property: q.id, into: p.id, a: p.address, b: q.address, reasons: sc.reasons });
           if (!dry) {
             await db.batch([
-              db.prepare("UPDATE v2_comps SET property_id = ? WHERE property_id = ?").bind(p.id, q.id),
+              db.prepare("UPDATE v2_comps SET property_id = ?, updated_at = CURRENT_TIMESTAMP WHERE property_id = ?").bind(p.id, q.id),
               db.prepare("UPDATE v2_feature_obs SET property_id = ? WHERE property_id = ?").bind(p.id, q.id),
               db.prepare(`UPDATE v2_properties SET property_name = COALESCE(property_name, ?), zip = COALESCE(zip, ?), submarket = COALESCE(submarket, ?), costar_prop_id = COALESCE(costar_prop_id, ?), parcel_id = COALESCE(parcel_id, ?) WHERE id = ?`).bind(q.property_name, q.zip, q.submarket, q.costar_prop_id, q.parcel_id, p.id),
               db.prepare("DELETE FROM v2_properties WHERE id = ?").bind(q.id),
@@ -414,8 +418,8 @@ export async function handleApi(req, env, ctx) {
               const src = [...JSON.parse(comps[i].sources_json || "[]"), ...JSON.parse(comps[k].sources_json || "[]")];
               const keys = Object.keys(fill);
               await db.batch([
-                db.prepare(`UPDATE v2_comps SET ${[...keys.map((x) => `${x} = ?`), "sources_json = ?"].join(", ")} WHERE id = ?`).bind(...keys.map((x) => fill[x]), JSON.stringify(src), comps[i].id),
-                db.prepare("UPDATE v2_comps SET status = 'duplicate', dup_of = ? WHERE id = ?").bind(comps[i].id, comps[k].id),
+                db.prepare(`UPDATE v2_comps SET ${[...keys.map((x) => `${x} = ?`), "sources_json = ?", "updated_at = CURRENT_TIMESTAMP"].join(", ")} WHERE id = ?`).bind(...keys.map((x) => fill[x]), JSON.stringify(src), comps[i].id),
+                db.prepare("UPDATE v2_comps SET status = 'duplicate', dup_of = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(comps[i].id, comps[k].id),
               ]);
               Object.assign(comps[i], fill);
             }

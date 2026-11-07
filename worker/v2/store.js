@@ -94,6 +94,8 @@ export async function refreshProperty(db, propertyId) {
   sets.push("features_json = ?", "updated_at = CURRENT_TIMESTAMP");
   binds.push(JSON.stringify({ best, conflicts }));
   await db.prepare(`UPDATE v2_properties SET ${sets.join(", ")} WHERE id = ?`).bind(...binds, propertyId).run();
+  // Downstream mirrors (Atlas) sync on v2_comps.updated_at, so building changes bump the comps too.
+  await db.prepare("UPDATE v2_comps SET updated_at = CURRENT_TIMESTAMP WHERE property_id = ?").bind(propertyId).run();
 }
 
 function safeParse(v) {

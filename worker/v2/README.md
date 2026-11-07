@@ -37,7 +37,7 @@ now redirect to the v2 app.
    conflict (held for a human). `POST /api/v2/admin/dedupe-sweep` re-runs this
    over the whole DB.
 
-Models: `LLM_PROVIDER=deepseek` (OpenAI credits were exhausted on 2026-11-07).
+Models: `LLM_PROVIDER=deepseek` (DeepSeek key rotated 2026-11-07; OpenAI key on the Worker has no credits and is skipped automatically).
 Spreadsheets use `deepseek-flash`, PDFs/text `deepseek-v4-pro`; OpenAI
 (`gpt-5.5`) is supported and automatically skipped while out of credits.
 
