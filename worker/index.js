@@ -1,4 +1,5 @@
 import { Container, getContainer } from "@cloudflare/containers";
+import { handleApi, UI_HTML, enrichProperty } from "./v2/api.js";
 
 /**
  * Wraps the FastAPI comp-database image.
@@ -47,15 +48,32 @@ export class CompDatabaseContainer extends Container {
   }
 }
 
-export default {
-  async fetch(request, env) {
-    // Cheap liveness probe that does not need to wake the container.
-    const url = new URL(request.url);
-    if (url.pathname === "/__worker-health") {
-      return new Response("ok", { status: 200 });
-    }
+const V2_PAGES = new Set(["/", "/app", "/find", "/v2"]);
 
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (url.pathname === "/__worker-health") return new Response("ok", { status: 200 });
+    // v2: LLM extraction pipeline, property/feature store and comp finder run
+    // in the Worker itself (D1 + R2); the legacy FastAPI app stays in the container.
+    if (url.pathname.startsWith("/api/v2/")) return handleApi(request, env, ctx);
+    if (V2_PAGES.has(url.pathname)) {
+      return new Response(UI_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    }
     const container = getContainer(env.COMP_DATABASE, "singleton");
     return container.fetch(request);
+  },
+
+  // Background feature sourcing for properties that have not been enriched yet.
+  async scheduled(event, env, ctx) {
+    const db = env.COMPS_DB;
+    const { results } = await db.prepare("SELECT id FROM v2_properties WHERE enrich_status = 'pending' AND latitude IS NOT NULL ORDER BY id LIMIT 25").all();
+    for (const r of results) {
+      try {
+        await enrichProperty(env, db, r.id, {});
+      } catch (e) {
+        await db.prepare("UPDATE v2_properties SET enrich_status = 'failed' WHERE id = ?").bind(r.id).run();
+      }
+    }
   },
 };

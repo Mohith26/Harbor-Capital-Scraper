@@ -12,7 +12,7 @@
   "containers": [
     {
       "class_name": "CompDatabaseContainer",
-      "image": "./Dockerfile",
+      "image": "registry.cloudflare.com/5eb782dddfd7800eb87bb3cb96ba55a3/harbor-comps-compdatabasecontainer@sha256:027d1739613361bb3aac85dedd590a05e39d3a494141815448ad255b71b79ae6",
       "instance_type": "standard-1",
       "max_instances": 2
     }
@@ -41,6 +41,18 @@
       "database_id": "a4b00be2-2e66-4063-9565-209efde9c3ac"
     }
   ],
+
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "harbor-comps-files" }
+  ],
+
+  "rules": [
+    { "type": "Text", "globs": ["**/*.html"], "fallthrough": true }
+  ],
+
+  "triggers": { "crons": ["*/10 * * * *"] },
+
+  "vars": { "LLM_PROVIDER": "deepseek", "LLM_MODEL_STRONG": "gpt-5.5", "LLM_MODEL_FAST": "gpt-5.4-mini", "LLM_MODEL_VISION": "gpt-5.5" },
 
   "routes": [
     {

@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Harbor Comps</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f1e1e'/%3E%3Cpath d='M9 22V10h3v5h8v-5h3v12h-3v-4.5h-8V22z' fill='%23ffbd60'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+<style>
+:root{--ink:#1f1e1e;--ink2:#3a3837;--muted:#6b6867;--faint:#a19e9c;--bone:#fbf8f3;--paper:#ffffff;--line:#e9e4dc;--line2:#d9d2c7;--rail:#161515;--amber:#ffbd60;--amber2:#f5a623;--amberInk:#7a4e00;--amberBg:#fff4e2;--wine:#67163a;--good:#15803d;--goodBg:#e9f6ee;--warn:#92400e;--warnBg:#fdf1e3;--bad:#b91c1c;--badBg:#fdeceb;--blue:#1d4f91;--blueBg:#e8eff9;--r:12px;--sh:0 1px 2px rgba(31,30,30,.06),0 4px 16px rgba(31,30,30,.06);--sh2:0 10px 40px rgba(31,30,30,.16);--ease:cubic-bezier(.2,0,.2,1)}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;font:14px/1.45 Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:var(--ink);background:var(--bone);-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+.app{display:grid;grid-template-columns:72px 1fr;height:100vh}
+.rail{background:var(--rail);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:6px}
+.logo{width:40px;height:40px;border-radius:10px;background:var(--amber);color:var(--rail);display:grid;place-items:center;font-weight:700;letter-spacing:-.5px;margin-bottom:14px}
+.nav{width:56px;padding:9px 0 7px;border-radius:10px;border:0;background:transparent;color:#b4b1b1;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;transition:.15s var(--ease)}
+.nav svg{width:20px;height:20px}.nav span{font:500 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase}
+.nav:hover{background:#2a2929;color:#fff}.nav.on{background:#2a2929;color:var(--amber)}
+.rail .sp{flex:1}.legacy{color:#807f7f;font-size:10px;text-decoration:none;text-align:center;line-height:1.2}.legacy:hover{color:#fff}
+main{overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.top{display:flex;align-items:center;gap:14px;padding:12px 28px 10px;border-bottom:1px solid var(--line);background:var(--bone)}
+.eyebrow{font:500 11px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+h1{font-size:20px;margin:4px 0 0;font-weight:650;letter-spacing:-.01em}
+.top .right{margin-left:auto;display:flex;gap:10px;align-items:center;color:var(--muted);font-size:12.5px}
+.view{display:none;flex:1;min-height:0}.view.on{display:flex}
+.btn{border:1px solid var(--line2);background:var(--paper);border-radius:9px;padding:8px 13px;cursor:pointer;font-weight:550;transition:.15s var(--ease);display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.btn:hover{border-color:var(--ink);transform:translateY(-1px)}
+.btn.pri{background:var(--amber);border-color:var(--amber);color:var(--ink)}.btn.pri:hover{background:var(--amber2);border-color:var(--amber2)}
+.btn.dark{background:var(--ink);border-color:var(--ink);color:#fff}
+.btn.sm{padding:5px 9px;font-size:12.5px;border-radius:7px}.btn:disabled{opacity:.45;pointer-events:none}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;background:#f1ece4;color:var(--ink2);font-size:12px;font-weight:500;white-space:nowrap}
+.chip.k-sale{background:var(--blueBg);color:var(--blue)}.chip.k-lease{background:var(--goodBg);color:var(--good)}.chip.k-listing{background:#f3e8f5;color:#6b2a7a}.chip.k-land_sale{background:#efe9df;color:#5d4a2c}
+.chip.warn{background:var(--warnBg);color:var(--warn)}.chip.err{background:var(--badBg);color:var(--bad)}.chip.ok{background:var(--goodBg);color:var(--good)}.chip.amb{background:var(--amberBg);color:var(--amberInk)}
+.chip.x{cursor:pointer}.chip.x:hover{outline:1px solid var(--line2)}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh)}
+/* ---------- finder ---------- */
+#v-find{flex-direction:column}
+.searchwrap{padding:14px 28px 6px}
+.search{display:flex;gap:10px;align-items:stretch;background:var(--paper);border:1.5px solid var(--line2);border-radius:16px;padding:8px 8px 8px 16px;box-shadow:var(--sh);transition:.2s var(--ease)}
+.search:focus-within{border-color:var(--ink);box-shadow:0 0 0 4px rgba(255,189,96,.35)}
+.search textarea{flex:1;border:0;outline:0;resize:none;font-size:15.5px;line-height:1.5;padding:7px 0;min-height:24px;max-height:120px;background:transparent}
+.search .btn{align-self:flex-end}
+.examples{display:flex;gap:8px;flex-wrap:nowrap;overflow-x:auto;margin-top:10px;padding-bottom:2px;scrollbar-width:none}.examples::-webkit-scrollbar{display:none}
+.examples .chip{cursor:pointer;background:transparent;border:1px dashed var(--line2);color:var(--muted)}.examples .chip:hover{border-color:var(--ink);color:var(--ink)}
+.opts{display:flex;gap:16px;align-items:center;margin-top:10px;flex-wrap:wrap;font-size:13px;color:var(--ink2)}
+.seg{display:inline-flex;background:#efe9e0;border-radius:9px;padding:3px}.seg button{border:0;background:transparent;padding:5px 11px;border-radius:7px;cursor:pointer;font-weight:550;color:var(--muted)}.seg button.on{background:var(--paper);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.parsed{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 28px 8px;min-height:30px}
+.parsed .lbl{font-size:12.5px;color:var(--muted);margin-right:4px}
+.split{flex:1;min-height:0;display:grid;grid-template-columns:minmax(440px,1fr) minmax(360px,44%);gap:0;border-top:1px solid var(--line)}
+.results{overflow:auto;padding:14px 18px 40px 28px}
+.mapbox{position:relative;border-left:1px solid var(--line)}#map,#dbmap{position:absolute;inset:0}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+.stat{background:var(--paper);border:1px solid var(--line);border-radius:11px;padding:10px 12px 10px 15px;position:relative;overflow:hidden}
+.stat:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--amber)}
+.stat .v{font-size:19px;font-weight:650;margin-top:5px;letter-spacing:-.01em}.stat .s{font-size:11.5px;color:var(--muted)}
+.summary{background:var(--amberBg);border:1px solid #f7dcb0;border-radius:11px;padding:10px 13px;font-size:13.5px;margin-bottom:12px;color:#4d3510;display:none}
+.comp{display:grid;grid-template-columns:46px 1fr auto;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--paper);margin-bottom:8px;cursor:pointer;transition:.18s var(--ease);opacity:0;transform:translateY(6px);animation:in .35s var(--ease) forwards}
+.comp:hover,.comp.hl{border-color:var(--ink);box-shadow:var(--sh)}
+.comp.sel{border-color:var(--amber2);background:#fffaf2}
+@keyframes in{to{opacity:1;transform:none}}
+.ring{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-weight:650;font-size:13px;position:relative}
+.ring svg{position:absolute;inset:0;transform:rotate(-90deg)}
+.comp .addr{font-weight:600;font-size:14.5px}.comp .sub{color:var(--muted);font-size:12.5px;margin-top:1px}
+.comp .nums{display:flex;gap:14px;margin-top:6px;flex-wrap:wrap;font-size:13px}.comp .nums b{font-weight:650}
+.comp .feats{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}
+.comp .why{margin-top:7px;font-size:12.5px;color:#5c4a2a;background:#fff8ec;border-radius:7px;padding:5px 8px;display:none}
+.comp .side{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.chk{width:18px;height:18px;border-radius:5px;border:1.5px solid var(--line2);display:grid;place-items:center;background:#fff}
+.comp.sel .chk{background:var(--amber2);border-color:var(--amber2)}
+.bars{display:flex;gap:3px;align-items:flex-end;height:18px}.bars i{width:5px;border-radius:2px;background:#e6dfd4;display:block}
+.empty{padding:60px 20px;text-align:center;color:var(--muted)}
+.empty h3{color:var(--ink);margin:0 0 6px;font-size:16px}
+.selbar{position:sticky;bottom:0;margin-top:10px;background:var(--ink);color:#fff;border-radius:12px;padding:10px 14px;display:none;align-items:center;gap:10px;box-shadow:var(--sh2)}
+.selbar .btn{background:#2a2929;border-color:#444;color:#fff}.selbar .btn.pri{background:var(--amber);color:var(--ink);border-color:var(--amber)}
+/* ---------- db ---------- */
+#v-db{flex-direction:column}
+.toolbar{display:flex;gap:10px;align-items:center;padding:12px 28px;flex-wrap:wrap}
+.toolbar input[type=search],.toolbar select{border:1px solid var(--line2);border-radius:9px;padding:7px 10px;background:#fff}
+.toolbar input[type=search]{width:280px}
+.tablewrap{flex:1;min-height:0;overflow:auto;margin:0 28px 20px;border:1px solid var(--line);border-radius:12px;background:#fff}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{position:sticky;top:0;background:#f6f2ec;text-align:left;font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:10px 10px;border-bottom:1px solid var(--line);white-space:nowrap;cursor:pointer;z-index:1}
+td{padding:9px 10px;border-bottom:1px solid #f1ede7;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+tbody tr{cursor:pointer;transition:background .1s}tbody tr:hover{background:#fffaf2}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.dbsplit{flex:1;min-height:0;display:flex}
+/* ---------- upload ---------- */
+#v-up{flex-direction:column;overflow:auto}
+.drop{margin:22px 28px 0;border:2px dashed var(--line2);border-radius:18px;padding:38px;text-align:center;background:var(--paper);transition:.2s var(--ease);cursor:pointer}
+.drop:hover,.drop.over{border-color:var(--amber2);background:#fffaf2}
+.drop h3{margin:8px 0 4px;font-size:17px}.drop p{margin:0;color:var(--muted)}
+.steps{display:flex;gap:0;margin:20px 28px 0}
+.step{flex:1;display:flex;align-items:center;gap:9px;padding:12px 14px;border:1px solid var(--line);background:#fff;font-weight:550;color:var(--muted);font-size:13px}
+.step:first-child{border-radius:12px 0 0 12px}.step:last-child{border-radius:0 12px 12px 0}.step+.step{border-left:0}
+.step .dot{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line2);display:grid;place-items:center;font-size:11px;flex:none}
+.step.on{color:var(--ink)}.step.on .dot{border-color:var(--amber2);border-top-color:transparent;animation:spin .8s linear infinite}
+.step.done{color:var(--ink)}.step.done .dot{background:var(--good);border-color:var(--good);color:#fff}
+@keyframes spin{to{transform:rotate(360deg)}}
+.progress{height:4px;background:#eee7dc;border-radius:4px;overflow:hidden;margin:10px 28px 0}.progress i{display:block;height:100%;background:var(--amber2);width:0;transition:width .4s var(--ease)}
+.survey{margin:16px 28px 0;padding:14px 16px}
+.review{margin:16px 28px 30px}
+.rgroup{margin-bottom:18px}.rgroup h4{margin:0 0 8px;display:flex;align-items:center;gap:8px;font-size:14px}
+.rrow{display:grid;grid-template-columns:24px minmax(220px,1.3fr) 2fr 150px;gap:12px;align-items:start;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;margin-bottom:6px}
+.rrow .fl{font-size:12px;color:var(--warn);margin-top:3px}.rrow .fl.e{color:var(--bad)}
+.kv{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12.5px;color:var(--ink2)}.kv span b{font-weight:600;color:var(--ink)}
+.rrow select{border:1px solid var(--line2);border-radius:7px;padding:4px 6px;width:100%}
+.ed{font-size:12px;color:var(--blue);cursor:pointer;margin-top:4px;display:inline-block}
+/* ---------- drawer ---------- */
+.scrim{position:fixed;inset:0;background:rgba(22,21,21,.32);opacity:0;pointer-events:none;transition:.25s var(--ease);z-index:900}
+.scrim.on{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(640px,94vw);background:var(--bone);box-shadow:var(--sh2);transform:translateX(104%);transition:transform .32s cubic-bezier(.3,1.25,.4,1);z-index:901;display:flex;flex-direction:column}
+.drawer.on{transform:none}
+.dhead{padding:20px 24px 14px;border-bottom:1px solid var(--line);background:#fff}
+.dbody{flex:1;overflow:auto;padding:16px 24px 40px}
+.fgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.feat{background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.feat .l{font:500 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.feat .v{font-weight:620;margin-top:5px;font-size:14px}.feat .src{font-size:11px;color:var(--faint);margin-top:2px}
+.feat.cf{border-color:#f0c48a;background:#fffaf2}
+.sec{margin:20px 0 8px}
+.tl{border-left:2px solid var(--line2);margin-left:6px;padding-left:16px}
+.tli{position:relative;padding:4px 0 12px}.tli:before{content:"";position:absolute;left:-22px;top:9px;width:10px;height:10px;border-radius:50%;background:var(--amber2);border:2px solid var(--bone)}
+.x{position:absolute;top:16px;right:18px;border:0;background:#f1ece4;width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:16px}
+.toast{position:fixed;bottom:22px;left:50%;transform:translate(-50%,30px);background:var(--ink);color:#fff;padding:10px 16px;border-radius:10px;opacity:0;transition:.3s var(--ease);z-index:999;font-weight:500}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.leaflet-container{background:#ece6dc;font:inherit}
+.pin{width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:grid;place-items:center;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3);font-size:11px;font-weight:700}
+.pin b{transform:rotate(45deg)}
+.subjpin{width:18px;height:18px;border-radius:50%;background:var(--ink);border:3px solid var(--amber);box-shadow:0 0 0 6px rgba(255,189,96,.35)}
+.qgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 28px}
+.mini{font-size:12px;color:var(--muted)}
+.skel{background:linear-gradient(90deg,#f1ece4 25%,#f8f4ee 50%,#f1ece4 75%);background-size:200% 100%;animation:sk 1.2s infinite;border-radius:12px;height:96px;margin-bottom:8px}
+@keyframes sk{to{background-position:-200% 0}}
+.count{font-variant-numeric:tabular-nums}
+@media (max-width:1100px){.split{grid-template-columns:1fr}.mapbox{height:360px;position:relative}.stats{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail">
+    <div class="logo">HC</div>
+    <button class="nav on" data-v="find" title="Find comps"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Find</span></button>
+    <button class="nav" data-v="db" title="Database"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span>Data</span></button>
+    <button class="nav" data-v="up" title="Upload comps"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg><span>Add</span></button>
+    <button class="nav" data-v="q" title="Data quality"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4m0 3h.01"/></svg><span>Check</span></button>
+    <div class="sp"></div>
+    <a class="legacy" href="/database" title="Previous version">Old<br/>app</a>
+  </nav>
+  <main>
+    <div class="top">
+      <div><div class="eyebrow" id="eb">Comp finder</div><h1 id="ttl">Find comps the way you'd describe the deal</h1></div>
+      <div class="right"><span id="dbcount" class="count"></span><span id="who"></span></div>
+    </div>
+
+    <!-- FIND -->
+    <section class="view on" id="v-find">
+      <div class="searchwrap">
+        <div class="search">
+          <textarea id="q" rows="1" placeholder="e.g.  45k SF rear-load tilt-wall, 28' clear, NW Houston off 290 - sale comps last 24 months"></textarea>
+          <button class="btn pri" id="go">Find comps <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        </div>
+        <div class="examples" id="ex"></div>
+        <div class="opts">
+          <div class="seg" id="kinds"><button data-k="auto" class="on">From text</button><button data-k="sale">Sales</button><button data-k="lease">Leases</button><button data-k="listing">Availabilities</button></div>
+          <label><input type="checkbox" id="explain" checked /> Analyst notes</label>
+          <span class="mini">Tip: click the map to search around a point.</span>
+        </div>
+      </div>
+      <div class="parsed" id="parsed"></div>
+      <div class="split">
+        <div class="results" id="res">
+          <div class="empty"><h3>Describe the subject or the place</h3>A deal summary, an address, a submarket ("Upper GSW", "South Belt"), or a size band. The finder reads it like an analyst would and ranks every comp in the database.</div>
+        </div>
+        <div class="mapbox"><div id="map"></div></div>
+      </div>
+    </section>
+
+    <!-- DATABASE -->
+    <section class="view" id="v-db">
+      <div class="toolbar">
+        <div class="seg" id="dbkind"><button data-k="" class="on">All</button><button data-k="sale">Sales</button><button data-k="lease">Leases</button><button data-k="listing">Availabilities</button></div>
+        <input type="search" id="dbq" placeholder="Search address, tenant, buyer, submarket, file..." />
+        <select id="dbmarket"><option value="">All markets</option><option>Houston</option><option>DFW</option><option>San Antonio</option><option>Austin</option><option>Laredo</option><option>Other TX</option></select>
+        <select id="dbsource"><option value="">All sources</option><option value="broker">Broker files</option><option value="costar">CoStar</option><option value="legacy">Legacy import</option></select>
+        <select id="dbsort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="price">$/SF high-low</option><option value="rent">Rent high-low</option><option value="size">Size</option></select>
+        <span class="mini" id="dbn"></span>
+        <span style="margin-left:auto"></span>
+        <button class="btn sm" id="dbmapbtn">Map</button>
+      </div>
+      <div class="dbsplit">
+        <div class="tablewrap" id="dbt"></div>
+        <div class="mapbox" id="dbmapbox" style="display:none;width:44%"><div id="dbmap"></div></div>
+      </div>
+    </section>
+
+    <!-- UPLOAD -->
+    <section class="view" id="v-up">
+      <div class="drop" id="drop">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#b07a1e" stroke-width="1.8"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+        <h3>Drop a broker comp file</h3>
+        <p>Excel, CSV or PDF - any layout. The model reads every sheet, finds the comp tables, extracts each comp with a cell citation, then checks numbers, locates and de-duplicates them before anything is saved.</p>
+        <input type="file" id="file" accept=".xlsx,.xls,.xlsm,.csv,.pdf" hidden />
+      </div>
+      <div id="upflow" style="display:none">
+        <div class="steps">
+          <div class="step" id="s1"><div class="dot"></div>Read file</div>
+          <div class="step" id="s2"><div class="dot"></div>Map tables</div>
+          <div class="step" id="s3"><div class="dot"></div>Extract comps <span id="s3n" class="mini"></span></div>
+          <div class="step" id="s4"><div class="dot"></div>Locate &amp; dedupe</div>
+          <div class="step" id="s5"><div class="dot"></div>Review &amp; save</div>
+        </div>
+        <div class="progress"><i id="pbar"></i></div>
+        <div class="card survey" id="survey" style="display:none"></div>
+        <div class="review" id="review"></div>
+      </div>
+      <div style="margin:22px 28px 30px" id="recent"></div>
+    </section>
+
+    <!-- QUALITY -->
+    <section class="view" id="v-q" style="flex-direction:column;overflow:auto"><div id="qbody" style="padding-bottom:40px"></div></section>
+  </main>
+</div>
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer"><button class="x" id="dx">×</button><div class="dhead" id="dhead"></div><div class="dbody" id="dbody"></div></aside>
+<div class="toast" id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const api=async(p,o={})=>{const r=await fetch(p,{credentials:'include',...o,headers:{'content-type':'application/json',...(o.headers||{})}});const t=await r.text();let j;try{j=JSON.parse(t)}catch{throw new Error(r.status+' '+t.slice(0,200))}if(!r.ok)throw new Error(j.error||r.status);return j};
+const fmt={
+  usd:v=>v==null?'—':v>=1e6?'$'+(v/1e6).toFixed(v>=1e7?1:2)+'M':'$'+Math.round(v).toLocaleString(),
+  psf:v=>v==null?'—':'$'+(+v).toFixed(v<100?2:0),
+  sf:v=>v==null?'—':(v>=1e5?Math.round(v/1e3)+'k':Math.round(v).toLocaleString())+' SF',
+  pct:v=>v==null?'—':(+v).toFixed(2).replace(/0$/,'')+'%',
+  date:v=>{if(!v)return '—';const m=/^(\d{4})-(\d{2})(?:-(\d{2}))?/.exec(v);if(m)return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m[2]-1]+' '+m[1];const q=/^(\d{4})-Q(\d)/.exec(v);return q?'Q'+q[2]+' '+q[1]:v},
+  mi:v=>v==null?'':v<0.1?Math.round(v*5280)+' ft':v.toFixed(1)+' mi',
+  num:v=>v==null?'—':(+v).toLocaleString(undefined,{maximumFractionDigits:2}),
+};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const LABEL={bulk_distribution:'Bulk',shallow_bay:'Shallow bay',flex:'Flex',manufacturing:'Mfg / crane',ios:'IOS',cold_storage:'Cold',multi_tenant:'Multi-tenant',service:'Service',warehouse:'Warehouse',data_center:'Data ctr',tilt_wall:'Tilt-wall',metal:'Metal',masonry:'Masonry',concrete_block:'Block',precast:'Precast',steel:'Steel',rear:'Rear-load',front:'Front-load',cross_dock:'Cross-dock',side:'Side-load',rail:'Rail',owner_user:'User sale',sale_leaseback:'SLB',investment:'Investment',portfolio:'Portfolio',development:'Development',land:'Land'};
+const KLBL={sale:'Sale',lease:'Lease',listing:'Availability',land_sale:'Land/IOS sale'};
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('on'),2600)}
+function countUp(el,to,f=x=>Math.round(x).toLocaleString()){const t0=performance.now();const d=600;(function s(n){const p=Math.min(1,(n-t0)/d);el.textContent=f(to*(1-Math.pow(1-p,3)));if(p<1)requestAnimationFrame(s)})(t0)}
+
+// ---------- nav ----------
+const TITLES={find:['Comp finder',"Find comps the way you'd describe the deal"],db:['Database','Every comp, with where it came from'],up:['Add comps','Upload a broker file'],q:['Data quality','What needs a human look']};
+function show(v){$$('.nav').forEach(b=>b.classList.toggle('on',b.dataset.v===v));$$('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));$('#eb').textContent=TITLES[v][0];$('#ttl').textContent=TITLES[v][1];location.hash=v;
+  if(v==='db')loadDb();if(v==='up')loadRecent();if(v==='q')loadQuality();setTimeout(()=>{map&&map.invalidateSize();dbmap&&dbmap.invalidateSize()},50)}
+$$('.nav').forEach(b=>b.onclick=()=>show(b.dataset.v));
+
+// ---------- finder ----------
+const EXAMPLES=["Lease comps 450,000 - 1,000,000 SF around 1085 Heritage West Dr, Katy","45k SF rear-load tilt-wall, 28' clear, NW Houston off 290 - sale comps last 24 months","IOS lease comps in DFW, 3-10 acres, \$/acre/month","Shallow-bay multi-tenant lease comps in Upper GSW, 2023+","Crane-served manufacturing sale comps in Houston with cap rates","Laredo warehouse sale comps 50-120k SF since 2024","Tri County San Antonio 20-60k SF front-load lease comps"];
+$('#ex').innerHTML=EXAMPLES.map(e=>`<span class="chip" title="Try this">${esc(e)}</span>`).join('');
+$$('#ex .chip').forEach(c=>c.onclick=()=>{$('#q').value=c.textContent;auto();run()});
+const q=$('#q');function auto(){q.style.height='auto';q.style.height=Math.min(q.scrollHeight,120)+'px'}q.oninput=auto;
+q.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();run()}};
+let kindSel='auto';$$('#kinds button').forEach(b=>b.onclick=()=>{$$('#kinds button').forEach(x=>x.classList.toggle('on',x===b));kindSel=b.dataset.k;if(last)run()});
+$('#go').onclick=()=>run();
+let map,markers=[],subjM,circle,pinLoc=null,last=null,selected=new Set();
+function baseLayers(m){const gray=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',{attribution:'Esri',maxZoom:16});const ref=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',{maxZoom:16});const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{attribution:'Esri, Maxar',maxZoom:19});const streets=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',{attribution:'Esri',maxZoom:19});streets.addTo(m);L.control.layers({'Streets':streets,'Light':L.layerGroup([gray,ref]),'Satellite':sat},null,{position:'topright'}).addTo(m)}
+function initMap(){map=L.map('map',{zoomControl:true}).setView([30.4,-97.2],6);baseLayers(map);
+  map.on('click',e=>{pinLoc={lat:e.latlng.lat,lng:e.latlng.lng,radius_mi:3,label:'map pin'};toast('Searching around the pin…');run()})}
+initMap();
+function scoreColor(s){return s>=75?'#15803d':s>=55?'#b7791f':'#a19e9c'}
+function ring(s){const c=scoreColor(s),r=19,C=2*Math.PI*r;return `<div class="ring" style="color:${c}"><svg viewBox="0 0 42 42"><circle cx="21" cy="21" r="${r}" fill="none" stroke="#f1ece4" stroke-width="3.5"/><circle cx="21" cy="21" r="${r}" fill="none" stroke="${c}" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="${C*s/100} ${C}"/></svg>${s}</div>`}
+async function run(){
+  const text=q.value.trim();if(!text&&!pinLoc){q.focus();return}
+  $('#res').innerHTML='<div class="skel"></div><div class="skel"></div><div class="skel"></div>';$('#parsed').innerHTML='<span class="lbl">Reading your request…</span>';
+  const filters={};if(kindSel!=='auto')filters.comp_types=[kindSel];
+  try{
+    const r=await api('/api/v2/finder',{method:'POST',body:JSON.stringify({query:text,location:pinLoc,filters,limit:40})});
+    last=r;pinLoc=null;selected.clear();renderParsed(r);renderResults(r);
+    if($('#explain').checked&&r.results.length)explain(text,r);
+  }catch(e){$('#res').innerHTML=`<div class="empty"><h3>Something went wrong</h3>${esc(e.message)}</div>`}
+}
+function renderParsed(r){
+  const p=r.parsed||{},c=[];
+  (p.comp_types||[]).forEach(k=>c.push(`<span class="chip k-${k}">${KLBL[k]||k}</span>`));
+  if(r.location)c.push(`<span class="chip amb">📍 ${esc(r.location.label)} · ${(+r.location.radius).toFixed(r.location.radius<5?1:0)} mi</span>`);
+  if(r.subject&&r.subject.auto_filled&&r.subject.auto_filled.length){const sj=r.subject;c.push(`<span class="chip" style="background:#eef3ec;color:#2f5d3a" title="Looked up from ${esc((sj.sources||[]).join(', '))}">Subject: ${[sj.building_sf&&fmt.sf(sj.building_sf),sj.year_built&&'built '+sj.year_built,sj.clear_height_ft&&sj.clear_height_ft+"' clear",sj.property_subtype&&LABEL[sj.property_subtype]].filter(Boolean).join(' · ')} (auto)</span>`)}
+  const sz=p.size_sf||{};if(sz.min||sz.max)c.push(`<span class="chip">${sz.min?fmt.sf(sz.min):'…'} – ${sz.max?fmt.sf(sz.max):'…'}</span>`);else if(sz.target)c.push(`<span class="chip">~${fmt.sf(sz.target)}</span>`);
+  if(p.clear_height_ft?.target||p.clear_height_ft?.min)c.push(`<span class="chip">${p.clear_height_ft.target||p.clear_height_ft.min+'+'}' clear</span>`);
+  (p.property_subtype||[]).concat(p.loading||[],p.construction||[],p.sale_type||[]).forEach(x=>c.push(`<span class="chip">${LABEL[x]||x}</span>`));
+  (p.building_class||[]).forEach(x=>c.push(`<span class="chip">Class ${x}</span>`));
+  if(p.year_built?.min||p.year_built?.target)c.push(`<span class="chip">Built ${p.year_built.target||p.year_built.min+'+'}</span>`);
+  if(p.since)c.push(`<span class="chip">Since ${fmt.date(p.since)}</span>`);
+  if(p.needs?.cap_rate)c.push('<span class="chip">Has cap rate</span>');
+  $('#parsed').innerHTML=`<span class="lbl">${esc(p.interpretation||'Search')}</span>`+c.join('')+`<span class="mini" style="margin-left:6px">${r.matched} matches${r.near_misses?` + ${r.near_misses} near misses`:''} · ${(r.ms/1000).toFixed(1)}s</span>`;
+}
+function compCard(x,i){
+  const kind=x.record_kind;
+  const nums=kind==='lease'?[`<span><b>${x.rent_psf_yr!=null?fmt.psf(x.rent_psf_yr):'—'}</b>/SF/yr ${esc(x.lease_structure||'')}</span>`,`<span>${fmt.sf(x.leased_sf||x.size_sf)}</span>`,x.term_months?`<span>${Math.round(x.term_months)} mo</span>`:'',x.escalation_pct?`<span>${fmt.pct(x.escalation_pct)} bumps</span>`:'',x.rent_per_acre_mo?`<span><b>${fmt.usd(x.rent_per_acre_mo)}</b>/ac/mo</span>`:'']
+   :kind==='listing'?[`<span>Asking <b>${x.asking_rent_psf_yr?fmt.psf(x.asking_rent_psf_yr)+'/SF/yr':fmt.usd(x.asking_price)}</b></span>`,`<span>${fmt.sf(x.available_sf||x.size_sf)} avail</span>`]
+   :[`<span><b>${x.price_psf!=null&&x.sale_type!=='portfolio'?fmt.psf(x.price_psf)+'/SF':fmt.usd(x.sale_price)}</b></span>`,x.price_psf!=null&&x.sale_price?`<span>${fmt.usd(x.sale_price)}</span>`:'',x.cap_rate_pct?`<span><b>${fmt.pct(x.cap_rate_pct)}</b> cap</span>`:'',`<span>${fmt.sf(x.building_sf||x.size_sf)}</span>`];
+  const feats=[x.year_built&&`Built ${x.year_built}`,x.clear_height_ft&&`${x.clear_height_ft}' clear`,x.loading&&LABEL[x.loading],x.construction&&LABEL[x.construction],x.property_subtype&&LABEL[x.property_subtype],x.building_class&&'Class '+x.building_class,x.land_acres&&`${(+x.land_acres).toFixed(1)} ac`,x.dock_doors&&`${x.dock_doors} DH`,x.sale_type&&kind==='sale'&&LABEL[x.sale_type]].filter(Boolean).map(f=>`<span class="chip">${esc(f)}</span>`).join('');
+  const parts=x.parts||{};const bars=['location','size','recency','product'].map(k=>`<i title="${k} ${parts[k]??'n/a'}" style="height:${Math.max(3,(parts[k]??0)*0.18)}px;background:${parts[k]==null?'#eee':parts[k]>=70?'#7fbf95':parts[k]>=45?'#f0c27a':'#e6b4ae'}"></i>`).join('');
+  const who=kind==='lease'?x.tenant:kind==='sale'?(x.buyer?`→ ${x.buyer}`:''):'';
+  return `<div class="comp" data-i="${i}" style="animation-delay:${Math.min(i,12)*30}ms">
+   ${ring(x.score)}
+   <div><div class="addr">${esc(x.address||x.property_name||'Unknown address')}</div>
+   <div class="sub"><span class="chip k-${kind}" style="padding:1px 7px;font-size:11px">${KLBL[kind]}</span> ${fmt.date(x.txn_date)} · ${esc([x.submarket,x.city].filter(Boolean).join(', '))}${x.distance_mi!=null?' · '+fmt.mi(x.distance_mi):''}${who?' · '+esc(who):''}</div>
+   <div class="nums">${nums.join('')}</div><div class="feats">${feats}</div>
+   ${x.relaxed?'<div class="mini" style="color:var(--amberInk);margin-top:5px">Near miss: outside your size / price / date constraints</div>':''}
+   ${x.flags&&x.flags.length?`<div class="mini" style="color:var(--warn);margin-top:5px">⚠ ${esc(x.flags[0])}</div>`:''}
+   <div class="why" id="why-${x.id}"></div></div>
+   <div class="side"><div class="chk">${'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5"><path d="m5 12 5 5 9-10"/></svg>'}</div><div class="bars" title="location · size · recency · product">${bars}</div><div class="mini">${esc(x.source_kind==='costar'?'CoStar':x.source_kind==='legacy'?'Legacy':'Broker')}</div></div></div>`;
+}
+function renderResults(r){
+  const rows=r.results;const s=r.stats||{};
+  if(!rows.length){$('#res').innerHTML=`<div class="empty"><h3>No comps matched</h3>${r.candidates?`${r.candidates} candidates nearby were filtered out by your constraints. Try widening the size band, radius or dates.`:'Nothing in the database near this location yet.'}</div>`;drawMap(r);return}
+  const st=[['Comps',s.count,'',`${s.sales} sales · ${s.leases} leases`],['Median $/SF',s.median_price_psf,'psf',s.median_cap_rate?`median cap ${fmt.pct(s.median_cap_rate)} (${s.cap_rate_n})`:'no cap rates'],['Median rent',s.median_rent_psf_yr,'rent',s.sf_weighted_rent_psf_yr?`SF-weighted ${fmt.psf(s.sf_weighted_rent_psf_yr)}`:''],['Date range',null,'',s.date_range?fmt.date(s.date_range[0])+' – '+fmt.date(s.date_range[1]):'']];
+  $('#res').innerHTML=`<div class="stats">${st.map(([l,v,t,sub],i)=>`<div class="stat"><div class="eyebrow">${l}</div><div class="v" id="sv${i}">${v==null?(i===3?(s.date_range?fmt.date(s.date_range[1]):'—'):'—'):''}</div><div class="s">${sub}</div></div>`).join('')}</div>
+   <div class="summary" id="summ"></div>
+   ${(r.subject_history||[]).length?`<details style="margin-bottom:10px"><summary class="eyebrow" style="cursor:pointer;padding:6px 0">History at the subject building (${r.subject_history.length}) - not counted as comps</summary>${r.subject_history.map(x=>`<div class="mini" style="padding:4px 0">${KLBL[x.record_kind]} · ${fmt.date(x.txn_date)} · ${esc(x.tenant||x.buyer||'')} · ${x.record_kind==='lease'?fmt.psf(x.rent_psf_yr)+'/yr '+esc(x.lease_structure||''):fmt.psf(x.price_psf)+'/SF'} · ${fmt.sf(x.size_sf)}</div>`).join('')}</details>`:''}
+   ${rows.map(compCard).join('')}
+   <div class="selbar" id="selbar"><span id="seln"></span><span style="flex:1"></span><button class="btn sm" id="selclr">Clear</button><button class="btn sm pri" id="selexp">Export CSV</button></div>`;
+  if(s.count!=null)countUp($('#sv0'),s.count);if(s.median_price_psf!=null)countUp($('#sv1'),s.median_price_psf,v=>'$'+v.toFixed(0)+'/SF');if(s.median_rent_psf_yr!=null)countUp($('#sv2'),s.median_rent_psf_yr,v=>'$'+v.toFixed(2)+'/yr');
+  $$('#res .comp').forEach(el=>{const x=rows[+el.dataset.i];
+    el.onclick=e=>{if(e.target.closest('.chk')){selected.has(x.id)?selected.delete(x.id):selected.add(x.id);el.classList.toggle('sel');updSel();return}openProperty(x.property_id||x.pid)};
+    el.onmouseenter=()=>hl(x.id,true);el.onmouseleave=()=>hl(x.id,false)});
+  $('#selclr').onclick=()=>{selected.clear();$$('#res .comp').forEach(c=>c.classList.remove('sel'));updSel()};
+  $('#selexp').onclick=()=>exportIds([...selected]);
+  drawMap(r);
+}
+function updSel(){const b=$('#selbar');b.style.display=selected.size?'flex':'none';$('#seln').textContent=selected.size+' selected'}
+async function exportIds(ids){const r=await fetch('/api/v2/export',{method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:JSON.stringify({ids})});const b=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='harbor-comps.csv';a.click()}
+function pinIcon(x,n){const c=x.record_kind==='lease'?'#15803d':x.record_kind==='listing'?'#6b2a7a':'#1d4f91';return L.divIcon({className:'',html:`<div class="pin" style="background:${c};color:#fff"><b>${n}</b></div>`,iconSize:[26,26],iconAnchor:[13,26]})}
+function drawMap(r){markers.forEach(m=>m.remove());markers=[];subjM&&subjM.remove();circle&&circle.remove();
+  const pts=[];if(r.location){subjM=L.marker([r.location.lat,r.location.lng],{icon:L.divIcon({className:'',html:'<div class="subjpin"></div>',iconSize:[18,18],iconAnchor:[9,9]})}).addTo(map);circle=L.circle([r.location.lat,r.location.lng],{radius:r.location.radius*1609,color:'#f5a623',weight:1.5,fillOpacity:.06}).addTo(map);pts.push([r.location.lat,r.location.lng])}
+  r.results.forEach((x,i)=>{if(x.latitude==null)return;const m=L.marker([x.latitude,x.longitude],{icon:pinIcon(x,i+1)}).addTo(map).bindTooltip(`<b>${esc(x.address||x.property_name||'')}</b><br>${KLBL[x.record_kind]} · ${fmt.date(x.txn_date)}`);m._id=x.id;m.on('click',()=>openProperty(x.property_id||x.pid));markers.push(m);pts.push([x.latitude,x.longitude])});
+  if(pts.length)map.flyToBounds(pts,{padding:[40,40],maxZoom:13,duration:.6})}
+function hl(id,on){const m=markers.find(m=>m._id===id);if(m)m.getElement()?.querySelector('.pin')?.style.setProperty('transform',on?'rotate(-45deg) scale(1.3)':'rotate(-45deg)')}
+async function explain(text,r){try{const e=await api('/api/v2/finder/explain',{method:'POST',body:JSON.stringify({query:text,parsed:r.parsed,rows:r.results.slice(0,12)})});
+  if(e.summary){const s=$('#summ');s.textContent=e.summary;s.style.display='block'}
+  Object.entries(e.notes||{}).forEach(([id,n])=>{const el=$('#why-'+id);if(el){el.textContent=n;el.style.display='block'}})}catch{}}
+
+// ---------- property drawer ----------
+const FEAT=[['building_sf','Building',v=>fmt.sf(v)],['land_acres','Land',v=>(+v).toFixed(2)+' ac'],['year_built','Year built',v=>v],['clear_height_ft','Clear height',v=>v+"'"],['dock_doors','Dock-high doors',v=>v],['drive_in_doors','Grade-level',v=>v],['loading','Loading',v=>LABEL[v]||v],['construction','Construction',v=>LABEL[v]||v],['building_class','Class',v=>v],['property_subtype','Product',v=>LABEL[v]||v],['office_pct','Office',v=>(+v).toFixed(0)+'%'],['sprinkler','Sprinklers',v=>v],['rail_served','Rail',v=>v?'Yes':'No'],['yard_acres','Yard',v=>(+v).toFixed(1)+' ac'],['tenancy','Tenancy',v=>v],['power','Power',v=>v],['cranes','Cranes',v=>v]];
+const SRC={broker_sheet:'broker file',costar:'CoStar',cad:'county appraisal',parcel:'parcel map',aerial:'satellite',web:'web listing',manual:'edited'};
+async function openProperty(id){if(!id)return;$('#scrim').classList.add('on');$('#drawer').classList.add('on');$('#dhead').innerHTML='<div class="skel" style="height:40px"></div>';$('#dbody').innerHTML='<div class="skel"></div><div class="skel"></div>';
+  const d=await api('/api/v2/properties/'+id);const p=d.property;const fb=p.features?.best||{},fc=p.features?.conflicts||{};
+  $('#dhead').innerHTML=`<div class="eyebrow">${esc([p.market,p.submarket].filter(Boolean).join(' · ')||'Property')}</div><h2 style="margin:5px 0 2px;font-size:20px">${esc(p.address||p.property_name||'Unknown')}</h2><div class="mini">${esc([p.property_name&&p.address?p.property_name:null,p.city,p.zip].filter(Boolean).join(' · '))}${p.owner?' · Owner: '+esc(p.owner):''}${p.geocode_quality?` · location: ${esc(p.geocode_quality)}`:''}</div>
+   <div style="display:flex;gap:8px;margin-top:10px"><button class="btn sm" id="enr">Re-source features</button><button class="btn sm" id="enrA">+ satellite read</button><a class="btn sm" target="_blank" href="https://www.google.com/maps/search/?api=1&query=${p.latitude},${p.longitude}">Google Maps ↗</a></div>`;
+  const feats=FEAT.map(([k,l,f])=>{const v=p[k];const b=fb[k];const c=fc[k];if(v==null&&!c)return '';return `<div class="feat ${c?'cf':''}"><div class="l">${l}</div><div class="v">${v==null?'—':esc(f(v))}</div><div class="src">${b?esc(SRC[b.source]||b.source):''}${c?` · ⚠ ${c.map(x=>esc(String(x.value))+' ('+esc(SRC[x.source]||x.source)+')').join(', ')}`:''}</div></div>`}).join('');
+  const comps=d.comps.filter(c=>c.status==='active');
+  const tl=comps.map(c=>`<div class="tli"><div style="display:flex;gap:8px;align-items:center"><span class="chip k-${c.record_kind}">${KLBL[c.record_kind]}</span><b>${fmt.date(c.txn_date)}</b><span class="mini">${esc(c.source_label||'')}${c.sources.length>1?` + ${c.sources.length-1} more source${c.sources.length>2?'s':''}`:''}</span></div>
+    <div class="kv" style="margin-top:5px">${c.record_kind==='lease'?`<span>Tenant <b>${esc(c.tenant||'—')}</b></span><span><b>${fmt.sf(c.leased_sf)}</b></span><span><b>${fmt.psf(c.rent_psf_yr)}</b>/SF/yr ${esc(c.lease_structure||'')}</span><span>${c.term_months?Math.round(c.term_months)+' mo':''}</span><span>${c.escalation_pct?fmt.pct(c.escalation_pct)+' bumps':''}</span><span>${c.free_rent_months?c.free_rent_months+' mo free':''}</span><span>${c.ti_psf!=null?'TI $'+c.ti_psf:''}</span>`:c.record_kind==='listing'?`<span>Asking <b>${fmt.psf(c.asking_rent_psf_yr)}</b></span><span>${fmt.sf(c.available_sf)}</span>`:`<span><b>${fmt.usd(c.sale_price)}</b></span><span><b>${fmt.psf(c.price_psf)}</b>/SF</span><span>${c.cap_rate_pct?fmt.pct(c.cap_rate_pct)+' cap':''}</span><span>${esc(c.buyer?'Buyer '+c.buyer:'')}</span><span>${esc(c.seller?'Seller '+c.seller:'')}</span><span>${esc(LABEL[c.sale_type]||'')}</span>`}</div>
+    ${c.notes?`<div class="mini" style="margin-top:4px">${esc(c.notes)}</div>`:''}${c.flags.filter(f=>f.severity!=='info').map(f=>`<div class="mini" style="color:${f.severity==='error'?'var(--bad)':'var(--warn)'}">⚠ ${esc(f.msg)}</div>`).join('')}</div>`).join('');
+  const obs=d.observations.map(o=>`<tr><td>${esc(o.field)}</td><td>${esc(typeof o.value==='object'?JSON.stringify(o.value):o.value)}</td><td>${esc(SRC[o.source]||o.source)}</td><td style="max-width:220px" title="${esc(o.source_ref||'')}">${esc(o.source_ref||'')}</td><td class="n">${(+o.confidence).toFixed(2)}</td></tr>`).join('');
+  $('#dbody').innerHTML=`<div class="sec eyebrow">Building</div><div class="fgrid">${feats||'<div class="mini">No features yet - click “Re-source features”.</div>'}</div>
+   <div class="sec eyebrow">Deals at this property (${comps.length})</div><div class="tl">${tl||'<div class="mini">None</div>'}</div>
+   <details class="sec"><summary class="eyebrow" style="cursor:pointer">Every source we have (${d.observations.length})</summary><div class="tablewrap" style="margin:8px 0 0"><table><thead><tr><th>Field</th><th>Value</th><th>Source</th><th>Reference</th><th>Conf.</th></tr></thead><tbody>${obs}</tbody></table></div></details>`;
+  $('#enr').onclick=async()=>{toast('Sourcing features…');await api('/api/v2/enrich',{method:'POST',body:JSON.stringify({ids:[id]})});openProperty(id)};
+  $('#enrA').onclick=async()=>{toast('Reading the satellite image…');await api('/api/v2/enrich',{method:'POST',body:JSON.stringify({ids:[id],aerial:true})});openProperty(id)};
+}
+function closeDrawer(){$('#scrim').classList.remove('on');$('#drawer').classList.remove('on')}
+$('#scrim').onclick=closeDrawer;$('#dx').onclick=closeDrawer;document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer()});
+
+// ---------- database ----------
+let dbKind='',dbmap,dbm=[],dbRows=[];
+$$('#dbkind button').forEach(b=>b.onclick=()=>{$$('#dbkind button').forEach(x=>x.classList.toggle('on',x===b));dbKind=b.dataset.k;loadDb()});
+let dbT;$('#dbq').oninput=()=>{clearTimeout(dbT);dbT=setTimeout(loadDb,250)};['#dbmarket','#dbsource','#dbsort'].forEach(s=>$(s).onchange=loadDb);
+$('#dbmapbtn').onclick=()=>{const b=$('#dbmapbox');b.style.display=b.style.display==='none'?'block':'none';if(!dbmap){dbmap=L.map('dbmap').setView([30.4,-97.2],6);baseLayers(dbmap)}setTimeout(()=>{dbmap.invalidateSize();drawDbMap()},60)};
+async function loadDb(){const p=new URLSearchParams({kind:dbKind,q:$('#dbq').value,market:$('#dbmarket').value,source:$('#dbsource').value,sort:$('#dbsort').value,limit:600});
+  const r=await api('/api/v2/comps?'+p);dbRows=r.rows;$('#dbn').textContent=`${r.total.toLocaleString()} comps${r.total>r.rows.length?' (showing '+r.rows.length+')':''}`;
+  const cols=[['Type',x=>`<span class="chip k-${x.record_kind}">${KLBL[x.record_kind]}</span>`],['Date',x=>fmt.date(x.txn_date)],['Address',x=>esc(x.address||x.property_name||'')],['City',x=>esc(x.city||'')],['Submarket',x=>esc(x.submarket||'')],['Size',x=>fmt.sf(x.record_kind==='lease'?x.leased_sf||x.building_sf:x.record_kind==='listing'?x.available_sf:x.building_sf),1],['$/SF',x=>x.record_kind==='sale'||x.record_kind==='land_sale'?fmt.psf(x.price_psf):'',1],['Price',x=>x.sale_price?fmt.usd(x.sale_price):'',1],['Cap',x=>x.cap_rate_pct?fmt.pct(x.cap_rate_pct):'',1],['Rent/yr',x=>x.rent_psf_yr?fmt.psf(x.rent_psf_yr)+' '+(x.lease_structure||''):x.asking_rent_psf_yr?'ask '+fmt.psf(x.asking_rent_psf_yr):'',1],['Term',x=>x.term_months?Math.round(x.term_months)+' mo':'',1],['Tenant / Buyer',x=>esc(x.tenant||x.buyer||'')],['Built',x=>x.year_built||'',1],['Clear',x=>x.clear_height_ft?x.clear_height_ft+"'":'',1],['Product',x=>esc(LABEL[x.property_subtype]||'')],['Source',x=>esc(x.source_kind==='costar'?'CoStar':x.source_label||x.source_kind)],['',x=>x.severity==='error'?'<span class="chip err">check</span>':x.severity==='warn'?'<span class="chip warn">note</span>':'']];
+  $('#dbt').innerHTML=`<table><thead><tr>${cols.map(c=>`<th>${c[0]}</th>`).join('')}</tr></thead><tbody>${r.rows.map((x,i)=>`<tr data-i="${i}">${cols.map(c=>`<td class="${c[2]?'n':''}">${c[1](x)??''}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  $$('#dbt tbody tr').forEach(tr=>tr.onclick=()=>openProperty(dbRows[+tr.dataset.i].property_id));drawDbMap()}
+function drawDbMap(){if(!dbmap||$('#dbmapbox').style.display==='none')return;dbm.forEach(m=>m.remove());dbm=[];const pts=[];dbRows.forEach(x=>{if(x.latitude==null)return;const m=L.circleMarker([x.latitude,x.longitude],{radius:5,weight:1,color:'#fff',fillColor:x.record_kind==='lease'?'#15803d':x.record_kind==='listing'?'#6b2a7a':'#1d4f91',fillOpacity:.85}).addTo(dbmap).bindTooltip(esc(x.address||''));m.on('click',()=>openProperty(x.property_id));dbm.push(m);pts.push([x.latitude,x.longitude])});if(pts.length)dbmap.fitBounds(pts,{padding:[30,30],maxZoom:12})}
+
+// ---------- upload ----------
+const drop=$('#drop'),fi=$('#file');drop.onclick=()=>fi.click();
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('over')};drop.ondragleave=()=>drop.classList.remove('over');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');if(e.dataTransfer.files[0])upload(e.dataTransfer.files[0])};
+fi.onchange=()=>fi.files[0]&&upload(fi.files[0]);
+function step(n,state){const s=$('#s'+n);s.classList.remove('on','done');if(state)s.classList.add(state);if(state==='done')s.querySelector('.dot').textContent='✓';else s.querySelector('.dot').textContent=''}
+function bar(p){$('#pbar').style.width=(p*100)+'%'}
+let JOB=null;
+async function upload(file){
+  $('#upflow').style.display='block';$('#review').innerHTML='';$('#survey').style.display='none';[1,2,3,4,5].forEach(i=>step(i,null));bar(0.03);step(1,'on');
+  try{
+    const fd=new FormData();fd.append('file',file);
+    const up=await fetch('/api/v2/upload',{method:'POST',body:fd,credentials:'include'}).then(r=>r.json());if(up.error)throw new Error(up.error);
+    JOB=up.job_id;step(1,'done');bar(0.1);
+    if(up.prior)toast(`Heads up: this exact file was uploaded on ${up.prior.uploaded_at?.slice(0,10)} by ${up.prior.uploaded_by||'someone'} - duplicates will be caught.`);
+    step(2,'on');
+    let sv;
+    if(up.scanned){sv={survey:{document_summary:'Scanned PDF - reading page images',tables:[]},chunks:0}}
+    else sv=await api(`/api/v2/jobs/${JOB}/survey`,{method:'POST'});
+    step(2,'done');bar(0.22);
+    const s=sv.survey;$('#survey').style.display='block';
+    $('#survey').innerHTML=`<div class="eyebrow">What the model found</div><div style="margin:6px 0 8px;font-size:15px;font-weight:550">${esc(s.document_summary||'')}</div><div style="display:flex;gap:6px;flex-wrap:wrap">${(s.tables||[]).map(t=>`<span class="chip ${t.duplicate_of?'':t.record_kind==='none'?'':'k-'+t.record_kind}">${esc(t.sheet)}${t.title?' · '+esc(t.title):''} — ${t.duplicate_of?'duplicate of '+esc(t.duplicate_of):t.record_kind}${t.first_row?` (rows ${t.first_row}-${t.last_row})`:''}</span>`).join('')}</div>${(s.warnings||[]).length?`<div class="mini" style="margin-top:8px;color:var(--warn)">${s.warnings.map(esc).join('<br>')}</div>`:''}`;
+    step(3,'on');let done=0;const N=sv.chunks;$('#s3n').textContent=N?`0/${N}`:'';
+    if(up.scanned&&file.name.toLowerCase().endsWith('.pdf'))await visionPdf(file);
+    const idx=[...Array(N).keys()];let k=0;
+    await Promise.all(Array.from({length:Math.min(4,N)},async()=>{while(k<idx.length){const n=idx[k++];let tries=0;while(true){try{await api(`/api/v2/jobs/${JOB}/chunk/${n}`,{method:'POST'});break}catch(e){if(++tries>2)throw e}}done++;$('#s3n').textContent=`${done}/${N}`;bar(0.22+0.55*done/N)}}));
+    step(3,'done');step(4,'on');bar(0.82);
+    await api(`/api/v2/jobs/${JOB}/resolve`,{method:'POST'});step(4,'done');bar(0.95);step(5,'on');
+    await loadJob();bar(1);
+  }catch(e){toast('Upload failed: '+e.message);$('#review').innerHTML=`<div class="card" style="padding:14px;color:var(--bad)">${esc(e.message)}</div>`}
+}
+async function visionPdf(file){
+  if(!window.pdfjsLib){await new Promise((ok,no)=>{const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';s.onload=ok;s.onerror=no;document.head.appendChild(s)});pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'}
+  const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;const n=Math.min(pdf.numPages,20);
+  for(let i=1;i<=n;i++){const pg=await pdf.getPage(i);const vp=pg.getViewport({scale:1.6});const c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;await pg.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
+    $('#s3n').textContent=`page ${i}/${n}`;await api(`/api/v2/jobs/${JOB}/vision`,{method:'POST',body:JSON.stringify({page:i,image:c.toDataURL('image/jpeg',0.82),filename:file.name})});bar(0.22+0.55*i/n)}
+}
+const VERD={new:['New comps','ok'],same_property:['New deal at a building we already have','ok'],duplicate:['Already in the database (will merge any new fields)','amb'],conflict:['Possible duplicate with different numbers - check','warn'],batch_duplicate:['Repeated inside this file','amb'],subject:['Subject property rows (not saved)','']};
+async function loadJob(){
+  const j=await api('/api/v2/jobs/'+JOB);const recs=j.records;
+  const errs=recs.filter(r=>r.decision==='review');const groups={};recs.forEach(r=>{const v=r.match?.verdict||'new';(groups[v]=groups[v]||[]).push(r)});
+  const order=['conflict','new','same_property','duplicate','batch_duplicate','subject'];
+  const rowHtml=r=>{const x=r.record,m=r.match||{};const flags=(x._flags||[]).filter(f=>f.severity!=='info');
+    const kv=(x.record_kind==='lease'?[['Tenant',x.tenant],['SF',fmt.sf(x.leased_sf)],['Rent',x.rent_psf_yr!=null?fmt.psf(x.rent_psf_yr)+'/yr '+(x.lease_structure||''):null],['Start',fmt.date(x.lease_start)],['Term',x.term_months&&Math.round(x.term_months)+' mo'],['Bumps',x.escalation_pct&&fmt.pct(x.escalation_pct)],['Free',x.free_rent_months&&x.free_rent_months+' mo'],['TI',x.ti_psf!=null&&'$'+x.ti_psf]]:x.record_kind==='listing'?[['Asking',x.asking_rent_psf_yr&&fmt.psf(x.asking_rent_psf_yr)+'/yr'],['Avail',fmt.sf(x.available_sf)]]:[['Price',x.sale_price&&fmt.usd(x.sale_price)],['$/SF',x.price_psf&&fmt.psf(x.price_psf)],['Cap',x.cap_rate_pct&&fmt.pct(x.cap_rate_pct)],['Date',fmt.date(x.sale_date)],['Buyer',x.buyer],['Seller',x.seller]]).concat([['Bldg',x.building_sf&&fmt.sf(x.building_sf)],['Built',x.year_built],['Clear',x.clear_height_ft&&x.clear_height_ft+"'"],['Land',x.land_acres&&x.land_acres+' ac'],['Loading',LABEL[x.loading]],['Type',LABEL[x.property_subtype]]]).filter(([,v])=>v&&v!=='—');
+    const match=m.deal?`<div class="mini">Matches comp #${m.deal.comp_id} (${esc(m.deal.comp.source_label||'')}) · ${esc((m.deal.reasons||[]).join(', '))}${m.deal.conflicts?.length?` · <b style="color:var(--warn)">${esc(m.deal.conflicts.join('; '))}</b>`:''}</div>`:m.property&&!m.property.weak?`<div class="mini">Same building as #${m.property.id} ${esc(m.property.address||'')} (${esc((m.property.reasons||[]).join(', '))})</div>`:m.batch?`<div class="mini">Repeats row ${esc(String(m.batch.of))} of this file</div>`:'';
+    return `<div class="rrow" data-idx="${r.idx}"><span class="chip k-${x.record_kind}" style="padding:2px 6px;font-size:10px;writing-mode:vertical-rl">${KLBL[x.record_kind]||x.record_kind}</span>
+     <div><b>${esc(x.address||x.property_name||'(no address)')}</b><div class="mini">${esc([x.city,x.zip,x.submarket].filter(Boolean).join(' · '))} · ${esc(x.source_sheet||'')} row ${esc((x.source_rows||[]).join(','))}${x.geocode_quality?' · 📍'+esc(x.geocode_quality):''}</div>${match}<span class="ed" data-e="${r.idx}">Edit values</span></div>
+     <div><div class="kv">${kv.map(([k,v])=>`<span>${k} <b>${esc(String(v))}</b></span>`).join('')}</div>${flags.map(f=>`<div class="fl ${f.severity==='error'?'e':''}">${f.severity==='error'?'⛔':'⚠'} ${esc(f.msg)}</div>`).join('')}</div>
+     <div><select data-d="${r.idx}">${['add','merge','review','skip'].map(o=>`<option value="${o}" ${r.decision===o?'selected':''} ${o==='merge'&&!m.deal?'disabled':''}>${{add:'Save as new',merge:'Merge into existing',review:'Hold for review',skip:'Skip'}[o]}</option>`).join('')}${r.decision==='committed'?'<option selected>Saved ✓</option>':''}</select></div></div>`};
+  const counts=Object.fromEntries(order.map(o=>[o,(groups[o]||[]).length]));
+  $('#review').innerHTML=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px"><div><div class="eyebrow">Review</div><div style="font-size:15px;font-weight:600;margin-top:3px">${recs.length} records · ${counts.new+counts.same_property} new · ${counts.duplicate} duplicates · ${counts.conflict} conflicts · ${errs.length} held</div></div><span style="flex:1"></span><button class="btn pri" id="commit">Save to database</button></div>
+   ${order.filter(o=>groups[o]).map(o=>`<div class="rgroup"><h4><span class="chip ${VERD[o][1]}">${groups[o].length}</span>${VERD[o][0]}</h4>${groups[o].map(rowHtml).join('')}</div>`).join('')}`;
+  $$('#review select[data-d]').forEach(s=>s.onchange=()=>api(`/api/v2/jobs/${JOB}/records/${s.dataset.d}`,{method:'PATCH',body:JSON.stringify({decision:s.value})}));
+  $$('#review .ed').forEach(e=>e.onclick=()=>editRec(recs.find(r=>r.idx==e.dataset.e)));
+  $('#commit').onclick=async()=>{$('#commit').disabled=true;const c=await api(`/api/v2/jobs/${JOB}/commit`,{method:'POST',body:'{}'});step(5,'done');
+    toast(`Saved: ${c.added} new, ${c.merged} merged${c.review_left?`, ${c.review_left} held for review`:''}`);loadJob();refreshCount();
+    if(c.properties?.length){for(let i=0;i<c.properties.length;i+=8){await api('/api/v2/enrich',{method:'POST',body:JSON.stringify({ids:c.properties.slice(i,i+8)})}).catch(()=>{})}toast('Building features sourced for '+c.properties.length+' properties')}};
+}
+function editRec(r){const x=r.record;const fields=x.record_kind==='lease'?['address','city','tenant','leased_sf','rent_psf_yr','lease_structure','lease_start','term_months','escalation_pct','free_rent_months','ti_psf','building_sf','year_built','clear_height_ft']:x.record_kind==='listing'?['address','city','available_sf','asking_rent_psf_yr','building_sf','year_built','clear_height_ft']:['address','city','sale_price','price_psf','cap_rate_pct','sale_date','buyer','seller','sale_type','building_sf','land_acres','year_built','clear_height_ft'];
+  const el=document.querySelector(`.rrow[data-idx="${r.idx}"] .kv`).parentElement;
+  el.innerHTML=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">${fields.map(f=>`<label class="mini">${f}<input data-f="${f}" value="${esc(x[f]??'')}" style="width:100%;border:1px solid var(--line2);border-radius:6px;padding:4px 6px"/></label>`).join('')}</div><button class="btn sm pri" style="margin-top:6px">Save edit</button>`;
+  el.querySelector('button').onclick=async()=>{const rec={};el.querySelectorAll('input').forEach(i=>{const v=i.value.trim();rec[i.dataset.f]=v===''?null:isNaN(v)||/date|address|city|tenant|buyer|seller|structure|type/.test(i.dataset.f)?v:+v});await api(`/api/v2/jobs/${JOB}/records/${r.idx}`,{method:'PATCH',body:JSON.stringify({record:rec,decision:'add'})});toast('Edited');loadJob()}}
+async function loadRecent(){try{const f=await api('/api/v2/files');$('#recent').innerHTML=`<div class="eyebrow" style="margin-bottom:8px">Recent files</div><div class="tablewrap" style="margin:0"><table><thead><tr><th>File</th><th>Summary</th><th>Comps</th><th>Status</th><th>By</th><th>When</th></tr></thead><tbody>${f.files.map(x=>`<tr data-j="${x.job_id||''}"><td>${esc(x.filename)}</td><td style="max-width:420px" title="${esc(x.summary||'')}">${esc(x.summary||'')}</td><td class="n">${x.comps}</td><td>${esc(x.status)}</td><td>${esc((x.uploaded_by||'').split('@')[0])}</td><td>${esc((x.uploaded_at||'').slice(0,10))}</td></tr>`).join('')}</tbody></table></div>`;
+  $$('#recent tr[data-j]').forEach(tr=>tr.onclick=()=>{if(!tr.dataset.j)return;JOB=tr.dataset.j;$('#upflow').style.display='block';[1,2,3,4].forEach(i=>step(i,'done'));step(5,'on');bar(1);loadJob()})}catch{}}
+
+// ---------- quality ----------
+async function loadQuality(){const [qq,st]=await Promise.all([api('/api/v2/quality'),api('/api/v2/stats')]);const fc=st.feature_coverage;
+  const pct=k=>fc.n?Math.round(100*fc[k]/fc.n)+'%':'—';
+  $('#qbody').innerHTML=`<div class="qgrid">${[['Properties',fc.n.toLocaleString(),'buildings in the database'],['Clear height known',pct('clear'),'of buildings'],['Year built known',pct('yb'),'of buildings'],['Land known',pct('land'),'of buildings']].map(([l,v,s])=>`<div class="stat"><div class="eyebrow">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('')}</div>
+   <div class="qgrid" style="margin-top:0">${[['Loading config',pct('loading')],['Construction',pct('construction')],['Product type',pct('subtype')],['Imprecise locations',qq.low_precision_locations]].map(([l,v])=>`<div class="stat"><div class="eyebrow">${l}</div><div class="v">${v}</div></div>`).join('')}</div>
+   <div style="margin:6px 28px"><div class="eyebrow" style="margin-bottom:8px">Comps by market</div><div class="tablewrap" style="margin:0"><table><thead><tr><th>Market</th><th>Type</th><th>Comps</th><th>Avg $/SF</th><th>Avg cap</th><th>Avg rent</th><th>Latest</th></tr></thead><tbody>${st.by_market.map(r=>`<tr><td>${esc(r.market||'—')}</td><td>${KLBL[r.record_kind]||r.record_kind}</td><td class="n">${r.n}</td><td class="n">${r.avg_psf?fmt.psf(r.avg_psf):''}</td><td class="n">${r.avg_cap?fmt.pct(r.avg_cap):''}</td><td class="n">${r.avg_rent?fmt.psf(r.avg_rent):''}</td><td>${fmt.date(r.latest)}</td></tr>`).join('')}</tbody></table></div></div>
+   <div style="margin:22px 28px"><div class="eyebrow" style="margin-bottom:8px">Comps with out-of-bounds numbers (${qq.errors.length})</div>${qq.errors.slice(0,150).map(e=>`<div class="rrow" style="grid-template-columns:1fr 2fr" data-p="${e.property_id}"><div><b>${esc(e.address||'')}</b><div class="mini">${esc(e.city||'')} · ${KLBL[e.record_kind]} · ${esc(e.source_label||'')}</div></div><div>${e.flags.filter(f=>f.severity!=='info').map(f=>`<div class="fl ${f.severity==='error'?'e':''}">${esc(f.msg)}</div>`).join('')}</div></div>`).join('')}</div>
+   <div style="margin:22px 28px"><div class="eyebrow" style="margin-bottom:8px">Buildings where sources disagree (${qq.feature_conflicts.length})</div>${qq.feature_conflicts.slice(0,150).map(c=>`<div class="rrow" style="grid-template-columns:1fr 2fr" data-p="${c.id}"><div><b>${esc(c.address||'')}</b><div class="mini">${esc(c.city||'')}</div></div><div class="kv">${Object.entries(c.conflicts).map(([f,v])=>`<span>${esc(f.replace(/_/g,' '))}: using <b>${esc(String(c.best?.[f]?.value??'?'))}</b> (${esc(SRC[c.best?.[f]?.source]||'')}) vs ${v.map(x=>`<b>${esc(String(x.value))}</b> (${esc(SRC[x.source]||x.source)})`).join(', ')}</span>`).join('')}</div></div>`).join('')}</div>`;
+  $$('#qbody [data-p]').forEach(r=>r.onclick=()=>openProperty(+r.dataset.p))}
+
+async function refreshCount(){try{const h=await api('/api/v2/health');$('#dbcount').textContent=`${h.comps.toLocaleString()} comps · ${h.properties.toLocaleString()} buildings`}catch{}}
+refreshCount();api('/api/v2/me').then(m=>$('#who').textContent=m.user&&m.user!=='unknown'?m.user.split('@')[0]:'').catch(()=>{});
+const h=location.hash.slice(1);if(TITLES[h])show(h);
+</script>
+</body>
+</html>
