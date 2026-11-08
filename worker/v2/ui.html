@@ -708,7 +708,7 @@ async function loadQuality(){$('#qbody').innerHTML='<div class="skel"></div><div
 
 async function refreshCount(){try{const h=await api('/api/v2/health');$('#dbcount').textContent=`${h.comps.toLocaleString()} comps · ${h.properties.toLocaleString()} buildings`}catch{}}
 refreshCount();api('/api/v2/me').then(m=>$('#who').textContent=m.user&&m.user!=='unknown'?m.user:'').catch(()=>{});
-function route(){const hq=location.hash.match(/^#deals\?(.*)$/);if(hq){const ps=new URLSearchParams(hq[1]);history.replaceState(null,'','#deals');show('deals');setTimeout(()=>newDealModal({address:ps.get('address')||'',text:ps.get('text')||'',lanes:ps.get('lanes')?ps.get('lanes').split(','):undefined}),400);return}const [v,sub]=location.hash.slice(1).split('?')[0].split('/');if(v==='deal')return show('deals',sub);if(v==='player')return show('lib',sub);show(['deals','find','inbox','lib','db','up','q'].includes(v)?v:'deals',sub)}
+function route(){const hq=location.hash.match(/^#deals\?(.*)$/);if(hq){const ps=new URLSearchParams(hq[1]);history.replaceState(null,'','#deals');show('deals');setTimeout(()=>newDealModal({address:ps.get('address')||'',text:ps.get('text')||'',lanes:ps.get('lanes')?ps.get('lanes').split(','):undefined}),400);return}const [v,sub]=location.hash.slice(1).split('?')[0].split('/');if(v==='deal')return show('deals',sub);if(v==='player')return show('lib',sub);if(v==='property'&&sub){show('lib');setTimeout(()=>openProperty(+sub),450);return}show(['deals','find','inbox','lib','db','up','q'].includes(v)?v:'deals',sub)}
 addEventListener('hashchange',route);
 </script>
 <!--EXTRA_JS-->
