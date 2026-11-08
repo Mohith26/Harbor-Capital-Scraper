@@ -189,7 +189,7 @@
       const r = a && b ? `${fm(v.min)}\u2013${fm(v.max)}${u}` : a ? `\u2265 ${fm(v.min)}${u}` : `\u2264 ${fm(v.max)}${u}`;
       return `${f.short || f.label} ${r}${v.unk ? ' (+ unknown)' : ''}`;
     }
-    if (f.type === 'multi') return `${f.short || f.label}: ${v.length > 2 ? v.slice(0, 2).join(', ') + ' +' + (v.length - 2) : v.join(', ')}`;
+    if (f.type === 'multi') { const os = (typeof f.options === 'function' ? f.options() : f.options) || []; const lab = (x) => { const o = os.find((y) => String(y.v ?? y) === String(x)); return o?.l ?? x; }; const w = v.map(lab); return `${f.short || f.label}: ${w.length > 2 ? w.slice(0, 2).join(', ') + ' +' + (w.length - 2) : w.join(', ')}`; }
     if (f.type === 'tri') return `${f.short || f.label}: ${v === 'yes' ? 'Yes' : 'No'}`;
     if (f.type === 'daterange') return `${f.short || f.label} ${v.from || '\u2026'} \u2192 ${v.to || '\u2026'}`;
     if (f.type === 'select') { const o = (typeof f.options === 'function' ? f.options() : f.options || []).find((x) => String(x.v ?? x) === String(v)); return `${f.short || f.label}: ${o?.l ?? o?.v ?? v}`; }
@@ -259,7 +259,7 @@
     function render() {
       const active = Object.keys(clean(c.schema, value)).length;
       const savedViews = c.key ? store.get('views.' + c.key, []) : [];
-      mount.innerHTML = `<div class="hcf-head"><span class="t">${esc(c.title)}</span>${active ? `<span class="hc-score hi" style="height:18px;min-width:20px;font-size:11px">${active}</span>` : ''}<span class="n">${count == null ? '' : fmtN(count) + ' match'}</span>${c.onClose ? '<button class="btn ghost hcf-x" type="button" title="Close" style="height:24px;padding:0 6px">\u2715</button>' : ''}</div>
+      mount.innerHTML = `<div class="hcf-head"><span class="t">${esc(c.title)}</span><span class="hc-score hi hcf-act" style="height:18px;min-width:20px;font-size:11px;${active ? '' : 'display:none'}">${active}</span><span class="n">${count == null ? '' : fmtN(count) + ' match'}</span>${c.onClose ? '<button class="btn ghost hcf-x" type="button" title="Close" style="height:24px;padding:0 6px">\u2715</button>' : ''}</div>
         ${c.key ? `<div class="hcf-find" style="display:flex;gap:6px"><select class="hcf-views" style="flex:1;height:28px;border:1px solid var(--hc-rule);font-size:12px"><option value="">Saved filter sets\u2026</option>${savedViews.map((s, i) => `<option value="${i}">${esc(s.name)}</option>`).join('')}</select><button class="btn hcf-save" type="button" style="height:28px">Save</button>${savedViews.length ? '<button class="btn hcf-delv" type="button" style="height:28px" title="Delete selected">Delete</button>' : ''}</div>` : ''}
         <div class="hcf-find"><input type="search" class="hcf-q" placeholder="Find a filter (e.g. clear height, rail, owner)\u2026"></div>
         <div class="hcf-body">${c.schema.map((s, i) => { const n = secCount(s); const open = openState[s.sec] ?? (s.open ?? (!s.adv || n > 0)); return `<details class="hcf-sec${s.adv ? ' adv' : ''}" data-sec="${esc(s.sec)}"${open ? ' open' : ''}><summary>${s.adv ? 'Advanced \u00b7 ' : ''}${esc(s.sec)}${n ? `<span class="c">${n}</span>` : ''}</summary><div class="hcf-fields">${s.fields.map(fieldHtml).join('')}</div></details>`; }).join('')}</div>
@@ -267,8 +267,17 @@
       wire();
     }
     let t = 0;
+    function badges() {
+      const a = Object.keys(clean(c.schema, value)).length; const b = mount.querySelector('.hcf-act');
+      if (b) { b.textContent = a; b.style.display = a ? '' : 'none'; }
+      mount.querySelectorAll('details.hcf-sec').forEach((d) => {
+        const s = c.schema.find((x) => x.sec === d.dataset.sec); if (!s) return; const n = secCount(s);
+        let el = d.querySelector('summary .c'); if (n && !el) { el = document.createElement('span'); el.className = 'c'; d.querySelector('summary').appendChild(el); }
+        if (el) { if (n) el.textContent = n; else el.remove(); }
+      });
+    }
     function changed(rerender) {
-      if (rerender) render();
+      if (rerender) render(); else badges();
       if (c.live) { clearTimeout(t); t = setTimeout(() => c.onChange(clean(c.schema, value)), 250); }
     }
     function findField(id) { for (const s of c.schema) for (const f of s.fields) if (f.id === id) return f; return null; }
