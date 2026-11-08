@@ -12,7 +12,7 @@ async function openPlayerPage(id){if(!$('#pq'))loadPlayers();if($('#v-lib').clas
   const med=a=>{const v=a.filter(x=>x!=null).sort((x,y)=>x-y);return v.length?v[v.length>>1]:null};
   $('#pmain').innerHTML=`<div style="display:flex;gap:10px;align-items:flex-start"><div style="flex:1"><div class="muted">${esc(d.roles.map(([r,n])=>`${n} as ${r}`).join(' · '))}</div><h2 style="margin:2px 0 6px;font-size:20px">${esc(p.name)}</h2></div><button class="btn sm" id="pmerge">Merge into…</button></div>
   <div class="tiles"><div class="tile"><div class="l">Deals</div><div class="v">${d.comps.length}</div></div><div class="tile"><div class="l">Last active</div><div class="v" style="font-size:16px">${fmt.date(p.last_date)}</div></div><div class="tile"><div class="l">Median $/SF (sales)</div><div class="v">${sales.length?fmt.psf(med(sales.map(c=>c.price_psf))):'—'}</div></div><div class="tile"><div class="l">Median rent (leases)</div><div class="v">${leases.length?fmt.psf(med(leases.map(c=>c.rent_psf_yr))):'—'}</div></div></div>
-  <div class="sect">Where and what</div><div class="tagrow" style="margin:0">${d.markets.map(([m,n])=>`<span class="tg ro">${esc(m)} · ${n}</span>`).join('')}${d.submarkets.map(([m,n])=>`<span class="tg ro">${esc(m)} · ${n}</span>`).join('')}${d.tags.slice(0,8).map(([t,n])=>`<span class="tg ro" style="background:var(--peach-soft)">${esc(TAGL[t]||t)} · ${n}</span>`).join('')}</div>
+  <div class="sect">Where and what</div><div class="tagrow" style="margin:0">${d.markets.map(([m,n])=>`<span class="tg ro">${esc(m)} · ${n}</span>`).join('')}${d.submarkets.map(([m,n])=>`<span class="tg ro">${esc(m)} · ${n}</span>`).join('')}${d.tags.slice(0,8).map(([t,n])=>`<span class="tg ro" style="background:var(--accent-soft)">${esc(TAGL[t]||t)} · ${n}</span>`).join('')}</div>
   ${d.aliases.length?`<div class="faint" style="margin-top:6px;font-size:12px">Also recorded as: ${d.aliases.map(esc).join(', ')}</div>`:''}
   <div class="sect">Every deal</div><div class="tablewrap card" style="overflow:auto">${tableHtml(d.comps.map(c=>({...c,_role:c.role})),false)}</div>`;
   $$('#pmain tbody tr[data-id]').forEach(tr=>tr.onclick=()=>{const c=d.comps.find(x=>x.id==tr.dataset.id);openProperty(c.property_id,c)});
@@ -67,7 +67,7 @@ function colChooser(){const v=visibleCols()||BASECOLS.map(c=>c[0]);openModal(`<h
 // ---------- building drawer extras: comp edit + history, players, add to deal ----------
 const _renderDrawer=renderDrawer;
 renderDrawer=function(edit){_renderDrawer(edit);const d=CUR,p=d.property;const b=$('#dfind');if(b)b.textContent='Comp this building';
- const tags=String(p.product_tags||'').split('|').filter(Boolean);if(tags.length)$('#dh .acts').insertAdjacentHTML('beforebegin',`<div class="tagrow" style="margin-top:6px">${tags.map(t=>`<span class="tg ro" style="background:var(--peach-soft)">${esc(TAGL[t]||t)}</span>`).join('')}</div>`);
+ const tags=String(p.product_tags||'').split('|').filter(Boolean);if(tags.length)$('#dh .acts').insertAdjacentHTML('beforebegin',`<div class="tagrow" style="margin-top:6px">${tags.map(t=>`<span class="tg ro" style="background:var(--accent-soft)">${esc(TAGL[t]||t)}</span>`).join('')}</div>`);
  const comps=d.comps.filter(c=>c.status==='active');
  $$('#dbody .deal').forEach((el,i)=>{const c=comps[i];if(!c)return;const h=el.querySelector('.h');
   h.insertAdjacentHTML('beforeend',`<button class="btn sm" data-ed="${c.id}">Edit</button><button class="btn sm" data-todeal="${c.id}">+ Deal</button>`);
@@ -104,7 +104,7 @@ let POLY=[],DRAWING=false,polyL=null,polyPts=[];
 function toggleDraw(){DRAWING=!DRAWING;$('#fdraw').textContent=DRAWING?'Finish area':'Draw area';$('#fsplit').classList.toggle('drawing',DRAWING);
  if(DRAWING){POLY=[];polyPts=[];drawPoly();toast('Click points on the map, then press "Finish area"');if(isMobile()&&!$('#fsplit').classList.contains('showmap'))$('#fmapbtn').click()}else{POLY=polyPts.slice();drawPoly();if(POLY.length>2&&LAST)renderFind()}}
 fmap.off('click');fmap.on('click',e=>{if(DRAWING){polyPts.push([e.latlng.lat,e.latlng.lng]);POLY=polyPts.slice();drawPoly();return}pin={lat:e.latlng.lat,lng:e.latlng.lng,radius_mi:Number($('#f-rad').value)||3,label:'map pin'};toast('Searching around the pin…');run()});
-function drawPoly(){polyL&&polyL.remove();polyL=null;if(POLY.length>1)polyL=L.polygon(POLY,{color:'#7d1d1d',weight:2,fillOpacity:.06,dashArray:DRAWING?'4 4':null}).addTo(fmap)}
+function drawPoly(){polyL&&polyL.remove();polyL=null;if(POLY.length>1)polyL=L.polygon(POLY,{color:'#ffb03f',weight:2,fillOpacity:.06,dashArray:DRAWING?'4 4':null}).addTo(fmap)}
 function inPoly(lat,lng){let ins=false;for(let i=0,j=POLY.length-1;i<POLY.length;j=i++){const [yi,xi]=POLY[i],[yj,xj]=POLY[j];if(yi>lat!==yj>lat&&lng<(xj-xi)*(lat-yi)/(yj-yi)+xi)ins=!ins}return ins}
 const _sorted=sorted;sorted=function(){const a=_sorted();return POLY.length>2&&!DRAWING?a.filter(x=>x.latitude!=null&&inPoly(x.latitude,x.longitude)):a};
 const _renderReading=renderReading;renderReading=function(r){_renderReading(r);if(POLY.length>2)$('#reading').insertAdjacentHTML('beforeend',`<span class="chip x" id="polyx">Inside drawn area <b>×</b></span>`);const x=$('#polyx');if(x)x.onclick=()=>{POLY=[];drawPoly();x.remove();renderFind()}};
