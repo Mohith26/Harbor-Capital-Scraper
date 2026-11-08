@@ -1,3 +1,4 @@
+import { matchRow } from "./filters.js";
 // Library: players, saved searches / views, alerts, edit history and the
 // data-health fix queues.
 
@@ -146,6 +147,7 @@ export async function checkSaved(env, db, { max = 3 } = {}) {
       const llm = (() => { try { return makeLLM(env, { provider: "deepseek", noFallback: true }); } catch { return null; } })();
       const res = await findComps(env, db, llm, { query: f.parsed ? "" : s.query || "", parsed: f.parsed || null, location: s.location_json ? JSON.parse(s.location_json) : null, filters: f.filters || {}, limit: 60, skipSubject: true });
       let rows = res.results.filter((r) => !r.relaxed && r.id > (s.last_seen_comp_id || 0));
+      if (f.manual && Object.keys(f.manual).length) rows = rows.filter((r) => matchRow(r, f.manual));
       const poly = s.polygon_json ? JSON.parse(s.polygon_json) : null;
       if (poly && poly.length > 2) rows = rows.filter((r) => r.latitude != null && inPoly([r.latitude, r.longitude], poly));
       ids = rows.map((r) => r.id);

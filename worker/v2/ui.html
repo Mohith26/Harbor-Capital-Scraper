@@ -9,11 +9,11 @@
 <meta name="theme-color" content="#191919" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
 <style>
 :root{--peach:#ffbd60;--peach-soft:#fff5e6;--bg:#fafaf9;--panel:#fff;--line:#e3e3df;--line2:#ececea;--ink:#191919;--ink2:#3c3f44;--muted:#6e7178;--faint:#9a9da3;--accent:#ffbd60;--accent-ink:#191919;--accent-soft:#fff5e6;--head:#191919;--accent-hover:#ffb03f;--accent-line:#f3d39f;--accent-text:#191919;--hc-black:#191919;--hc-orange:#ffbd60;--hc-orange-deep:#ffb03f;--ok:#1d7a4b;--ok-bg:#e9f5ee;--warn:#9a6200;--warn-bg:#fbf3e2;--bad:#b42318;--bad-bg:#fdecea;--unk:#8a8d93;--unk-bg:#f1f1ef;--blue:#1f4e8c;--blue-bg:#eaf0f8;--purple:#5b2a86;--purple-bg:#f2ecf8;--r:6px;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;--hh:48px}
 *{box-sizing:border-box}html,body{height:100%}
-body{margin:0;font:13px/1.45 Inter,-apple-system,system-ui,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased}
+body{margin:0;font:13px/1.45 'IBM Plex Sans',-apple-system,system-ui,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased}
 button,input,select,textarea{font:inherit;color:inherit}
 a{color:inherit}
 /* header */
@@ -318,6 +318,8 @@ table.t tbody tr{cursor:pointer}table.t tbody tr:hover{background:#fafaf8}
   .adj{grid-template-columns:repeat(3,1fr)}
 }
 </style>
+<!--HC_STYLE-->
+<link rel="stylesheet" href="/hc-system.css?v=1" />
 </head>
 <body>
 <header class="top">
@@ -440,6 +442,8 @@ table.t tbody tr{cursor:pointer}table.t tbody tr:hover{background:#fafaf8}
 <div class="modal" id="modal"><div class="mbox" id="mbox"></div></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/hc-ui.js?v=1"></script>
+<script src="/comp-filters.js?v=1"></script>
 <script>
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 async function api(p,o={}){const r=await fetch(p,{credentials:'include',...o,headers:{'content-type':'application/json',...(o.headers||{})}});const t=await r.text();let j;try{j=JSON.parse(t)}catch{throw new Error(r.status===302||/<html/i.test(t)?'Session expired - reload the page':r.status+' '+t.slice(0,160))}if(!r.ok)throw new Error(j.error||r.status);return j}
@@ -482,8 +486,8 @@ function mkMap(id){const m=L.map(id,{zoomControl:true,preferCanvas:true}).setVie
  const streets=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',{attribution:'Esri',maxZoom:19});
  const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{attribution:'Esri, Maxar',maxZoom:19});
  const light=L.layerGroup([gray,ref]).addTo(m);L.control.layers({Light:light,Streets:streets,Satellite:sat},null,{position:'topright'}).addTo(m);return m}
-const KCOL={sale:'#1f4e8c',lease:'#1d7a4b',listing:'#5b2a86',land_sale:'#8a6d2c'};
-function pinIcon(x,n){return L.divIcon({className:'',html:`<div class="pin" style="background:${KCOL[x.record_kind]||'#555'}">${n}</div>`,iconSize:[22,22],iconAnchor:[11,11]})}
+const KCOL={sale:'#30506f',lease:'#2e6b45',listing:'#6b4f2a',land_sale:'#8a6a2f'};
+function pinIcon(x,n){return L.divIcon({className:'',html:`<div class="pin" style="background:${KCOL[x.record_kind]||'#555'}">${n}</div>`,iconSize:[18,18],iconAnchor:[9,9]})}
 
 // ================= FIND =================
 const TRY=["Lease comps 450,000 - 1,000,000 SF around 1085 Heritage West Dr, Katy","45k SF rear-load tilt-wall, 28' clear, NW Houston off 290 - sale comps last 24 months","crane-served manufacturing sale comps in Houston with cap rates","IOS lease comps in DFW, 3-10 acres","shallow-bay multi-tenant lease comps in Upper GSW since 2023","Laredo warehouse sale comps 50-120k SF since 2024","Tri County San Antonio 20-60k SF front-load lease comps"];
@@ -703,7 +707,7 @@ async function loadQuality(){$('#qbody').innerHTML='<div class="skel"></div><div
 
 async function refreshCount(){try{const h=await api('/api/v2/health');$('#dbcount').textContent=`${h.comps.toLocaleString()} comps · ${h.properties.toLocaleString()} buildings`}catch{}}
 refreshCount();api('/api/v2/me').then(m=>$('#who').textContent=m.user&&m.user!=='unknown'?m.user:'').catch(()=>{});
-function route(){const hq=location.hash.match(/^#deals\?(.*)$/);if(hq){const ps=new URLSearchParams(hq[1]);history.replaceState(null,'','#deals');show('deals');setTimeout(()=>newDealModal({address:ps.get('address')||'',text:ps.get('text')||'',lanes:ps.get('lanes')?ps.get('lanes').split(','):undefined}),400);return}const [v,sub]=location.hash.slice(1).split('/');if(v==='deal')return show('deals',sub);if(v==='player')return show('lib',sub);show(['deals','find','inbox','lib','db','up','q'].includes(v)?v:'deals',sub)}
+function route(){const hq=location.hash.match(/^#deals\?(.*)$/);if(hq){const ps=new URLSearchParams(hq[1]);history.replaceState(null,'','#deals');show('deals');setTimeout(()=>newDealModal({address:ps.get('address')||'',text:ps.get('text')||'',lanes:ps.get('lanes')?ps.get('lanes').split(','):undefined}),400);return}const [v,sub]=location.hash.slice(1).split('?')[0].split('/');if(v==='deal')return show('deals',sub);if(v==='player')return show('lib',sub);show(['deals','find','inbox','lib','db','up','q'].includes(v)?v:'deals',sub)}
 addEventListener('hashchange',route);
 </script>
 <!--EXTRA_JS-->

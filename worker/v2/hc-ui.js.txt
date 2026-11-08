@@ -1,0 +1,351 @@
+/* =====================================================================
+   Harbor Capital internal tools: shared UI helpers (v1, Nov 2026)
+   Plain script (no modules). Exposes window.hcSplit, window.hcColResize,
+   window.hcFilters, window.hcFilterChips, window.hcFilterMatch.
+   Source of truth: /Users/mohithgajjela/HarborCapital/_harbor-ui/hc-ui.js
+   ===================================================================== */
+(function () {
+  'use strict';
+  const LS = 'hc.ui.';
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(LS + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(LS + k, JSON.stringify(v)); } catch { /* quota */ } },
+    del(k) { try { localStorage.removeItem(LS + k); } catch { /* ignore */ } },
+  };
+  const $el = (x, root) => (typeof x === 'string' ? (root || document).querySelector(x) : x);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  let kickRaf = 0;
+  function kick(cb) {
+    cancelAnimationFrame(kickRaf);
+    kickRaf = requestAnimationFrame(() => { window.dispatchEvent(new Event('resize')); cb && cb(); });
+  }
+
+  /* ------------------------------------------------------------------
+     hcSplit(container, opts) \u2014 drag handle between two panes.
+     The CSS of the container must size the controlled pane from a CSS
+     variable, e.g. grid-template-columns: minmax(0,1fr) var(--map-w, 46%).
+     opts: pane (el|selector, the pane whose size is controlled)
+           dir 'x' (columns) | 'y' (rows)
+           edge 'start' (handle on the pane's left/top edge, e.g. a right-hand map)
+                | 'end' (handle on the pane's right/bottom edge, e.g. a left rail)
+           varName CSS variable set on the container (default --hc-split)
+           min, max (px for the pane), minOther (px kept for the other side)
+           key localStorage key (persist), onResize(px)
+     Returns { set(px), reset(), max(), min(), size() }.
+     Leaflet maps and Chart.js charts pick up the change through the
+     window resize event that is dispatched on every move.
+     ------------------------------------------------------------------ */
+  function hcSplit(container, opts) {
+    container = $el(container);
+    if (!container) return null;
+    const o = Object.assign({ dir: 'x', edge: 'start', varName: '--hc-split', min: 220, max: null, minOther: 300, key: null }, opts || {});
+    const pane = $el(o.pane, container);
+    if (!pane) return null;
+    container.__hcSplits = container.__hcSplits || {};
+    if (container.__hcSplits[o.varName]) return container.__hcSplits[o.varName];
+    if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+    const X = o.dir === 'x';
+    const h = document.createElement('div');
+    h.className = 'hc-split ' + (X ? 'x' : 'y');
+    h.setAttribute('role', 'separator');
+    h.setAttribute('aria-orientation', X ? 'vertical' : 'horizontal');
+    h.tabIndex = 0;
+    h.title = 'Drag to resize. Double-click to reset.';
+    h.innerHTML = '<span class="hc-grip">' + (X ? '\u22ee' : '\u22ef') + '</span>';
+    container.appendChild(h);
+    const total = () => (X ? container.clientWidth : container.clientHeight);
+    const size = () => { const r = pane.getBoundingClientRect(); return X ? r.width : r.height; };
+    const clamp = (v) => Math.max(o.min, Math.min(Math.min(o.max ?? Infinity, total() - o.minOther), v));
+    function place() {
+      const cr = container.getBoundingClientRect(); const pr = pane.getBoundingClientRect();
+      const visible = pr.width > 0 && pr.height > 0 && getComputedStyle(pane).display !== 'none';
+      h.style.display = visible ? '' : 'none';
+      if (!visible) return;
+      if (X) {
+        const x = (o.edge === 'start' ? pr.left : pr.right) - cr.left + container.scrollLeft;
+        h.style.left = x + 'px'; h.style.top = (pr.top - cr.top + container.scrollTop) + 'px'; h.style.height = pr.height + 'px';
+      } else {
+        const y = (o.edge === 'start' ? pr.top : pr.bottom) - cr.top + container.scrollTop;
+        h.style.top = y + 'px'; h.style.left = (pr.left - cr.left + container.scrollLeft) + 'px'; h.style.width = pr.width + 'px';
+      }
+    }
+    function apply(v, save) {
+      v = Math.round(clamp(v));
+      container.style.setProperty(o.varName, v + 'px');
+      if (save && o.key) store.set('split.' + o.key, v);
+      place(); kick(() => o.onResize && o.onResize(v));
+      return v;
+    }
+    function reset() { container.style.removeProperty(o.varName); if (o.key) store.del('split.' + o.key); place(); kick(() => o.onResize && o.onResize(size())); }
+    let start = 0, startSize = 0;
+    h.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); e.stopPropagation();
+      h.setPointerCapture(e.pointerId);
+      start = X ? e.clientX : e.clientY; startSize = size();
+      h.classList.add('drag'); document.body.classList.add('hc-dragging', X ? 'x' : 'y');
+    });
+    h.addEventListener('pointermove', (e) => {
+      if (!h.classList.contains('drag')) return;
+      const d = (X ? e.clientX : e.clientY) - start;
+      apply(o.edge === 'start' ? startSize - d : startSize + d, false);
+    });
+    const end = (e) => {
+      if (!h.classList.contains('drag')) return;
+      h.classList.remove('drag'); document.body.classList.remove('hc-dragging', 'x', 'y');
+      try { h.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      apply(size(), true);
+    };
+    h.addEventListener('pointerup', end); h.addEventListener('pointercancel', end);
+    h.addEventListener('dblclick', reset);
+    h.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 96 : 24;
+      const grow = X ? (o.edge === 'start' ? 'ArrowLeft' : 'ArrowRight') : (o.edge === 'start' ? 'ArrowUp' : 'ArrowDown');
+      const shrink = X ? (o.edge === 'start' ? 'ArrowRight' : 'ArrowLeft') : (o.edge === 'start' ? 'ArrowDown' : 'ArrowUp');
+      if (e.key === grow) { apply(size() + step, true); e.preventDefault(); }
+      else if (e.key === shrink) { apply(size() - step, true); e.preventDefault(); }
+      else if (e.key === 'Enter') { reset(); e.preventDefault(); }
+    });
+    const ro = new ResizeObserver(() => place());
+    ro.observe(container); ro.observe(pane);
+    window.addEventListener('resize', place);
+    const saved = o.key ? store.get('split.' + o.key, null) : null;
+    if (saved) requestAnimationFrame(() => apply(saved, false)); else requestAnimationFrame(place);
+    const api = { set: (px) => apply(px, true), reset, size, max: () => apply(Infinity, true), min: () => apply(0, true), place, el: h };
+    container.__hcSplits[o.varName] = api;
+    return api;
+  }
+
+  /* ------------------------------------------------------------------
+     hcColResize(table, key) \u2014 drag the right edge of any <th> to resize
+     that column; widths persist per key + header label. Double-click a
+     grip to reset that column. Call again after re-rendering headers.
+     ------------------------------------------------------------------ */
+  function hcColResize(table, key) {
+    table = $el(table);
+    if (!table) return;
+    const saved = store.get('cols.' + key, {});
+    table.querySelectorAll('thead th').forEach((th) => {
+      const name = (th.dataset.col || th.textContent || '').trim().toLowerCase();
+      if (!name || th.querySelector('.hc-colgrip')) { if (saved[name]) th.style.width = th.style.minWidth = saved[name] + 'px'; return; }
+      if (getComputedStyle(th).position === 'static') th.style.position = 'sticky';
+      if (saved[name]) { th.style.width = th.style.minWidth = saved[name] + 'px'; }
+      const g = document.createElement('span'); g.className = 'hc-colgrip'; g.title = 'Drag to resize column';
+      th.appendChild(g);
+      let sx = 0, sw = 0;
+      g.addEventListener('click', (e) => e.stopPropagation());
+      g.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); e.stopPropagation(); g.setPointerCapture(e.pointerId);
+        sx = e.clientX; sw = th.getBoundingClientRect().width; g.classList.add('drag'); document.body.classList.add('hc-dragging', 'x');
+      });
+      g.addEventListener('pointermove', (e) => {
+        if (!g.classList.contains('drag')) return;
+        const w = Math.max(40, Math.round(sw + e.clientX - sx));
+        th.style.width = th.style.minWidth = w + 'px';
+      });
+      const end = () => {
+        if (!g.classList.contains('drag')) return;
+        g.classList.remove('drag'); document.body.classList.remove('hc-dragging', 'x');
+        const all = store.get('cols.' + key, {}); all[name] = Math.round(th.getBoundingClientRect().width); store.set('cols.' + key, all);
+      };
+      g.addEventListener('pointerup', end); g.addEventListener('pointercancel', end);
+      g.addEventListener('dblclick', (e) => {
+        e.stopPropagation(); th.style.width = th.style.minWidth = '';
+        const all = store.get('cols.' + key, {}); delete all[name]; store.set('cols.' + key, all);
+      });
+    });
+  }
+
+  /* ------------------------------------------------------------------
+     Filters
+     schema: [{ sec:'Size & site', adv:false, open:true, fields:[
+        { id:'sf',     label:'Building size', type:'range', unit:'SF', step:1000, unknown:true, get: r => r.sf },
+        { id:'market', label:'Market', type:'multi', options:[{v:'Houston', n:123}] | (value)=>[...], get: r => r.market },
+        { id:'rail',   label:'Rail served', type:'tri', get: r => r.rail },          // any / yes / no
+        { id:'owner',  label:'Owner contains', type:'text', get: r => r.owner },
+        { id:'date',   label:'Listed', type:'daterange', get: r => r.listed_at },     // ISO strings
+        { id:'class',  label:'Class', type:'select', options:[...] , get: r => r.cls },
+     ]}]
+     value: { sf:{min,max,unk}, market:['Houston'], rail:'yes', owner:'link', date:{from,to}, class:'A' }
+     ------------------------------------------------------------------ */
+  function isEmpty(f, v) {
+    if (v == null || v === '') return true;
+    if (f.type === 'multi') return !Array.isArray(v) || !v.length;
+    if (f.type === 'range') return (v.min == null || v.min === '') && (v.max == null || v.max === '');
+    if (f.type === 'daterange') return !v.from && !v.to;
+    return false;
+  }
+  function clean(schema, value) {
+    const out = {};
+    for (const s of schema) for (const f of s.fields) if (!isEmpty(f, value[f.id])) out[f.id] = value[f.id];
+    return out;
+  }
+  const fmtN = (n) => (n == null || n === '' ? '' : Number(n).toLocaleString('en-US'));
+  function describe(f, v) {
+    const u = f.unit ? ' ' + f.unit : '';
+    if (f.type === 'range') {
+      const a = v.min !== '' && v.min != null, b = v.max !== '' && v.max != null;
+      const fm = f.fmt || fmtN;
+      const r = a && b ? `${fm(v.min)}\u2013${fm(v.max)}${u}` : a ? `\u2265 ${fm(v.min)}${u}` : `\u2264 ${fm(v.max)}${u}`;
+      return `${f.short || f.label} ${r}${v.unk ? ' (+ unknown)' : ''}`;
+    }
+    if (f.type === 'multi') return `${f.short || f.label}: ${v.length > 2 ? v.slice(0, 2).join(', ') + ' +' + (v.length - 2) : v.join(', ')}`;
+    if (f.type === 'tri') return `${f.short || f.label}: ${v === 'yes' ? 'Yes' : 'No'}`;
+    if (f.type === 'daterange') return `${f.short || f.label} ${v.from || '\u2026'} \u2192 ${v.to || '\u2026'}`;
+    if (f.type === 'select') { const o = (typeof f.options === 'function' ? f.options() : f.options || []).find((x) => String(x.v ?? x) === String(v)); return `${f.short || f.label}: ${o?.l ?? o?.v ?? v}`; }
+    return `${f.short || f.label}: \u201c${v}\u201d`;
+  }
+  function hcFilterMatch(row, schema, value) {
+    for (const s of schema) for (const f of s.fields) {
+      const v = value[f.id]; if (isEmpty(f, v) || !f.get || f.server) continue;
+      const x = f.get(row);
+      if (f.type === 'range') {
+        const n = x == null || x === '' ? null : Number(x);
+        if (n == null || Number.isNaN(n)) { if (!v.unk) return false; continue; }
+        if (v.min !== '' && v.min != null && n < Number(v.min)) return false;
+        if (v.max !== '' && v.max != null && n > Number(v.max)) return false;
+      } else if (f.type === 'multi') {
+        const xs = (Array.isArray(x) ? x : [x]).filter((y) => y != null && y !== '').map(String);
+        if (!xs.some((y) => v.includes(y))) return false;
+      } else if (f.type === 'tri') {
+        const t = x === true || x === 1 || x === '1' || /^(y|yes|true)$/i.test(String(x ?? ''));
+        if ((v === 'yes') !== t) return false;
+      } else if (f.type === 'text') {
+        if (!String(x ?? '').toLowerCase().includes(String(v).toLowerCase())) return false;
+      } else if (f.type === 'daterange') {
+        const d = String(x ?? '').slice(0, 10); if (!d) return false;
+        if (v.from && d < v.from) return false; if (v.to && d > v.to) return false;
+      } else if (f.type === 'select') {
+        if (String(x ?? '') !== String(v)) return false;
+      }
+    }
+    return true;
+  }
+
+  function hcFilters(mount, cfg) {
+    mount = $el(mount);
+    const c = Object.assign({ title: 'Filters', live: true, key: null, value: {}, onChange: () => {}, onClose: null }, cfg || {});
+    let value = JSON.parse(JSON.stringify(c.value || {}));
+    let count = null;
+    const openState = c.key ? store.get('fopen.' + c.key, {}) : {};
+    mount.classList.add('hcf');
+    function fieldHtml(f) {
+      const v = value[f.id];
+      const on = !isEmpty(f, v) ? ' on' : '';
+      const unit = f.unit ? `<span class="u">${esc(f.unit)}</span>` : '';
+      let body = '';
+      if (f.type === 'range') {
+        const r = v || {};
+        body = `<div class="rg"><input type="number" data-k="min" step="${f.step || 'any'}" placeholder="${esc(f.ph?.[0] ?? 'Min')}" value="${esc(r.min ?? '')}"><span>\u2013</span><input type="number" data-k="max" step="${f.step || 'any'}" placeholder="${esc(f.ph?.[1] ?? 'Max')}" value="${esc(r.max ?? '')}"></div>`
+          + (f.unknown ? `<label class="unk"><input type="checkbox" data-k="unk"${r.unk ? ' checked' : ''}> Include records with no value</label>` : '');
+      } else if (f.type === 'multi') {
+        const opts = (typeof f.options === 'function' ? f.options(value) : f.options) || [];
+        const sel = new Set((v || []).map(String));
+        body = `<div class="opts">${opts.length > 8 ? '<input class="q" type="text" placeholder="Search\u2026">' : ''}${opts.map((o) => { const ov = String(o.v ?? o); return `<label data-t="${esc(ov.toLowerCase())}"><input type="checkbox" value="${esc(ov)}"${sel.has(ov) ? ' checked' : ''}> ${esc(o.l ?? ov)}${o.n != null ? `<span class="k">${fmtN(o.n)}</span>` : ''}</label>`; }).join('') || '<span class="faint">No values</span>'}</div>`;
+      } else if (f.type === 'tri') {
+        body = `<div class="tri">${[['', 'Any'], ['yes', 'Yes'], ['no', 'No']].map(([k, l]) => `<button type="button" data-v="${k}" class="${(v || '') === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+      } else if (f.type === 'daterange') {
+        const r = v || {};
+        body = `<div class="rg"><input type="date" data-k="from" value="${esc(r.from || '')}"><span>\u2013</span><input type="date" data-k="to" value="${esc(r.to || '')}"></div>`;
+      } else if (f.type === 'select') {
+        const opts = (typeof f.options === 'function' ? f.options(value) : f.options) || [];
+        body = `<select><option value="">Any</option>${opts.map((o) => { const ov = String(o.v ?? o); return `<option value="${esc(ov)}"${String(v ?? '') === ov ? ' selected' : ''}>${esc(o.l ?? ov)}</option>`; }).join('')}</select>`;
+      } else {
+        body = `<input type="text" placeholder="${esc(f.ph || 'Contains\u2026')}" value="${esc(v || '')}">`;
+      }
+      return `<div class="hcf-f${on}" data-id="${esc(f.id)}" data-t="${esc((f.label + ' ' + (f.kw || '')).toLowerCase())}"><label class="fl">${esc(f.label)}${unit}</label>${body}${f.hint ? `<div class="faint" style="font-size:11px;margin-top:3px">${esc(f.hint)}</div>` : ''}</div>`;
+    }
+    function secCount(s) { return s.fields.filter((f) => !isEmpty(f, value[f.id])).length; }
+    function render() {
+      const active = Object.keys(clean(c.schema, value)).length;
+      const savedViews = c.key ? store.get('views.' + c.key, []) : [];
+      mount.innerHTML = `<div class="hcf-head"><span class="t">${esc(c.title)}</span>${active ? `<span class="hc-score hi" style="height:18px;min-width:20px;font-size:11px">${active}</span>` : ''}<span class="n">${count == null ? '' : fmtN(count) + ' match'}</span>${c.onClose ? '<button class="btn ghost hcf-x" type="button" title="Close" style="height:24px;padding:0 6px">\u2715</button>' : ''}</div>
+        ${c.key ? `<div class="hcf-find" style="display:flex;gap:6px"><select class="hcf-views" style="flex:1;height:28px;border:1px solid var(--hc-rule);font-size:12px"><option value="">Saved filter sets\u2026</option>${savedViews.map((s, i) => `<option value="${i}">${esc(s.name)}</option>`).join('')}</select><button class="btn hcf-save" type="button" style="height:28px">Save</button>${savedViews.length ? '<button class="btn hcf-delv" type="button" style="height:28px" title="Delete selected">Delete</button>' : ''}</div>` : ''}
+        <div class="hcf-find"><input type="search" class="hcf-q" placeholder="Find a filter (e.g. clear height, rail, owner)\u2026"></div>
+        <div class="hcf-body">${c.schema.map((s, i) => { const n = secCount(s); const open = openState[s.sec] ?? (s.open ?? (!s.adv || n > 0)); return `<details class="hcf-sec${s.adv ? ' adv' : ''}" data-sec="${esc(s.sec)}"${open ? ' open' : ''}><summary>${s.adv ? 'Advanced \u00b7 ' : ''}${esc(s.sec)}${n ? `<span class="c">${n}</span>` : ''}</summary><div class="hcf-fields">${s.fields.map(fieldHtml).join('')}</div></details>`; }).join('')}</div>
+        <div class="hcf-foot"><button class="btn hcf-clear" type="button">Clear all</button><span class="grow"></span>${c.live ? '' : '<button class="btn primary hcf-apply" type="button">Apply</button>'}</div>`;
+      wire();
+    }
+    let t = 0;
+    function changed(rerender) {
+      if (rerender) render();
+      if (c.live) { clearTimeout(t); t = setTimeout(() => c.onChange(clean(c.schema, value)), 250); }
+    }
+    function findField(id) { for (const s of c.schema) for (const f of s.fields) if (f.id === id) return f; return null; }
+    function wire() {
+      mount.querySelectorAll('.hcf-f').forEach((el) => {
+        const f = findField(el.dataset.id);
+        const mark = () => el.classList.toggle('on', !isEmpty(f, value[f.id]));
+        if (f.type === 'range' || f.type === 'daterange') {
+          el.querySelectorAll('input').forEach((inp) => inp.addEventListener(inp.type === 'checkbox' ? 'change' : 'input', () => {
+            const r = Object.assign({}, value[f.id] || {});
+            r[inp.dataset.k] = inp.type === 'checkbox' ? inp.checked : inp.value;
+            value[f.id] = r; mark(); changed(false);
+          }));
+        } else if (f.type === 'multi') {
+          el.querySelectorAll('.opts input[type=checkbox]').forEach((cb) => cb.addEventListener('change', () => {
+            const s = new Set(value[f.id] || []); cb.checked ? s.add(cb.value) : s.delete(cb.value);
+            value[f.id] = [...s]; mark(); changed(false);
+          }));
+          const q = el.querySelector('input.q');
+          if (q) q.addEventListener('input', () => { const s = q.value.toLowerCase(); el.querySelectorAll('.opts label').forEach((l) => { l.style.display = !s || l.dataset.t.includes(s) ? '' : 'none'; }); });
+        } else if (f.type === 'tri') {
+          el.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+            value[f.id] = b.dataset.v; el.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); mark(); changed(false);
+          }));
+        } else if (f.type === 'select') {
+          el.querySelector('select').addEventListener('change', (e) => { value[f.id] = e.target.value; mark(); changed(false); });
+        } else {
+          el.querySelector('input').addEventListener('input', (e) => { value[f.id] = e.target.value; mark(); changed(false); });
+        }
+      });
+      mount.querySelectorAll('details.hcf-sec').forEach((d) => d.addEventListener('toggle', () => { openState[d.dataset.sec] = d.open; if (c.key) store.set('fopen.' + c.key, openState); }));
+      const q = mount.querySelector('.hcf-q');
+      q.addEventListener('input', () => {
+        const s = q.value.toLowerCase().trim();
+        mount.querySelectorAll('details.hcf-sec').forEach((d) => {
+          let any = false;
+          d.querySelectorAll('.hcf-f').forEach((f) => { const hit = !s || f.dataset.t.includes(s); f.style.display = hit ? '' : 'none'; any = any || hit; });
+          d.style.display = any ? '' : 'none'; if (s && any) d.open = true;
+        });
+      });
+      mount.querySelector('.hcf-clear').onclick = () => { value = {}; render(); c.onChange({}); };
+      const ap = mount.querySelector('.hcf-apply'); if (ap) ap.onclick = () => c.onChange(clean(c.schema, value));
+      const x = mount.querySelector('.hcf-x'); if (x) x.onclick = () => c.onClose();
+      const vs = mount.querySelector('.hcf-views');
+      if (vs) vs.onchange = () => { const all = store.get('views.' + c.key, []); const s = all[+vs.value]; if (s) { value = JSON.parse(JSON.stringify(s.value)); render(); c.onChange(clean(c.schema, value)); } };
+      const sv = mount.querySelector('.hcf-save');
+      if (sv) sv.onclick = () => { const name = prompt('Name this filter set'); if (!name) return; const all = store.get('views.' + c.key, []).filter((x) => x.name !== name); all.push({ name, value: clean(c.schema, value) }); store.set('views.' + c.key, all); render(); };
+      const dv = mount.querySelector('.hcf-delv');
+      if (dv) dv.onclick = () => { if (!vs.value) return; const all = store.get('views.' + c.key, []); all.splice(+vs.value, 1); store.set('views.' + c.key, all); render(); };
+    }
+    render();
+    return {
+      get: () => clean(c.schema, value),
+      set: (v, silent) => { value = JSON.parse(JSON.stringify(v || {})); render(); if (!silent) c.onChange(clean(c.schema, value)); },
+      clear: () => { value = {}; render(); c.onChange({}); },
+      remove: (id) => { delete value[id]; render(); c.onChange(clean(c.schema, value)); },
+      setCount: (n) => { count = n; const el = mount.querySelector('.hcf-head .n'); if (el) el.textContent = n == null ? '' : fmtN(n) + ' match'; },
+      refresh: () => render(),
+      schema: c.schema,
+    };
+  }
+
+  /* chips row for the active filters; onRemove(id), onClear() */
+  function hcFilterChips(el, schema, value, onRemove, onClear) {
+    el = $el(el); if (!el) return;
+    const v = clean(schema, value || {});
+    const fields = []; for (const s of schema) for (const f of s.fields) if (v[f.id] != null) fields.push(f);
+    el.classList.add('hc-fchips');
+    el.innerHTML = fields.map((f) => `<span class="hc-fchip">${esc(describe(f, v[f.id]))}<button type="button" data-id="${esc(f.id)}" title="Remove">\u2715</button></span>`).join('')
+      + (fields.length > 1 ? '<button type="button" class="clr">Clear all</button>' : '');
+    el.querySelectorAll('.hc-fchip button').forEach((b) => (b.onclick = () => onRemove(b.dataset.id)));
+    const cl = el.querySelector('.clr'); if (cl) cl.onclick = onClear;
+  }
+
+  /* compact URL-safe encoding for putting filters in the hash/query */
+  const hcFilterEncode = (v) => (v && Object.keys(v).length ? encodeURIComponent(JSON.stringify(v)) : '');
+  const hcFilterDecode = (s) => { try { return s ? JSON.parse(decodeURIComponent(s)) : {}; } catch { return {}; } };
+
+  Object.assign(window, { hcSplit, hcColResize, hcFilters, hcFilterChips, hcFilterMatch, hcFilterEncode, hcFilterDecode, hcFilterDescribe: describe, hcStore: store });
+})();

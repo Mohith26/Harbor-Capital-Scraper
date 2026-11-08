@@ -7,6 +7,9 @@ import LOGO from "./v2/logo-white.png";
 import FAVICON from "./v2/favicon-32.png";
 import TOUCH from "./v2/apple-touch-icon.png";
 import { LOGO_BLACK } from "./v2/api.js";
+import HC_CSS from "./v2/hc-system.css";
+import HC_JS from "./v2/hc-ui.js.txt";
+import { CLIENT_JS as COMP_FILTERS_JS } from "./v2/filters.js";
 
 /**
  * Wraps the FastAPI comp-database image.
@@ -67,6 +70,9 @@ export default {
     if (url.pathname === "/favicon-32.png" || url.pathname === "/favicon.ico") return new Response(FAVICON, { headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
     if (url.pathname === "/apple-touch-icon.png") return new Response(TOUCH, { headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
     if (url.pathname === "/logo-black.svg") return new Response(LOGO_BLACK, { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" } });
+    if (url.pathname === "/hc-system.css") return new Response(HC_CSS, { headers: { "content-type": "text/css; charset=utf-8", "cache-control": "public, max-age=300" } });
+    if (url.pathname === "/hc-ui.js") return new Response(HC_JS, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" } });
+    if (url.pathname === "/comp-filters.js") return new Response(COMP_FILTERS_JS, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" } });
     if (url.pathname === "/logo-white.png") return new Response(LOGO, { headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
     // The classic (legacy login) database and analytics pages are retired: the Library replaces them.
     if (request.method === "GET" && ["/database", "/analytics", "/login"].includes(url.pathname)) return Response.redirect(`${url.origin}/#lib`, 302);

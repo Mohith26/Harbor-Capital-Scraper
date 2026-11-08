@@ -12,10 +12,13 @@ import { findComps, explainComps, geoCache, ALIASES } from "./finder.js";
 import { matchCostar, costarObservations, parcelObservations, aerialObservations, webObservations } from "./enrich.js";
 import { RECORD_KEYS, SCHEMA_PROMPT } from "./schema.js";
 import UI_SHELL from "./ui.html";
+import { filterSql, facetCounts } from "./filters.js";
 import UI_DEALS from "./ui-deals.html";
 import UI_LIB from "./ui-lib.html";
+import UI_HC from "./ui-hc.html";
+import UI_HC_STYLE from "./ui-hc-style.html";
 import LOGO_BLACK from "./logo-black-svg.html";
-const UI_HTML = UI_SHELL.replace("<!--EXTRA_JS-->", () => UI_DEALS + "\n" + UI_LIB);
+const UI_HTML = UI_SHELL.replace("<!--EXTRA_JS-->", () => UI_DEALS + "\n" + UI_LIB + "\n" + UI_HC).replace("<!--HC_STYLE-->", () => UI_HC_STYLE);
 export { LOGO_BLACK };
 import * as XLSX from "xlsx";
 import { handleDeals, checkDeals } from "./deals.js";
@@ -545,6 +548,14 @@ export async function handleApi(req, env, ctx) {
     }
 
     // ---------------- read ----------------
+    if (path === "/api/v2/comps/facets" && req.method === "GET") {
+      const cache = caches.default; const ck = new Request(url.origin + "/__facets_v1");
+      const hit = await cache.match(ck); if (hit) return hit;
+      const res = json(await facetCounts(db));
+      const out = new Response(res.body, res); out.headers.set("cache-control", "public, max-age=21600");
+      ctx && ctx.waitUntil ? ctx.waitUntil(cache.put(ck, out.clone())) : await cache.put(ck, out.clone());
+      return out;
+    }
     if (path === "/api/v2/comps" && req.method === "GET") {
       const q = url.searchParams;
       const where = ["c.status = 'active'"];
@@ -570,6 +581,16 @@ export async function handleApi(req, env, ctx) {
         where.push("(p.address LIKE ? OR p.property_name LIKE ? OR c.tenant LIKE ? OR c.buyer LIKE ? OR c.seller LIKE ? OR p.city LIKE ? OR p.submarket LIKE ? OR c.source_label LIKE ?)");
         const like = `%${q.get("q")}%`;
         binds.push(like, like, like, like, like, like, like, like);
+      }
+      if (q.get("f")) {
+        let fv = {};
+        try { fv = JSON.parse(q.get("f")); } catch { return bad("bad filter json"); }
+        const fs = filterSql(fv);
+        where.push(...fs.where); binds.push(...fs.binds);
+      }
+      if (q.get("poly")) {
+        // [[lat,lng],...] polygon: bbox in SQL here, exact point-in-polygon below
+        try { const P = JSON.parse(q.get("poly")); if (P.length > 2) { const la = P.map((x) => x[0]), lo = P.map((x) => x[1]); where.push("p.latitude BETWEEN ? AND ? AND p.longitude BETWEEN ? AND ?"); binds.push(Math.min(...la), Math.max(...la), Math.min(...lo), Math.max(...lo)); } } catch {}
       }
       if (q.get("bbox")) {
         const [a, b, c2, d] = q.get("bbox").split(",").map(Number);

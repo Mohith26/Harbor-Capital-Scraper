@@ -1,0 +1,177 @@
+<script>
+/* ---- Comps: resizable panes + extensive manual filters (uses /hc-ui.js + /comp-filters.js) ---- */
+var FINDF = {}, LIBF = {};
+var FACETS = {};
+(function hcComps(){
+ if (!window.hcFilters || !window.COMP_FIELD_DEFS) { console.warn('hc-ui not loaded'); return; }
+ const num = (x) => (x === '' || x == null || isNaN(+x) ? null : +x);
+ function rowVal(r, key) {
+  if (key === '_size') return typeof sizeOf === 'function' ? sizeOf(r) : (r.leased_sf ?? r.available_sf ?? r.building_sf);
+  if (key === '_crane') return !!((r.cranes && String(r.cranes).trim()) || String(r.product_tags || '').includes('|crane|'));
+  if (key === '_heavy') return /heavy/i.test(String(r.power || '')) || String(r.product_tags || '').includes('|heavy_power|');
+  return r[key];
+ }
+ function schema() {
+  const secs = {}, order = [];
+  for (const [id, label, type, , key, sec, adv, x0] of COMP_FIELD_DEFS) {
+   const x = x0 || {};
+   const k = (adv ? 'A:' : 'B:') + sec;
+   if (!secs[k]) { secs[k] = { sec, adv: !!adv, fields: [] }; order.push(k); }
+   const f = { id, label, type, unit: x.unit, step: x.step, unknown: !!x.unknown, hint: x.hint || (x.cov ? 'On about ' + x.cov + ' of comps' : ''), kw: sec };
+   if (type === 'text') f.ph = x.ph || 'Contains…';
+   if (type === 'tri' && (x.present || x.bool || x.expr)) {
+    f.get = x.present ? (r) => { const v = rowVal(r, key); return v != null && v !== ''; } : (r) => { const v = rowVal(r, key); return v === true || v === 1 || v === '1'; };
+   } else if (type === 'multi' && x.tags) {
+    f.get = (r) => String(r.product_tags || '').split('|').filter(Boolean);
+   } else f.get = (r) => rowVal(r, key);
+   if (type === 'multi') f.options = () => (x.opts ? x.opts.map(([v, l]) => ({ v, l, n: ((FACETS[id] || []).find((o) => String(o.v) === v) || {}).n })) : (FACETS[id] || []).map((o) => ({ v: String(o.v), l: id === 'tags' ? (TAGL[o.v] || o.v) : ((window.LBL && LBL[o.v]) || o.v), n: o.n })));
+   secs[k].fields.push(f);
+  }
+  return order.filter((k) => k[0] === 'B').concat(order.filter((k) => k[0] === 'A')).map((k) => secs[k]);
+ }
+ const SCH = schema();
+ window.COMP_SCHEMA = SCH;
+ const hashF = (v) => { const m = location.hash.match(new RegExp('^#' + v + '\\?f=(.*)$')); return m ? hcFilterDecode(m[1]) : null; };
+ const setHash = (v, val) => { const e = hcFilterEncode(val); if (location.hash.startsWith('#' + v)) history.replaceState(null, '', '#' + v + (e ? '?f=' + e : '')); };
+
+ /* ---------- generic: split layouts ---------- */
+ function lsmControl(split, map, keyName, beforeEl) {
+  const seg = document.createElement('div'); seg.className = 'hc-lsm';
+  seg.innerHTML = '<button data-v="list" title="List only">List</button><button data-v="split" title="List and map">Split</button><button data-v="map" title="Map only">Map</button>';
+  beforeEl.parentNode.insertBefore(seg, beforeEl);
+  const apply = (v, save) => {
+   split.classList.toggle('nomap', v === 'list'); split.classList.toggle('maponly', v === 'map');
+   seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
+   if (save) hcStore.set('lsm.' + keyName, v);
+   setTimeout(() => { window.dispatchEvent(new Event('resize')); const m = map && map(); m && m.invalidateSize(); }, 30);
+  };
+  seg.querySelectorAll('button').forEach((b) => (b.onclick = () => apply(b.dataset.v, true)));
+  apply(hcStore.get('lsm.' + keyName, 'split'), false);
+  return apply;
+ }
+ function fpanelToggle(split, btn, keyName) {
+  const mob = () => matchMedia('(max-width:900px)').matches;
+  const set = (on, save) => { split.classList.toggle('hasfp', on); if (save) hcStore.set('fp.' + keyName, on); setTimeout(() => window.dispatchEvent(new Event('resize')), 30); };
+  btn.onclick = () => { if (mob()) { split.classList.toggle('fpopen'); return; } set(!split.classList.contains('hasfp'), true); };
+  set(hcStore.get('fp.' + keyName, true), false);
+  return () => { if (mob()) split.classList.remove('fpopen'); };
+ }
+
+ /* ---------- Deals ---------- */
+ const dg = $('#dgrid');
+ hcSplit(dg, { pane: '#dl', edge: 'end', varName: '--dl-w', min: 170, max: 460, minOther: 760, key: 'comps.deals.rail' });
+ hcSplit(dg, { pane: '#ds', edge: 'start', varName: '--ds-w', min: 320, max: 960, minOther: 560, key: 'comps.deals.set' });
+ if (typeof renderSet === 'function') {
+  const _rs = renderSet;
+  renderSet = function () {
+   const r = _rs.apply(this, arguments);
+   const ds = $('#ds'); const sm = $('#setmap');
+   if (ds && sm) {
+    if (ds.__hcSplits) { const old = ds.__hcSplits['--setmap-h']; if (old && old.el) old.el.remove(); delete ds.__hcSplits['--setmap-h']; }
+    hcSplit(ds, { pane: '#setmap', dir: 'y', edge: 'end', varName: '--setmap-h', min: 110, max: 760, minOther: 0, key: 'comps.deals.setmap', onResize: () => window.setMap && setMap.invalidateSize() });
+   }
+   return r;
+  };
+ }
+ /* Players */
+ const pg = document.querySelector('#lib-players .pgrid');
+ if (pg) hcSplit(pg, { pane: '#plist', edge: 'end', varName: '--pl-w', min: 220, max: 640, minOther: 420, key: 'comps.players' });
+ /* Drawers: drag the left edge */
+ document.querySelectorAll('.drawer').forEach((dr, i) => {
+  const g = document.createElement('div'); g.className = 'hc-dgrip'; g.title = 'Drag to resize. Double-click to reset.'; dr.appendChild(g);
+  const k = 'drawer.' + (dr.id || i); const w0 = hcStore.get(k, null); if (w0) dr.style.width = w0 + 'px';
+  let sx = 0, sw = 0;
+  g.addEventListener('pointerdown', (e) => { e.preventDefault(); g.setPointerCapture(e.pointerId); sx = e.clientX; sw = dr.getBoundingClientRect().width; g.dataset.d = 1; document.body.classList.add('hc-dragging', 'x'); });
+  g.addEventListener('pointermove', (e) => { if (!g.dataset.d) return; dr.style.width = Math.max(380, Math.min(innerWidth - 60, sw + sx - e.clientX)) + 'px'; window.dispatchEvent(new Event('resize')); });
+  const end = () => { if (!g.dataset.d) return; delete g.dataset.d; document.body.classList.remove('hc-dragging', 'x'); hcStore.set(k, Math.round(dr.getBoundingClientRect().width)); };
+  g.addEventListener('pointerup', end); g.addEventListener('pointercancel', end);
+  g.addEventListener('dblclick', () => { dr.style.width = ''; hcStore.del(k); });
+ });
+
+ /* ---------- Library ---------- */
+ const dbs = $('#dbsplit');
+ dbs.insertAdjacentHTML('afterbegin', '<aside class="fpanel" id="dbfp"></aside>');
+ const dbtb = $('#v-lib .toolbar');
+ dbtb.insertAdjacentHTML('afterbegin', '<button class="btn" id="dbfbtn">Filters <span class="badge b-acc" id="dbfnum" style="display:none"></span></button>');
+ const dbChips = document.createElement('div'); dbChips.className = 'fchips'; dbChips.id = 'dbchips';
+ (document.getElementById('dbtags') || dbtb).insertAdjacentElement('afterend', dbChips);
+ lsmControl(dbs, () => (typeof dbmap !== 'undefined' ? dbmap : null), 'lib', $('#dbmapbtn'));
+ const closeLibMob = fpanelToggle(dbs, $('#dbfbtn'), 'lib');
+ LIBF = hashF('lib') || hcStore.get('libf', {});
+ function libChips() {
+  hcFilterChips(dbChips, SCH, LIBF, (id) => libPanel.remove(id), () => libPanel.clear());
+  const n = Object.keys(LIBF).length; $('#dbfnum').textContent = n; $('#dbfnum').style.display = n ? 'inline-flex' : 'none';
+  setTimeout(() => typeof sizeSplits === 'function' && sizeSplits(), 0);
+ }
+ const libPanel = hcFilters('#dbfp', { title: 'Filter comps', key: 'comps.lib', schema: SCH, value: LIBF, onClose: () => { dbs.classList.remove('hasfp', 'fpopen'); hcStore.set('fp.lib', false); window.dispatchEvent(new Event('resize')); },
+  onChange: (v) => { LIBF = v; hcStore.set('libf', v); setHash('lib', v); libChips(); DBPAGE = 1; loadDb(); } });
+ window.libPanel = libPanel;
+ hcSplit(dbs, { pane: '#dbfp', edge: 'end', varName: '--fp-w', min: 230, max: 560, minOther: 640, key: 'comps.lib.fp' });
+ hcSplit(dbs, { pane: '#dbsplit > .mapcol', edge: 'start', varName: '--map-w', min: 240, minOther: 360, key: 'comps.lib.map' });
+ const _dbParams = dbParams;
+ dbParams = function () { const p = _dbParams(); if (Object.keys(LIBF).length) p.f = JSON.stringify(LIBF); return p; };
+ const _applyView = applyView;
+ applyView = function (f) { LIBF = f && f.f ? JSON.parse(f.f) : {}; libPanel.set(LIBF, true); libChips(); return _applyView(f); };
+ const _renderDb = renderDb;
+ renderDb = function () { const r = _renderDb.apply(this, arguments); libPanel.setCount(DBTOTAL); const t = $('#dblist table'); if (t) hcColResize(t, 'comps.lib'); return r; };
+ libChips();
+
+ /* ---------- Find ---------- */
+ const fs = $('#fsplit');
+ fs.insertAdjacentHTML('afterbegin', '<aside class="fpanel" id="ffp"></aside>');
+ const ftb = $('#v-find .toolbar');
+ const radG = $('#f-rad'); if (radG) { const w = document.createElement('label'); w.className = 'frad'; w.title = 'Search radius around the address or map pin'; w.textContent = 'Radius'; ftb.insertBefore(w, $('#fsort')); w.appendChild(radG); radG.placeholder = 'auto mi'; }
+ $('#filters').style.display = 'none';
+ const fChips = document.createElement('div'); fChips.className = 'fchips'; fChips.id = 'fchips'; ftb.insertAdjacentElement('afterend', fChips);
+ lsmControl(fs, () => (typeof fmap !== 'undefined' ? fmap : null), 'find', $('#fmapbtn'));
+ fpanelToggle(fs, $('#fbtn'), 'find');
+ FINDF = hashF('find') || {};
+ const serverKey = () => JSON.stringify(filtersObj());
+ filtersObj = function () {
+  const f = {}, v = FINDF;
+  if (v.kind && v.kind.length) f.comp_types = v.kind;
+  if (v.sf && !v.sf.unk && (num(v.sf.min) != null || num(v.sf.max) != null)) f.size_sf = { min: num(v.sf.min), max: num(v.sf.max) };
+  if (v.date && v.date.from) f.since = v.date.from;
+  const rad = +($('#f-rad') || {}).value; if (rad) f.radius_mi = rad;
+  if (v.clear && !v.clear.unk && num(v.clear.min) != null) f.clear_height_ft = { min: num(v.clear.min) };
+  if (v.yb && !v.yb.unk && (num(v.yb.min) != null || num(v.yb.max) != null)) f.year_built = { min: num(v.yb.min), max: num(v.yb.max) };
+  if (v.subtype && v.subtype.length) f.property_subtype = v.subtype;
+  if (v.loading && v.loading.length) f.loading = v.loading;
+  if (v.construction && v.construction.length) f.construction = v.construction;
+  if (v.cls && v.cls.length) f.building_class = v.cls;
+  if (v.market && v.market.length === 1) f.market = v.market[0];
+  if (v.has_cap === 'yes') f.needs = { cap_rate: true };
+  return f;
+ };
+ updFnum = function () { const n = Object.keys(FINDF).length; $('#fnum').textContent = n; $('#fnum').style.display = n ? 'inline-flex' : 'none'; };
+ function findChips() { hcFilterChips(fChips, SCH, FINDF, (id) => findPanel.remove(id), () => findPanel.clear()); updFnum(); setTimeout(() => typeof sizeSplits === 'function' && sizeSplits(), 0); }
+ let lastServer = serverKey();
+ const findPanel = hcFilters('#ffp', { title: 'Filter results', key: 'comps.find', schema: SCH, value: FINDF, onClose: () => { fs.classList.remove('hasfp', 'fpopen'); hcStore.set('fp.find', false); window.dispatchEvent(new Event('resize')); },
+  onChange: (v) => {
+   FINDF = v; setHash('find', v); findChips();
+   const k = serverKey();
+   if (!LAST) { lastServer = k; return; }
+   if (k !== lastServer) { lastServer = k; run(); } else { PAGE = 1; renderFind(); drawFindMap(false); }
+  } });
+ window.findPanel = findPanel;
+ hcSplit(fs, { pane: '#ffp', edge: 'end', varName: '--fp-w', min: 230, max: 560, minOther: 640, key: 'comps.find.fp' });
+ hcSplit(fs, { pane: '#fsplit > .mapcol', edge: 'start', varName: '--map-w', min: 240, minOther: 360, key: 'comps.find.map' });
+ const _sorted = sorted;
+ sorted = function () { const a = _sorted.apply(this, arguments); return Object.keys(FINDF).length ? a.filter((r) => hcFilterMatch(r, SCH, FINDF)) : a; };
+ const _renderFind = renderFind;
+ renderFind = function () { const r = _renderFind.apply(this, arguments); if (LAST) findPanel.setCount(sorted().length); const t = $('#flist table'); if (t) hcColResize(t, 'comps.find'); return r; };
+ const _run = run;
+ run = function () { lastServer = serverKey(); if (!q.value.trim() && !pin && !Object.keys(filtersObj()).length && Object.keys(FINDF).length) { toast('Describe a deal or pick a market, type or size to search. For purely manual filtering use Library.'); return; } return _run.apply(this, arguments); };
+ if (typeof runSaved === 'function') {
+  const _runSaved = runSaved;
+  runSaved = function (id) { const s = (typeof SAVED !== 'undefined' ? SAVED : []).find((x) => x.id === id); if (s) { FINDF = (s.filters && s.filters.manual) || {}; findPanel.set(FINDF, true); findChips(); } return _runSaved.apply(this, arguments); };
+ }
+ findChips();
+
+ /* ---------- facets (counts for multi-selects) ---------- */
+ const loadFacets = (n) => api('/api/v2/comps/facets').then((r) => { FACETS = r || {}; libPanel.refresh(); findPanel.refresh(); }).catch(() => { if (n < 4) setTimeout(() => loadFacets(n + 1), 4000 * (n + 1)); });
+ loadFacets(0);
+ document.querySelectorAll('#dbview button[data-m=list],#fview button[data-m=list]').forEach((b) => (b.textContent = 'Cards'));
+ if (Object.keys(LIBF).length && typeof loadDb === 'function' && typeof dbLoaded !== 'undefined' && dbLoaded) loadDb();
+})();
+</script>
