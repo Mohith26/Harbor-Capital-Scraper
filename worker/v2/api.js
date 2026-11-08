@@ -676,7 +676,7 @@ export async function handleApi(req, env, ctx) {
       const body = await req.json();
       const llm = (() => { try { return llmFor(env, url); } catch { return null; } })();
       const llms = ["deepseek", "openai"].map((p) => { try { return makeLLM(env, { provider: p, noFallback: true }); } catch { return null; } }).filter(Boolean);
-      const res = await findComps(env, db, llm, { query: body.query || "", location: body.location || null, filters: body.filters || {}, limit: Math.min(body.limit || 30, 100), llms });
+      const res = await findComps(env, db, llm, { query: body.query || "", location: body.location || null, filters: body.filters || {}, limit: Math.min(body.limit || 30, 100), llms, manual: body.manual || null, polygon: body.polygon || null });
       return json(res);
     }
     if (path === "/api/v2/finder/explain" && req.method === "POST") {

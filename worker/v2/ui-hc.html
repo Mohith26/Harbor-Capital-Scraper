@@ -126,42 +126,17 @@ var FACETS = {};
  lsmControl(fs, () => (typeof fmap !== 'undefined' ? fmap : null), 'find', $('#fmapbtn'));
  fpanelToggle(fs, $('#fbtn'), 'find');
  FINDF = hashF('find') || {};
- const serverKey = () => JSON.stringify(filtersObj());
- filtersObj = function () {
-  const f = {}, v = FINDF;
-  if (v.kind && v.kind.length) f.comp_types = v.kind;
-  if (v.sf && !v.sf.unk && (num(v.sf.min) != null || num(v.sf.max) != null)) f.size_sf = { min: num(v.sf.min), max: num(v.sf.max) };
-  if (v.date && v.date.from) f.since = v.date.from;
-  const rad = +($('#f-rad') || {}).value; if (rad) f.radius_mi = rad;
-  if (v.clear && !v.clear.unk && num(v.clear.min) != null) f.clear_height_ft = { min: num(v.clear.min) };
-  if (v.yb && !v.yb.unk && (num(v.yb.min) != null || num(v.yb.max) != null)) f.year_built = { min: num(v.yb.min), max: num(v.yb.max) };
-  if (v.subtype && v.subtype.length) f.property_subtype = v.subtype;
-  if (v.loading && v.loading.length) f.loading = v.loading;
-  if (v.construction && v.construction.length) f.construction = v.construction;
-  if (v.cls && v.cls.length) f.building_class = v.cls;
-  if (v.market && v.market.length === 1) f.market = v.market[0];
-  if (v.has_cap === 'yes') f.needs = { cap_rate: true };
-  return f;
- };
+ // Manual filters go to the server (applied in SQL before ranking); only the radius stays a finder filter.
+ filtersObj = function () { const f = {}; const rad = +($('#f-rad') || {}).value; if (rad) f.radius_mi = rad; return f; };
  updFnum = function () { const n = Object.keys(FINDF).length; $('#fnum').textContent = n; $('#fnum').style.display = n ? 'inline-flex' : 'none'; };
  function findChips() { hcFilterChips(fChips, SCH, FINDF, (id) => findPanel.remove(id), () => findPanel.clear()); updFnum(); setTimeout(() => typeof sizeSplits === 'function' && sizeSplits(), 0); }
- let lastServer = serverKey();
  const findPanel = hcFilters('#ffp', { title: 'Filter results', key: 'comps.find', schema: SCH, value: FINDF, onClose: () => { fs.classList.remove('hasfp', 'fpopen'); hcStore.set('fp.find', false); window.dispatchEvent(new Event('resize')); },
-  onChange: (v) => {
-   FINDF = v; setHash('find', v); findChips();
-   const k = serverKey();
-   if (!LAST) { lastServer = k; return; }
-   if (k !== lastServer) { lastServer = k; run(); } else { PAGE = 1; renderFind(); drawFindMap(false); }
-  } });
+  onChange: (v) => { FINDF = v; setHash('find', v); findChips(); if (LAST || Object.keys(v).length) run(); } });
  window.findPanel = findPanel;
  hcSplit(fs, { pane: '#ffp', edge: 'end', varName: '--fp-w', min: 230, max: 560, minOther: 640, key: 'comps.find.fp' });
  hcSplit(fs, { pane: '#fsplit > .mapcol', edge: 'start', varName: '--map-w', min: 240, minOther: 360, key: 'comps.find.map' });
- const _sorted = sorted;
- sorted = function () { const a = _sorted.apply(this, arguments); return Object.keys(FINDF).length ? a.filter((r) => hcFilterMatch(r, SCH, FINDF)) : a; };
  const _renderFind = renderFind;
- renderFind = function () { const r = _renderFind.apply(this, arguments); if (LAST) findPanel.setCount(sorted().length); const t = $('#flist table'); if (t) hcColResize(t, 'comps.find'); return r; };
- const _run = run;
- run = function () { lastServer = serverKey(); if (!q.value.trim() && !pin && !Object.keys(filtersObj()).length && Object.keys(FINDF).length) { toast('Describe a deal or pick a market, type or size to search. For purely manual filtering use Library.'); return; } return _run.apply(this, arguments); };
+ renderFind = function () { const r = _renderFind.apply(this, arguments); if (LAST) findPanel.setCount(LAST.matched); const t = $('#flist table'); if (t) hcColResize(t, 'comps.find'); return r; };
  if (typeof runSaved === 'function') {
   const _runSaved = runSaved;
   runSaved = function (id) { const s = (typeof SAVED !== 'undefined' ? SAVED : []).find((x) => x.id === id); if (s) { FINDF = (s.filters && s.filters.manual) || {}; findPanel.set(FINDF, true); findChips(); } return _runSaved.apply(this, arguments); };

@@ -517,9 +517,10 @@ $('#fcsv').onclick=()=>{if(!LAST)return toast('Run a search first');const ids=SE
 
 async function run(){
  const text=q.value.trim();const f=filtersObj();
- if(!text&&!pin&&!Object.keys(f).length){q.focus();return}
+ const MF=(typeof FINDF!=='undefined'&&FINDF)||{};const PG=(typeof POLY!=='undefined'&&POLY.length>2&&!(typeof DRAWING!=='undefined'&&DRAWING))?POLY:null;
+ if(!text&&!pin&&!Object.keys(f).length&&!Object.keys(MF).length&&!PG){q.focus();return}
  $('#flist').innerHTML='<div class="skel"></div>'.repeat(6);$('#reading').innerHTML='<span class="muted">Reading your request…</span>';sizeSplits();
- try{const r=await api('/api/v2/finder',{method:'POST',body:JSON.stringify({query:text,location:pin,filters:f,limit:100})});
+ try{const r=await api('/api/v2/finder',{method:'POST',body:JSON.stringify({query:text,location:pin,filters:f,limit:100,manual:Object.keys(MF).length?MF:null,polygon:PG})});
   LAST=r;PAGE=1;SEL.clear();NOTES={};pin=null;renderReading(r);renderFind();drawFindMap(true);
   if(r.results.length)explain(text,r);
  }catch(e){$('#flist').innerHTML=`<div class="empty"><h3>Search failed</h3>${esc(e.message)}</div>`;$('#reading').innerHTML=''}
@@ -559,7 +560,7 @@ function pagerHtml(total,page,per,fn){const pages=Math.ceil(total/per);if(pages<
  list.forEach(p=>h+=p==='…'?'<span class="faint">…</span>':`<button class="btn sm ${p===page?'on':''}" data-p="${p}">${p}</button>`);
  h+=`<button class="btn sm" data-p="${page+1}" ${page>=pages?'disabled':''}>Next ›</button><span class="faint" style="margin-left:8px">${(page-1)*per+1}–${Math.min(total,page*per)} of ${total}</span></div>`;return h}
 function renderFind(){const r=LAST;const rows=sorted();const s=r.stats||{};
- $('#fcount').innerHTML=`<b>${r.matched}</b> comps${r.near_misses?` + ${r.near_misses} near misses`:''} <span class="faint">· ${r.candidates} scanned · ${(r.ms/1000).toFixed(1)}s</span>`;
+ $('#fcount').innerHTML=`<b>${(+r.matched).toLocaleString('en-US')}</b> comps${r.near_misses?` + ${r.near_misses} near misses`:''} <span class="faint">· ${(+r.candidates).toLocaleString('en-US')} scanned · ${(r.ms/1000).toFixed(1)}s</span>`;
  if(!rows.length){$('#flist').innerHTML=`<div class="empty"><h3>No comps matched</h3>${r.candidates?`${r.candidates} comps near this location were filtered out. Widen the size band, radius or dates, or clear filters.`:'Nothing in the database near this location yet - try a wider radius or another submarket.'}</div>`;drawFindMap();return}
  const strip=`<div class="statstrip"><span>Median $/SF <b>${s.median_price_psf!=null?fmt.psf(s.median_price_psf):'—'}</b></span><span>Median cap <b>${s.median_cap_rate!=null?fmt.pct(s.median_cap_rate):'—'}</b> <span class="faint">(${s.cap_rate_n||0})</span></span><span>Median rent <b>${s.median_rent_psf_yr!=null?fmt.psf(s.median_rent_psf_yr)+'/yr':'—'}</b></span><span>SF-weighted <b>${s.sf_weighted_rent_psf_yr?fmt.psf(s.sf_weighted_rent_psf_yr):'—'}</b></span><span>Term <b>${s.median_term_months?Math.round(s.median_term_months)+' mo':'—'}</b></span><span>Dates <b>${s.date_range?fmt.date(s.date_range[0])+' – '+fmt.date(s.date_range[1]):'—'}</b></span><span>${s.sales||0} sales · ${s.leases||0} leases</span></div>`;
  const hist=(r.subject_history||[]).length?`<div class="subjectbox" style="display:block"><b>${r.subject_history.length}</b> deal${r.subject_history.length>1?'s':''} at the subject building itself (not counted): ${r.subject_history.map(x=>`${KL[x.record_kind]} ${fmt.date(x.txn_date)}${x.tenant?' · '+esc(x.tenant):''} ${x.record_kind==='lease'?fmt.psf(x.rent_psf_yr)+'/yr':fmt.psf(x.price_psf)+'/SF'}`).join(' &nbsp;|&nbsp; ')}</div>`:'';
@@ -644,7 +645,7 @@ function renderDb(){$('#dbn').innerHTML=`<b>${DBTOTAL.toLocaleString()}</b> comp
  $('#dblist').innerHTML=body+pagerHtml(DBTOTAL,DBPAGE,DBPER);bindRows('#dblist',DBR);
  $$('#dblist .pager button[data-p]').forEach(b=>b.onclick=()=>{DBPAGE=+b.dataset.p;loadDb();$('#dblist').scrollTop=0});drawDbMap()}
 function drawDbMap(){try{drawDbMap_()}catch(e){console.warn(e)}}
-function drawDbMap_(){dbmarks.forEach(m=>m.remove());dbmarks=[];const pts=[];DBR.forEach(x=>{if(x.latitude==null)return;const m=L.circleMarker([x.latitude,x.longitude],{radius:5,weight:1,color:'#fff',fillColor:KCOL[x.record_kind]||'#555',fillOpacity:.9}).addTo(dbmap).bindTooltip(`<b>${esc(x.address||'')}</b><br>${KL[x.record_kind]} · ${fmt.date(x.txn_date)}`);m.on('click',()=>openProperty(x.property_id,x));dbmarks.push(m);pts.push([x.latitude,x.longitude])});if(pts.length&&mapVisible(dbmap)){dbmap.invalidateSize();dbmap.fitBounds(pts,{padding:[24,24],maxZoom:13})}}
+function drawDbMap_(){dbmarks.forEach(m=>m.remove());dbmarks=[];const pts=[];DBR.forEach(x=>{if(x.latitude==null)return;const m=L.marker([x.latitude,x.longitude],{icon:L.divIcon({className:'',html:`<div class="dbsq" style="background:${KCOL[x.record_kind]||'#555'}"></div>`,iconSize:[9,9],iconAnchor:[4,4]})}).addTo(dbmap).bindTooltip(`<b>${esc(x.address||'')}</b><br>${KL[x.record_kind]} · ${fmt.date(x.txn_date)}`);m.on('click',()=>openProperty(x.property_id,x));dbmarks.push(m);pts.push([x.latitude,x.longitude])});if(pts.length&&mapVisible(dbmap)){dbmap.invalidateSize();dbmap.fitBounds(pts,{padding:[24,24],maxZoom:13})}}
 
 // ================= ADD =================
 const drop=$('#drop'),fi=$('#file');drop.onclick=()=>fi.click();

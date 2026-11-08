@@ -13,6 +13,7 @@
 
 import { geocode, haversineMi, bbox, marketFor, MARKETS } from "./geo.js";
 import { dateToNumber } from "./validate.js";
+import { filterSql } from "./filters.js";
 import { matchCostar, costarObservations, parcelObservations, resolveFeatures } from "./enrich.js";
 
 // When the analyst gives a subject address but not its specs, look the building
@@ -488,7 +489,7 @@ export function summarize(rows) {
   };
 }
 
-export async function findComps(env, db, llm, { query = "", location = null, filters = {}, limit = 30, llms = null, parsed: given = null, skipSubject = false, perProperty = 3 }) {
+export async function findComps(env, db, llm, { query = "", location = null, filters = {}, limit = 30, llms = null, parsed: given = null, skipSubject = false, perProperty = 3, manual = null, polygon = null }) {
   const t0 = Date.now();
   const parsed = given ? JSON.parse(JSON.stringify(given)) : query.trim() ? await parseQuery(llm, query, llms) : { comp_types: filters.comp_types || ["sale", "lease"], subject: {}, strict: [], priorities: [] };
   if (!given && !(parsed.tags_want || []).length) parsed.tags_want = queryTags(parsed, query);
@@ -524,7 +525,15 @@ export async function findComps(env, db, llm, { query = "", location = null, fil
   const nowYear = new Date().getFullYear() + new Date().getMonth() / 12;
   const sinceYear = parsed.since ? dateToNumber(parsed.since) : null;
 
-  let sql = `SELECT c.*, p.address, p.property_name, p.city, p.zip, p.county, p.market, p.submarket, p.latitude, p.longitude, p.geocode_quality,
+  // Manual filter panel (same SQL as the Library): applied before ranking and the result limit.
+  const manualOn = !!(manual && Object.keys(manual).length);
+  const poly = Array.isArray(polygon) && polygon.length > 2 ? polygon : null;
+  if (manualOn && manual.kind && manual.kind.length) parsed.comp_types = manual.kind.slice();
+  else if ((manualOn || poly) && !query.trim() && !(filters?.comp_types || []).length) parsed.comp_types = ["sale", "lease", "listing", "land_sale"];
+  const cCols = manualOn || poly
+    ? "c.id, c.property_id, c.record_kind, c.status, c.source_kind, c.source_label, c.sale_price, c.price_psf, c.price_per_acre, c.cap_rate_pct, c.sale_date, c.buyer, c.seller, c.sale_type, c.occupancy_pct, c.tenant, c.leased_sf, c.rent_psf_yr, c.rent_psf_mo, c.rent_per_acre_mo, c.monthly_rent_total, c.lease_structure, c.term_months, c.lease_start, c.lease_end, c.escalation_pct, c.free_rent_months, c.ti_psf, c.lease_kind, c.landlord, c.asking_rent_psf_yr, c.asking_price, c.available_sf, c.txn_date, c.txn_year, c.txn_date_sort, c.date_precision, c.net_effective_rent_psf_yr, c.rent_basis, c.tenant_industry, c.severity, c.flags_json, c.created_at"
+    : "c.*";
+  let sql = `SELECT ${cCols}, p.address, p.property_name, p.city, p.zip, p.county, p.market, p.submarket, p.latitude, p.longitude, p.geocode_quality,
     p.building_sf, p.land_acres, p.year_built, p.clear_height_ft, p.dock_doors, p.drive_in_doors, p.loading, p.construction, p.office_pct,
     p.sprinkler, p.rail_served, p.yard_acres, p.building_class, p.property_subtype, p.tenancy, p.power, p.cranes, p.features_json, p.product_tags, p.id AS pid
     FROM v2_comps c JOIN v2_properties p ON p.id = c.property_id WHERE c.status = 'active'`;
@@ -542,8 +551,15 @@ export async function findComps(env, db, llm, { query = "", location = null, fil
   if (kinds.has("sale")) kinds.add("land_sale");
   sql += ` AND c.record_kind IN (${[...kinds].map(() => "?").join(",")})`;
   binds.push(...kinds);
-  sql += " LIMIT 6000";
-  const { results } = await db.prepare(sql).bind(...binds).all();
+  if (manualOn) { const fs = filterSql(manual); if (fs.where.length) { sql += " AND " + fs.where.join(" AND "); binds.push(...fs.binds); } }
+  if (poly) {
+    const la = poly.map((x) => +x[0]), lo = poly.map((x) => +x[1]);
+    sql += " AND p.latitude BETWEEN ? AND ? AND p.longitude BETWEEN ? AND ?";
+    binds.push(Math.min(...la), Math.max(...la), Math.min(...lo), Math.max(...lo));
+  }
+  sql += manualOn || poly ? " LIMIT 25000" : " LIMIT 6000";
+  let { results } = await db.prepare(sql).bind(...binds).all();
+  if (poly) results = results.filter((r) => r.latitude != null && pointInPoly(+r.latitude, +r.longitude, poly));
 
   let scored = [];
   const misses = [];
@@ -588,6 +604,15 @@ export async function findComps(env, db, llm, { query = "", location = null, fil
     top.sort((a, b) => b._score - a._score);
   }
   return { parsed, location: loc, subject, candidates: results.length, matched: scored.filter((x) => !x._relaxed).length, near_misses: top.filter((x) => x._relaxed).length, results: top.map(publicRow), subject_history: atSubject.map(publicRow), stats: summarize(top), ms: Date.now() - t0 };
+}
+
+function pointInPoly(lat, lng, poly) {
+  let ins = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [yi, xi] = poly[i], [yj, xj] = poly[j];
+    if (yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) ins = !ins;
+  }
+  return ins;
 }
 
 function publicRow(r) {
