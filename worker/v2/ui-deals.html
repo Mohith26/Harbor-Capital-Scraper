@@ -177,8 +177,7 @@ function renderSet(){if(!DEAL)return;const D=DEAL.deal;const lane=SLANE||DLANE;c
  drawSetMap()}
 function drawSetMap(){const el=$('#setmap');if(!el||!DEAL)return;if(setMap){setMap.remove();setMap=null}
  setMap=L.map(el,{zoomControl:false,attributionControl:false,preferCanvas:true});window.setMap=setMap;
- L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',{maxZoom:16}).addTo(setMap);
- L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',{maxZoom:16}).addTo(setMap);
+ L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&hl=en&x={x}&y={y}&z={z}',{subdomains:'0123',maxZoom:20}).addTo(setMap);
  const D=DEAL.deal,pts=[];setMarks=[];if(D.latitude!=null){L.marker([D.latitude,D.longitude],{icon:L.divIcon({className:'',html:'<div class="subjpin"></div>',iconSize:[18,18],iconAnchor:[9,9]}),zIndexOffset:1000}).addTo(setMap).bindTooltip('Subject: '+esc(D.name));pts.push([D.latitude,D.longitude])}
  setRows(SLANE||DLANE).forEach((i,n)=>{const c=i.comp;if(c.latitude==null)return;const m=L.marker([c.latitude,c.longitude],{icon:L.divIcon({className:'',html:`<div class="pin sq">${n+1}</div>`,iconSize:[18,18],iconAnchor:[9,9]})}).addTo(setMap).bindTooltip(esc(c.address||''));m._cid=c.id;setMarks.push(m);pts.push([c.latitude,c.longitude])});
  setTimeout(()=>{setMap.invalidateSize();if(pts.length>1)setMap.fitBounds(pts,{padding:[26,26],maxZoom:14});else if(pts.length)setMap.setView(pts[0],12)},60)}

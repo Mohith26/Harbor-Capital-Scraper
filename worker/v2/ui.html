@@ -480,12 +480,14 @@ function sizeSplits(){[['#find-above','#fsplit'],['#db-above','#dbsplit']].forEa
 addEventListener('resize',sizeSplits);
 
 // ---------- maps ----------
+function gTiles(lyrs){return L.tileLayer('https://mt{s}.google.com/vt/lyrs='+lyrs+'&hl=en&x={x}&y={y}&z={z}',{subdomains:'0123',maxZoom:20,attribution:'Map data &copy; Google'})}
 function mkMap(id){const m=L.map(id,{zoomControl:true,preferCanvas:true}).setView([30.6,-97.4],6);
  const gray=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',{attribution:'Esri, HERE',maxZoom:16});
  const ref=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',{maxZoom:16});
- const streets=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',{attribution:'Esri',maxZoom:19});
- const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{attribution:'Esri, Maxar',maxZoom:19});
- const light=L.layerGroup([gray,ref]).addTo(m);L.control.layers({Light:light,Streets:streets,Satellite:sat},null,{position:'topright'}).addTo(m);return m}
+ const bases={'Google Map':gTiles('m'),'Google Satellite':gTiles('y'),'Google Terrain':gTiles('p'),'Light':L.layerGroup([gray,ref])};
+ let pick='Google Map';try{const v=localStorage.getItem('hc_basemap');if(bases[v])pick=v}catch{}
+ bases[pick].addTo(m);L.control.layers(bases,null,{position:'topright'}).addTo(m);
+ m.on('baselayerchange',e=>{try{localStorage.setItem('hc_basemap',e.name)}catch{}});return m}
 const KCOL={sale:'#30506f',lease:'#2e6b45',listing:'#6b4f2a',land_sale:'#8a6a2f'};
 function pinIcon(x,n){return L.divIcon({className:'',html:`<div class="pin" style="background:${KCOL[x.record_kind]||'#555'}">${n}</div>`,iconSize:[18,18],iconAnchor:[9,9]})}
 
